@@ -3367,6 +3367,9 @@ void TDraw::draw(const WhammyBarSegment* item, Painter* painter, const PaintOpti
 void TDraw::draw(const RubatoZoneSegment* item, Painter* painter, const PaintOptions& opt)
 {
     TRACE_DRAW_ITEM;
+    if (!item->score()->showRubatoZones()) {
+        return;
+    }
     drawTextLineBaseSegment(item, painter, opt);
 }
 

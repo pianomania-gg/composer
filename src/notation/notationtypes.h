@@ -481,6 +481,7 @@ enum class ScoreConfigType : unsigned char
 {
     ShowInvisibleElements,
     ShowUnprintableElements,
+    ShowRubatoZones,
     ShowFrames,
     ShowPageMargins,
     ShowSoundFlags,
@@ -491,6 +492,7 @@ struct ScoreConfig
 {
     bool isShowInvisibleElements = false;
     bool isShowUnprintableElements = false;
+    bool isShowRubatoZones = true;
     bool isShowFrames = false;
     bool isShowPageMargins = false;
     bool isShowSoundFlags = false;
@@ -500,6 +502,7 @@ struct ScoreConfig
     {
         bool equal = (isShowInvisibleElements == conf.isShowInvisibleElements);
         equal &= (isShowUnprintableElements == conf.isShowUnprintableElements);
+        equal &= (isShowRubatoZones == conf.isShowRubatoZones);
         equal &= (isShowFrames == conf.isShowFrames);
         equal &= (isShowPageMargins == conf.isShowPageMargins);
         equal &= (isShowSoundFlags == conf.isShowSoundFlags);

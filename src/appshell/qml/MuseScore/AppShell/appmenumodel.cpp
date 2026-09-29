@@ -797,6 +797,7 @@ MenuItemList AppMenuModel::makeShowItems()
     MenuItemList items {
         makeMenuItem("show-invisible"),
         makeMenuItem("show-unprintable"),
+        makeMenuItem("show-rubato-zones"),
         makeMenuItem("show-frames"),
         makeMenuItem("show-pageborders"),
         makeMenuItem("show-irregular"),

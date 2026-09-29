@@ -379,6 +379,7 @@ void NotationActionController::init()
 
     registerAction("show-invisible", [this]() { toggleScoreConfig(ScoreConfigType::ShowInvisibleElements); });
     registerAction("show-unprintable", [this]() { toggleScoreConfig(ScoreConfigType::ShowUnprintableElements); });
+    registerAction("show-rubato-zones", [this]() { toggleScoreConfig(ScoreConfigType::ShowRubatoZones); });
     registerAction("show-frames", [this]() { toggleScoreConfig(ScoreConfigType::ShowFrames); });
     registerAction("show-pageborders", [this]() { toggleScoreConfig(ScoreConfigType::ShowPageMargins); });
     registerAction("show-soundflags", [this]() { toggleScoreConfig(ScoreConfigType::ShowSoundFlags); });
@@ -2151,6 +2152,9 @@ void NotationActionController::toggleScoreConfig(ScoreConfigType configType)
         break;
     case ScoreConfigType::ShowUnprintableElements:
         config.isShowUnprintableElements = !config.isShowUnprintableElements;
+        break;
+    case ScoreConfigType::ShowRubatoZones:
+        config.isShowRubatoZones = !config.isShowRubatoZones;
         break;
     case ScoreConfigType::ShowFrames:
         config.isShowFrames = !config.isShowFrames;

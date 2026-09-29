@@ -424,7 +424,11 @@ public:
 
     bool autoplace() const;
     virtual void setAutoplace(bool v) { setFlag(ElementFlag::NO_AUTOPLACE, !v); }
-    bool addToSkyline() const { return !(m_flags & (ElementFlag::INVISIBLE | ElementFlag::NO_AUTOPLACE)) && !ldata()->isSkipDraw(); }
+    bool addToSkyline() const
+    {
+        return type() != ElementType::RUBATO_ZONE_SEGMENT
+               && !(m_flags & (ElementFlag::INVISIBLE | ElementFlag::NO_AUTOPLACE)) && !ldata()->isSkipDraw();
+    }
 
     bool excludeVerticalAlign() const { return m_excludeVerticalAlign; }
     void setExcludeVerticalAlign(bool v) { m_excludeVerticalAlign = v; }

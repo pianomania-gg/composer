@@ -4083,7 +4083,13 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
 
     layoutDynamicExpressionAndHairpins(elementsToLayout, ctx);
 
-    processLines(system, ctx, elementsToLayout.allOtherSpanners);
+    // Rubato brackets annotate playback; they must never reserve engraving space.
+    std::vector<Spanner*> notationSpanners;
+    std::vector<Spanner*> rubatoOverlays;
+    for (Spanner* spanner : elementsToLayout.allOtherSpanners) {
+        (spanner->type() == ElementType::RUBATO_ZONE ? rubatoOverlays : notationSpanners).push_back(spanner);
+    }
+    processLines(system, ctx, notationSpanners);
 
     for (MeasureNumber* mno : elementsToLayout.measureNumbers) {
         if (!mno->visible()) {
@@ -4174,6 +4180,9 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
     }
 
     layoutParenthesisAndBigTimeSigs(elementsToLayout);
+
+    // Move only the overlay around the completed notation skyline.
+    processLines(system, ctx, rubatoOverlays);
 }
 
 void SystemLayout::collectElementsToLayout(Measure* measure, ElementsToLayout& elements, const LayoutContext& ctx)
