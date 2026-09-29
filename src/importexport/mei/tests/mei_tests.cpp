@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -358,6 +359,154 @@ TEST_F(Mei_Tests, mei_export_pianomania_rubato_zone) {
         "xml:id=\"" + endid->substr(1) + "\"", secondMeasure);
     EXPECT_LT(endAnchor, secondMeasureEnd);
     EXPECT_EQ(meiText.find("pname=\"c\" oct=\"6\""), std::string::npos);
+}
+
+TEST_F(Mei_Tests, mei_rubato_overlay_preserves_layout_and_export_when_hidden) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-rubato-overlay.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Spanner* zone = nullptr;
+    for (const auto& interval : score->spannerMap().findOverlapping(0, score->endTick().ticks())) {
+        if (interval.value && interval.value->isRubatoZone()) {
+            zone = interval.value;
+            break;
+        }
+    }
+    ASSERT_TRUE(zone);
+    ASSERT_FALSE(zone->spannerSegments().empty());
+    for (SpannerSegment* segment : zone->spannerSegments()) {
+        EXPECT_FALSE(segment->addToSkyline());
+        EXPECT_TRUE(segment->collectForDrawing());
+    }
+
+    // Compare rendered notation geometry with the zone present, hidden, and removed.
+    auto notationGeometry = [&]() {
+        std::vector<RectF> geometry;
+        for (const System* system : score->systems()) {
+            geometry.push_back(system->pageBoundingRect());
+            for (const SysStaff* staff : system->staves()) {
+                geometry.push_back(staff->bbox());
+            }
+        }
+        score->scanElements([&](EngravingItem* item) {
+            if (item->isChord() || item->isRest() || item->isStaffText() || item->isTempoText()
+                || item->isStaffLines() || item->isBarLine()) {
+                geometry.push_back(item->pageBoundingRect());
+            }
+        });
+        return geometry;
+    };
+    const auto withZone = notationGeometry();
+    ASSERT_FALSE(withZone.empty());
+    std::string shownMei;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, shownMei));
+    score->setShowRubatoZones(false);
+    for (SpannerSegment* segment : zone->spannerSegments()) {
+        EXPECT_FALSE(segment->collectForDrawing());
+        EXPECT_FALSE(segment->isInteractionAvailable());
+        EXPECT_TRUE(segment->visible());
+    }
+    score->setLayoutAll();
+    score->doLayout();
+    EXPECT_EQ(notationGeometry(), withZone);
+    std::string hiddenMei;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, hiddenMei));
+    EXPECT_EQ(shownMei, hiddenMei);
+
+    score->removeSpanner(zone);
+    zone->eraseSpannerSegments();
+    delete zone;
+    score->setLayoutAll();
+    score->doLayout();
+    EXPECT_EQ(notationGeometry(), withZone);
+}
+
+TEST_F(Mei_Tests, mei_chopin_rubato_overlay_does_not_move_notation) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"chopin-op9-no1-rubato-overlay.mscz", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    auto notationGeometry = [&]() {
+        std::vector<RectF> geometry;
+        for (const System* system : score->systems()) {
+            geometry.push_back(system->pageBoundingRect());
+            for (const SysStaff* staff : system->staves()) {
+                geometry.push_back(staff->bbox());
+            }
+        }
+        score->scanElements([&](EngravingItem* item) {
+            if (item->isChord() || item->isRest() || item->isStaffText() || item->isTempoText()
+                || item->isStaffLines() || item->isBarLine()) {
+                geometry.push_back(item->pageBoundingRect());
+            }
+        });
+        return geometry;
+    };
+    const auto originalGeometry = notationGeometry();
+    std::string originalMei;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, originalMei));
+    ASSERT_TRUE(muse::io::File::writeFile(String(u"chopin-op9-no1-original.test.mei"),
+                                        muse::ByteArray(originalMei.c_str(), originalMei.size())));
+    const auto tempos = collectStartTags(originalMei, "tempo");
+    EXPECT_EQ(std::count_if(tempos.begin(), tempos.end(), [](const std::string& tag) {
+        return xmlAttributeValue(tag, "visible") == std::optional<std::string>("false");
+    }), 16);
+
+    std::vector<Spanner*> zones;
+    for (const auto& interval : score->spannerMap().findOverlapping(0, score->endTick().ticks())) {
+        if (interval.value && interval.value->isRubatoZone()) {
+            zones.push_back(interval.value);
+        }
+    }
+    ASSERT_FALSE(zones.empty());
+    score->setShowRubatoZones(false);
+    score->setLayoutAll();
+    score->doLayout();
+    EXPECT_EQ(notationGeometry(), originalGeometry);
+    std::string hiddenMei;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, hiddenMei));
+    EXPECT_EQ(originalMei, hiddenMei);
+    ASSERT_TRUE(muse::io::File::writeFile(String(u"chopin-op9-no1-rubato-overlay.test.mei"),
+                                        muse::ByteArray(hiddenMei.c_str(), hiddenMei.size())));
+    for (Spanner* zone : zones) {
+        score->removeSpanner(zone);
+        zone->eraseSpannerSegments();
+        delete zone;
+    }
+    for (const System* system : score->systems()) {
+        for (const SpannerSegment* segment : system->spannerSegments()) {
+            EXPECT_NE(segment->type(), ElementType::RUBATO_ZONE_SEGMENT);
+        }
+    }
+    score->setLayoutAll();
+    score->doLayout();
+    EXPECT_EQ(notationGeometry(), originalGeometry);
+}
+
+TEST_F(Mei_Tests, mei_hidden_tempo_preserves_text_and_playback_with_visibility) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-rubato-overlay.mscx", false));
+    ASSERT_TRUE(score);
+    bool foundTempo = false;
+    score->scanElements([&](EngravingItem* item) {
+        if (item->isTempoText()) {
+            item->setVisible(false);
+            foundTempo = true;
+        }
+    });
+    ASSERT_TRUE(foundTempo);
+    const String outputName = u"hidden-tempo.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score.get(), outputName, [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter writer;
+        return writer.writeScore(score, path);
+    }));
+    const auto text = readTestTextFile(outputName);
+    const auto tempos = collectStartTags(text, "tempo");
+    ASSERT_EQ(tempos.size(), 1u);
+    EXPECT_EQ(xmlAttributeValue(tempos[0], "visible"), std::optional<std::string>("false"));
+    EXPECT_TRUE(xmlAttributeValue(tempos[0], "midi.bpm").has_value());
+    EXPECT_NE(text.find("rallentando"), std::string::npos);
 }
 
 TEST_F(Mei_Tests, mei_export_pianomania_470_properties_survive_mscx_round_trip) {

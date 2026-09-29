@@ -585,6 +585,7 @@ void System::remove(EngravingItem* el)
     case ElementType::FBOX:
         score()->removeElement(el);
         break;
+    case ElementType::RUBATO_ZONE_SEGMENT:
     case ElementType::TEXTLINE_SEGMENT:
     case ElementType::HAIRPIN_SEGMENT:
     case ElementType::OTTAVA_SEGMENT:

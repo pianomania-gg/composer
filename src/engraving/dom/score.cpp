@@ -759,6 +759,16 @@ void Score::setShowInvisible(bool v)
 }
 
 //---------------------------------------------------------
+//   setShowRubatoZones
+//---------------------------------------------------------
+
+void Score::setShowRubatoZones(bool v)
+{
+    m_showRubatoZones = v;
+    rebuildBspTree();
+}
+
+//---------------------------------------------------------
 //   setShowUnprintable
 //---------------------------------------------------------
 

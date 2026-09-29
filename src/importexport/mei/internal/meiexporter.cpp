@@ -5064,6 +5064,9 @@ bool MeiExporter::writeTempo(const TempoText *tempoText,
     meiTempo.SetStartid(startid);
   }
   meiTempo.Write(tempoNode, this->getXmlIdFor(tempoText, 't'));
+  if (!tempoText->visible()) {
+    tempoNode.append_attribute("visible") = "false";
+  }
 
   appendCenteredPmPosition(tempoNode, tempoText);
 
