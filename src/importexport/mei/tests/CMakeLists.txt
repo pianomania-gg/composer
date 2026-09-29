@@ -75,5 +75,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*19 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*22 tests"
 )
