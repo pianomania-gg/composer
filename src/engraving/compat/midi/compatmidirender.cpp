@@ -44,7 +44,6 @@
 namespace mu::engraving {
 static int slideTicks(const Chord* chord);
 static int graceBendTicks(const Chord* chord);
-static bool isOnBeatGraceType(NoteType type);
 
 // Trill speed model.
 //
@@ -698,12 +697,11 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
     } else if (nb) {
         //
         //  render grace notes:
-        //  simplified implementation:
-        //  - Grace notes start on the beat of the main note.
-        //  - Duration: on-beat grace notes use their notated duration relative to the main note.
-        //              Acciacatura: min of 0.5 * duration or 65ms fixed (independent of duration or tempo).
-        //  - For on-beat grace notes, the duration is divided by the number of grace notes.
-        //  - For acciaccaturas, the notated duration does not matter.
+        //  - Before-beat graces (slashed, grouped, or written as a sixteenth or shorter) are
+        //    crushed into the previous note by collectGraceBeforeChordEvents; the written note
+        //    stays on the beat.
+        //  - A single unslashed grace written as an eighth or longer is a long appoggiatura:
+        //    it starts on the beat and takes its time from the written note.
         //
         Chord* graceChord = gnb[0];
         const auto& graceNotes = graceChord->notes();
@@ -711,44 +709,34 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
             return note->isGraceBendStart();
         });
 
-        bool isOnBeatGrace = isOnBeatGraceType(graceChord->noteType());
-        if (graceChord->noteType() == NoteType::ACCIACCATURA || graceBend) {
+        if (CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(chord) || graceBend) {
             ontime = 0;
             graceDuration = 0;
             weighta = 1.0;
         } else {
             int graceOntime = 0;
-            if (isOnBeatGrace) {
-                int chordTicks = chord->actualTicks().ticks();
-                int graceTicks = graceChord->ticks().ticks();
-                if (graceTicks <= 0) {
-                    graceTicks = graceChord->actualTicks().ticks();
-                }
-                // An appoggiatura is played on the beat and takes its time from the written note:
-                // its written value, but never more than half of the written note, or two thirds
-                // of a dotted one (C.P.E. Bach, Versuch I.2.2 §11; Türk; Badura-Skoda).
-                if (chordTicks > 0) {
-                    const int longestTicks = chord->dots() > 0 ? (chordTicks * 2) / 3 : chordTicks / 2;
-                    graceTicks = std::min(graceTicks, std::max(1, longestTicks));
-                }
-                if (chordTicks > 0 && graceTicks > 0) {
-                    graceOntime = static_cast<int>(
-                        std::lround((static_cast<double>(graceTicks) / chordTicks) * 1000.0)
-                        );
-                    graceOntime = std::clamp(graceOntime, 0, 999);
-                }
-            } else {
-                const double graceTimeMS = (graceChord->actualTicks().ticks() / ticksPerSecond) * 1000;
-                // 1000 occurs below as a unit for ontime
-                graceOntime = std::min(500, static_cast<int>((graceTimeMS / chordTimeMS) * 1000));
+            int chordTicks = chord->actualTicks().ticks();
+            int graceTicks = graceChord->ticks().ticks();
+            if (graceTicks <= 0) {
+                graceTicks = graceChord->actualTicks().ticks();
+            }
+            // An appoggiatura is played on the beat and takes its time from the written note:
+            // its written value, but never more than half of the written note, or two thirds
+            // of a dotted one (C.P.E. Bach, Versuch I.2.2 §11; Türk; Badura-Skoda).
+            if (chordTicks > 0) {
+                const int longestTicks = chord->dots() > 0 ? (chordTicks * 2) / 3 : chordTicks / 2;
+                graceTicks = std::min(graceTicks, std::max(1, longestTicks));
+            }
+            if (chordTicks > 0 && graceTicks > 0) {
+                graceOntime = static_cast<int>(
+                    std::lround((static_cast<double>(graceTicks) / chordTicks) * 1000.0)
+                    );
+                graceOntime = std::clamp(graceOntime, 0, 999);
             }
 
             graceDuration = graceOntime / nb;
             weighta = 1.0;
             ontime = graceOntime;
-            if (!isOnBeatGrace) {
-                trailtime += graceOntime;
-            }
         }
     }
 
@@ -827,19 +815,6 @@ void CompatMidiRender::renderGlissando(NoteEventList* events, Note* notestart, d
             CompatMidiRender::renderNoteArticulation(events, notestart, true, Constants::DIVISION, empty, body, false, true, empty, 16, 0,
                                                      graceOnBeatProportion, tremoloBefore);
         }
-    }
-}
-
-static bool isOnBeatGraceType(NoteType type)
-{
-    switch (type) {
-    case NoteType::APPOGGIATURA:
-    case NoteType::GRACE4:
-    case NoteType::GRACE16:
-    case NoteType::GRACE32:
-        return true;
-    default:
-        return false;
     }
 }
 
@@ -1404,7 +1379,6 @@ int CompatMidiRender::adjustTrailtime(int trailtime, Chord* currentChord, Chord*
     }
 
     const std::vector<Chord*>& graceBeforeChords = nextChord->graceNotesBefore();
-    std::vector<Chord*> graceNotesBeforeBar;
 
     bool hasGraceBend = std::any_of(graceBeforeChords.begin(), graceBeforeChords.end(), [](Chord* ch) {
         return std::any_of(ch->notes().begin(), ch->notes().end(), [](Note* n) {
@@ -1412,11 +1386,7 @@ int CompatMidiRender::adjustTrailtime(int trailtime, Chord* currentChord, Chord*
         });
     });
 
-    if (!hasGraceBend) {
-        std::copy_if(graceBeforeChords.begin(), graceBeforeChords.end(), std::back_inserter(graceNotesBeforeBar), [](Chord* ch) {
-            return ch->noteType() == NoteType::ACCIACCATURA;
-        });
-    }
+    const bool graceNotesPlayBeforeBeat = !hasGraceBend && CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(nextChord);
 
     const int currentTicks = currentChord->ticks().ticks();
     IF_ASSERT_FAILED(currentTicks > 0) {
@@ -1428,8 +1398,8 @@ int CompatMidiRender::adjustTrailtime(int trailtime, Chord* currentChord, Chord*
     const auto& notes = nextChord->notes();
     if (hasGraceBend) {
         reducedTicks = graceBendTicks(currentChord);
-    } else if (!graceNotesBeforeBar.empty()) {
-        const std::vector<int> leads = CompatMidiRendererInternal::acciaccaturaLeadTicks(nextChord, currentTicks);
+    } else if (graceNotesPlayBeforeBeat) {
+        const std::vector<int> leads = CompatMidiRendererInternal::beforeBeatGraceLeadTicks(nextChord, currentTicks);
         reducedTicks = leads.empty() ? 0 : leads.front();
     } else {
         bool anySlidesIn = std::any_of(notes.begin(), notes.end(), [](const Note* note) {
