@@ -333,16 +333,6 @@ static bool isGameplayTrillSequence(const NoteEventList& events, const std::vect
     return true;
 }
 
-static bool hasWrittenAfterGraceNotes(const Note* note)
-{
-    const Note* last = note;
-    while (last && last->tieFor() && last->tieFor()->endNote()) {
-        last = last->tieFor()->endNote();
-    }
-
-    return last && last->chord() && !last->chord()->graceNotesAfter(true).empty();
-}
-
 static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note, const Ornament* ornament)
 {
     const int upperPitchOffset = trillUpperPitchOffset(note, ornament);
@@ -352,12 +342,6 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
 
     const std::vector<size_t> playableEvents = playableEventIndexes(events);
     if (isGameplayTrillSequence(events, playableEvents)) {
-        return;
-    }
-
-    // Written after-grace notes are the trill's closing turn, so the alternation ends on the
-    // upper note and the written notes bring the trill home.
-    if (playableEvents.size() >= 2 && events[playableEvents.front()].pitch() == 0 && hasWrittenAfterGraceNotes(note)) {
         return;
     }
 

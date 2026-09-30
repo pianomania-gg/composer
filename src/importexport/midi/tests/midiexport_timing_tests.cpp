@@ -949,8 +949,9 @@ void MidiExportTimingTests::trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNot
         QVERIFY(trill[i].pitch != trill[i - 1].pitch);
     }
 
-    // The closing turn strikes the lower neighbour exactly once, right before the final written
-    // note, which holds until the next written note.
+    // The closing turn goes written note, lower neighbour, written note: the lower neighbour is
+    // struck exactly once, between two written-note attacks, and the final one holds until the
+    // next written note.
     int lowerCount = 0;
     for (const ExportedMidiNote& note : trill) {
         if (note.pitch == 71) {
@@ -958,6 +959,7 @@ void MidiExportTimingTests::trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNot
         }
     }
     QCOMPARE(lowerCount, 1);
+    QCOMPARE(trill[trill.size() - 3].pitch, 72);
     QCOMPARE(trill[trill.size() - 2].pitch, 71);
     QCOMPARE(trill.back().pitch, 72);
     QVERIFY(trill.back().end < 960);
@@ -997,8 +999,8 @@ void MidiExportTimingTests::writtenAfterGraceTurnPlaysAtTrillSpeed()
     QVERIFY(written[0].duration() >= 60 && written[0].duration() <= 110);
     QVERIFY(written[1].duration() >= 60 && written[1].duration() <= 110);
 
-    // No generated turn is added, and the alternation hands over to the written turn from the
-    // upper note.
+    // No generated turn is added; the alternation ends on the written note and hands over to
+    // the written turn.
     ExportedMidiNote lastGenerated = span.front();
     for (const ExportedMidiNote& note : span) {
         QVERIFY(!(note.pitch == 71 && note.offVelocity == 127));
@@ -1006,7 +1008,7 @@ void MidiExportTimingTests::writtenAfterGraceTurnPlaysAtTrillSpeed()
             lastGenerated = note;
         }
     }
-    QCOMPARE(lastGenerated.pitch, 74);
+    QCOMPARE(lastGenerated.pitch, 72);
     QVERIFY(lastGenerated.end < written[0].start);
 }
 

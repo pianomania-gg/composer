@@ -71,9 +71,9 @@ static constexpr double TRILL_MAIN_NOTE_WEIGHT = 1.08;
 static constexpr double TRILL_AUXILIARY_WEIGHT = 0.92;
 static constexpr double TRILL_FIRST_NOTE_EXTRA_WEIGHT = 0.15;
 static constexpr double TRILL_FINAL_NOTE_WEIGHT = 1.5;
-// A generated closing turn (lower neighbour, then the written note) needs room for two
-// alternation pairs before it: main, upper, main, upper, lower, main.
-static constexpr int TRILL_MIN_EVENTS_FOR_CLOSING_TURN = 6;
+// A generated closing turn (written note, lower neighbour, written note) needs room for two
+// alternation pairs before it: main, upper, main, upper, main, lower, main.
+static constexpr int TRILL_MIN_EVENTS_FOR_CLOSING_TURN = 7;
 
 static bool isLeftHandStaff(const Chord* chord)
 {
@@ -1178,10 +1178,15 @@ static bool hasWrittenClosingTurn(const Note* note, const Chord* trillEndChord, 
 // The trill begins on the written note, because that note is the scored target, alternates
 // with the upper neighbour at the expert rate from trillIntervalTicks, and always comes home
 // to the written note: never on the upper note, and never striking the written note twice
-// in a row. When there is room, it closes with the conventional turn (lower neighbour, then
-// the written note) at trill speed, unless the score already writes that turn as after-grace
-// notes or as short ordinary notes. The last event holds until the written note ends. Very
-// short notes get a three-note Pralltriller (written, upper, written).
+// in a row. When there is room, it closes with the conventional turn at trill speed, the way
+// C.P.E. Bach writes it out: the alternation ends on the written note, then the lower
+// neighbour, then the written note again. When the score writes that turn itself, as
+// after-grace notes or as short ordinary notes, the alternation simply ends on the written
+// note and the written notes take over. The last generated event holds until the written note
+// ends. Very short notes get a three-note Pralltriller (written, upper, written).
+//
+// Every generated group therefore ends on the written note, which the Helper's ornament gate
+// requires before it accepts the export.
 bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note, const Ornament* ornament,
                                                double graceOnBeatProportion, double trailProportion)
 {
@@ -1238,24 +1243,19 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
     } else {
         const double shortestInterval = nominalInterval / TRILL_MAX_COMPRESSION;
         if (writtenAfterGraces) {
-            // The written after-grace notes bring the trill home, so the alternation ends on
-            // the upper note and every event has the same weight.
+            // The written after-grace notes follow at trill speed, so the final written note
+            // of the alternation is one ordinary trill step long.
             finalWeight = 1.0;
         }
         const int maxEvents = std::max(3, static_cast<int>(std::floor(playableTicks / shortestInterval - finalWeight + 1.0)));
 
-        if (writtenAfterGraces) {
-            const int pairs = std::max(1, maxEvents / 2);
+        if (!writtenClosingTurn && lowerPitchOffset != 0 && maxEvents >= TRILL_MIN_EVENTS_FOR_CLOSING_TURN) {
+            const int pairs = (maxEvents - 3) / 2;
             for (int i = 0; i < pairs; ++i) {
                 sequence.push_back(0);
                 sequence.push_back(upperPitchOffset);
             }
-        } else if (!writtenClosingTurn && lowerPitchOffset != 0 && maxEvents >= TRILL_MIN_EVENTS_FOR_CLOSING_TURN) {
-            const int pairs = (maxEvents - 2) / 2;
-            for (int i = 0; i < pairs; ++i) {
-                sequence.push_back(0);
-                sequence.push_back(upperPitchOffset);
-            }
+            sequence.push_back(0);
             sequence.push_back(lowerPitchOffset);
             sequence.push_back(0);
         } else {
