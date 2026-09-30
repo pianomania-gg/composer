@@ -50,16 +50,16 @@ static bool isOnBeatGraceType(NoteType type);
 //
 // Measured expert piano trills average near 11 to 12 notes per second, almost independent
 // of tempo and note value (Moore 1992; Han & Bresin 2019; Goebl & Palmer 2013), with
-// brilliant Classical trills at the top of that range. Pianomania targets 13 per second at a
+// brilliant Classical trills at the top of that range. Pianomania targets 12 per second at a
 // moderate tempo, drifting only mildly with tempo, so an adagio trills a little slower and a
 // brilliant allegro a little faster. A trill therefore gets more alternations on a longer note,
 // not slower ones. The left hand trills about a tenth slower than the right.
 static constexpr int MIN_TRILL_EVENT_TICKS = Constants::DIVISION / 20;
-static constexpr double TRILL_BASE_NOTES_PER_SECOND = 13.0;
+static constexpr double TRILL_BASE_NOTES_PER_SECOND = 12.0;
 static constexpr double TRILL_REFERENCE_BPM = 100.0;
 static constexpr double TRILL_TEMPO_EXPONENT = 0.2;
-static constexpr double TRILL_MIN_NOTES_PER_SECOND = 11.0;
-static constexpr double TRILL_MAX_NOTES_PER_SECOND = 15.0;
+static constexpr double TRILL_MIN_NOTES_PER_SECOND = 10.0;
+static constexpr double TRILL_MAX_NOTES_PER_SECOND = 14.0;
 static constexpr double TRILL_LEFT_HAND_RATE_FACTOR = 0.9;
 // No pianist sustains more than about 16 notes per second; shorter notes get fewer
 // alternations rather than a faster trill.

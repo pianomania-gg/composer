@@ -1379,8 +1379,8 @@ INSTANTIATE_TEST_SUITE_P(
         ExportCase {
             "ornament",
             "src/importexport/midi/tests/midiexport_data/pianomania_trill_basic_line.mscx",
-            false, false, 0, 1, 0, 0, 0, 28,
-            { { "base", 29, 1, 28 } }
+            false, false, 0, 1, 0, 0, 0, 24,
+            { { "base", 25, 1, 24 } }
         },
         ExportCase {
             "short_trill_written_attack",
@@ -1409,8 +1409,8 @@ INSTANTIATE_TEST_SUITE_P(
         ExportCase {
             "written_note_masks_coincident_ornament_attack",
             "src/importexport/midi/tests/midiexport_data/pianomania_trill_visual_collision.mscx",
-            false, false, 0, 2, 0, 0, 0, 28,
-            { { "base", 30, 2, 28 } }
+            false, false, 0, 2, 0, 0, 0, 24,
+            { { "base", 26, 2, 24 } }
         },
         ExportCase {
             "ties",
@@ -1433,8 +1433,8 @@ INSTANTIATE_TEST_SUITE_P(
         ExportCase {
             "trill_after_grace_restrike",
             "src/importexport/midi/tests/midiexport_data/pianomania_trill_after_grace_canonical.mscx",
-            false, false, 0, 3, 2, 0, 0, 26,
-            { { "base", 29, 3, 26 } }
+            false, false, 0, 3, 2, 0, 0, 24,
+            { { "base", 27, 3, 24 } }
         },
         ExportCase {
             "unison_same_onset_alias",
