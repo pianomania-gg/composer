@@ -182,6 +182,11 @@ public:
     static const int ARTICULATION_CONV_FACTOR { 100000 };
     static bool graceNotesMerged(Chord* chord);
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
+    // For each slashed grace note before `chord`, in written order, the ticks before the
+    // written note at which it is struck. The first value is the whole lead taken from the
+    // previous written note. `previousTicks` is that note's length, or a non-positive value
+    // when it is unknown.
+    static std::vector<int> acciaccaturaLeadTicks(const Chord* chord, int previousTicks);
 
 private:
 

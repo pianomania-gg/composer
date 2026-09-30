@@ -75,5 +75,5 @@ target_compile_definitions(iex_midi_pianomania_tests PRIVATE
 # QTest exits 0 only on success, but a build that silently dropped the Pianomania
 # tests would still pass with a smaller count. Require the exact expected total.
 set_tests_properties(iex_midi_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "Totals: 26 passed, 0 failed"
+    PASS_REGULAR_EXPRESSION "Totals: 31 passed, 0 failed"
 )

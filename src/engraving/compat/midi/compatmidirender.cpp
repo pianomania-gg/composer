@@ -46,21 +46,81 @@ static int slideTicks(const Chord* chord);
 static int graceBendTicks(const Chord* chord);
 static bool isOnBeatGraceType(NoteType type);
 
-// Bounded trill notes stay readable in exported MIDI and never collapse to tiny tick artifacts.
+// Trill speed model.
+//
+// Measured expert piano trills average near 11 to 12 notes per second, almost independent
+// of tempo and note value (Moore 1992; Han & Bresin 2019; Goebl & Palmer 2013), with
+// brilliant Classical trills at the top of that range. Pianomania targets 12 per second at a
+// moderate tempo, drifting only mildly with tempo, so an adagio trills a little slower and a
+// brilliant allegro a little faster. A trill therefore gets more alternations on a longer note,
+// not slower ones. The left hand trills about a tenth slower than the right.
 static constexpr int MIN_TRILL_EVENT_TICKS = Constants::DIVISION / 20;
-static constexpr double TARGET_TRILL_NOTES_PER_SECOND = 12.0;
-static constexpr double FASTEST_TRILL_NOTES_PER_SECOND = 16.0;
-static constexpr double SLOWEST_TRILL_NOTES_PER_SECOND = 8.0;
+static constexpr double TRILL_BASE_NOTES_PER_SECOND = 12.0;
+static constexpr double TRILL_REFERENCE_BPM = 100.0;
+static constexpr double TRILL_TEMPO_EXPONENT = 0.2;
+static constexpr double TRILL_MIN_NOTES_PER_SECOND = 10.0;
+static constexpr double TRILL_MAX_NOTES_PER_SECOND = 14.0;
+static constexpr double TRILL_LEFT_HAND_RATE_FACTOR = 0.9;
+// No pianist sustains more than about 16 notes per second; shorter notes get fewer
+// alternations rather than a faster trill.
+static constexpr double TRILL_FASTEST_NOTES_PER_SECOND = 16.0;
+// The alternation may tighten by this factor so the trill fills the written span exactly.
+static constexpr double TRILL_MAX_COMPRESSION = 1.10;
+// Measured trills hold the written note slightly longer than the auxiliary, lean on the first
+// note, and settle on the final written note (Han & Bresin 2019).
+static constexpr double TRILL_MAIN_NOTE_WEIGHT = 1.08;
+static constexpr double TRILL_AUXILIARY_WEIGHT = 0.92;
+static constexpr double TRILL_FIRST_NOTE_EXTRA_WEIGHT = 0.10;
+static constexpr double TRILL_FINAL_NOTE_WEIGHT = 1.5;
 
-static int boundedTrillTicksPerNote(const Chord* chord)
+static bool isLeftHandStaff(const Chord* chord)
+{
+    const Part* part = chord->part();
+    if (!part || part->nstaves() < 2 || part->staves().empty()) {
+        return false;
+    }
+
+    return chord->vStaffIdx() > part->staves().front()->idx();
+}
+
+int CompatMidiRender::trillIntervalTicks(const Chord* chord)
 {
     const BeatsPerSecond tempo = chord->score()->multipliedTempo(chord->tick());
-    const int ticksPerSecond = std::max(1, static_cast<int>(std::lround(tempo.val * Constants::DIVISION)));
-    const int fastestTicks = std::max(1, static_cast<int>(std::ceil(ticksPerSecond / FASTEST_TRILL_NOTES_PER_SECOND)));
-    const int slowestTicks = std::max(fastestTicks, static_cast<int>(std::floor(ticksPerSecond / SLOWEST_TRILL_NOTES_PER_SECOND)));
-    const int targetTicks = std::max(1, static_cast<int>(std::lround(ticksPerSecond / TARGET_TRILL_NOTES_PER_SECOND)));
+    const double ticksPerSecond = std::max(1.0, tempo.val * Constants::DIVISION);
+    const double bpm = std::max(1.0, tempo.val * 60.0);
+    double notesPerSecond = TRILL_BASE_NOTES_PER_SECOND * std::pow(bpm / TRILL_REFERENCE_BPM, TRILL_TEMPO_EXPONENT);
+    notesPerSecond = std::clamp(notesPerSecond, TRILL_MIN_NOTES_PER_SECOND, TRILL_MAX_NOTES_PER_SECOND);
+    if (isLeftHandStaff(chord)) {
+        notesPerSecond *= TRILL_LEFT_HAND_RATE_FACTOR;
+    }
 
-    return std::max(MIN_TRILL_EVENT_TICKS, std::clamp(targetTicks, fastestTicks, slowestTicks));
+    return std::max(MIN_TRILL_EVENT_TICKS, static_cast<int>(std::lround(ticksPerSecond / notesPerSecond)));
+}
+
+static int fastestTrillIntervalTicks(const Chord* chord)
+{
+    const BeatsPerSecond tempo = chord->score()->multipliedTempo(chord->tick());
+    const double ticksPerSecond = std::max(1.0, tempo.val * Constants::DIVISION);
+    return std::max(MIN_TRILL_EVENT_TICKS, static_cast<int>(std::ceil(ticksPerSecond / TRILL_FASTEST_NOTES_PER_SECOND)));
+}
+
+bool CompatMidiRender::chordHasTrill(Chord* chord)
+{
+    if (!chord) {
+        return false;
+    }
+
+    if (findFirstTrill(chord)) {
+        return true;
+    }
+
+    for (const Articulation* articulation : chord->articulations()) {
+        if (articulation->playArticulation() && articulation->symId() == SymId::ornamentTrill) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static int explicitOrnamentPitchOffset(const Note* note, const Ornament* ornament, int diatonicSteps, bool& found)
@@ -233,6 +293,8 @@ void CompatMidiRender::createPlayEvents(const Score* score, const CompatMidiRend
     int trailtime = 0;
 
     CompatMidiRender::createGraceNotesPlayEvents(score, tick, chord, ontime, trailtime);       // ontime and trailtime are modified by this call depending on grace notes before and after
+    // On-beat grace notes delay the written note; the written note still ends where it is written.
+    const int graceLeadIn = ontime;
     trailtime = CompatMidiRender::adjustTrailtime(trailtime, chord, nextChord);
 
     SwingParameters st = chord->staff()->swing(tick);
@@ -243,7 +305,7 @@ void CompatMidiRender::createPlayEvents(const Score* score, const CompatMidiRend
     //
     //    render normal (and articulated) chords
     //
-    std::vector<NoteEventList> el = CompatMidiRender::renderChord(context, chord, prevChord, gateTime, ontime, trailtime);
+    std::vector<NoteEventList> el = CompatMidiRender::renderChord(context, chord, prevChord, gateTime, ontime, trailtime, graceLeadIn);
     if (chord->playEventType() == PlayEventType::Auto) {
         chord->setNoteEventLists(el);
     }
@@ -258,7 +320,7 @@ void CompatMidiRender::createPlayEvents(const Score* score, const CompatMidiRend
 //---------------------------------------------------------
 
 std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendererInternal::Context& context, Chord* chord, Chord* prevChord,
-                                                         int gateTime, int ontime, int trailtime)
+                                                         int gateTime, int ontime, int trailtime, int graceLeadIn)
 {
     const std::vector<mu::engraving::Note*>& notes = chord->notes();
     if (notes.empty()) {
@@ -300,7 +362,8 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
             tremolo = true;
         }
 
-        CompatMidiRender::renderChordArticulation(context, chord, ell, gateTime, (double)ontime / NoteEvent::NOTE_LENGTH, tremolo);
+        CompatMidiRender::renderChordArticulation(context, chord, ell, gateTime, (double)ontime / NoteEvent::NOTE_LENGTH,
+                                                  (double)trailtime / NoteEvent::NOTE_LENGTH, tremolo);
     }
 
     // Check each note and apply gateTime
@@ -315,7 +378,7 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
         // If we are here then we still need to render the note.
         // Render its body if necessary and apply gateTime.
         if (el->empty() && chord->tremoloChordType() != TremoloChordType::TremoloSecondChord) {
-            el->push_back(NoteEvent(0, ontime, 1000 - trailtime,
+            el->push_back(NoteEvent(0, ontime, std::max(1, 1000 - trailtime - graceLeadIn),
                                     !note->ghost() ? NoteEvent::DEFAULT_VELOCITY_MULTIPLIER : NoteEvent::GHOST_VELOCITY_MULTIPLIER));
 
             Glissando* gl = CompatMidiRender::backGlissando(note);
@@ -534,7 +597,7 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
 
 void CompatMidiRender::renderChordArticulation(const CompatMidiRendererInternal::Context& context, Chord* chord,
                                                std::vector<NoteEventList>& ell, int& gateTime, double graceOnBeatProportion,
-                                               bool tremoloBefore /* = false */)
+                                               double trailProportion, bool tremoloBefore /* = false */)
 {
     Segment* seg = chord->segment();
     Instrument* instr = chord->part()->instrument(seg->tick());
@@ -547,16 +610,15 @@ void CompatMidiRender::renderChordArticulation(const CompatMidiRendererInternal:
         if (noteIsGlissandoStart(note)) {
             CompatMidiRender::renderGlissando(events, note, graceOnBeatProportion, tremoloBefore);
         } else if (chord->staff()->isPitchedStaff(chord->tick()) && (trill = findFirstTrill(chord)) != nullptr) {
-            CompatMidiRender::renderTrillArticulation(events, note, trill, graceOnBeatProportion);
+            CompatMidiRender::renderTrillArticulation(events, note, trill, graceOnBeatProportion, trailProportion);
         } else {
             for (Articulation* a : chord->articulations()) {
                 if (!a->playArticulation()) {
                     continue;
                 }
                 if (a->symId() == SymId::ornamentTrill) {
-                    CompatMidiRender::renderTrillArticulation(events, note, a->ornamentStyle(),
-                                                              a->isOrnament() ? toOrnament(a) : nullptr,
-                                                              graceOnBeatProportion);
+                    CompatMidiRender::renderTrillArticulation(events, note, a->isOrnament() ? toOrnament(a) : nullptr,
+                                                              graceOnBeatProportion, trailProportion);
                     continue;
                 }
                 if (!CompatMidiRender::renderNoteArticulation(events, note, false, a->symId(), a->ornamentStyle(),
@@ -662,6 +724,13 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
                 if (graceTicks <= 0) {
                     graceTicks = graceChord->actualTicks().ticks();
                 }
+                // An appoggiatura is played on the beat and takes its time from the written note:
+                // its written value, but never more than half of the written note, or two thirds
+                // of a dotted one (C.P.E. Bach, Versuch I.2.2 §11; Türk; Badura-Skoda).
+                if (chordTicks > 0) {
+                    const int longestTicks = chord->dots() > 0 ? (chordTicks * 2) / 3 : chordTicks / 2;
+                    graceTicks = std::min(graceTicks, std::max(1, longestTicks));
+                }
                 if (chordTicks > 0 && graceTicks > 0) {
                     graceOntime = static_cast<int>(
                         std::lround((static_cast<double>(graceTicks) / chordTicks) * 1000.0)
@@ -711,7 +780,13 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
     });
 
     if (!graceBendAfter && na) {
-        if (chord->dots() == 1) {
+        const int chordTicks = chord->actualTicks().ticks();
+        if (CompatMidiRender::chordHasTrill(chord) && chordTicks > 0) {
+            // Written after-grace notes on a trilled note are its closing turn and go at trill
+            // speed, "as quick as the trill itself" (C.P.E. Bach, Versuch I.2.3 §15).
+            const long long closingTicks = static_cast<long long>(na) * CompatMidiRender::trillIntervalTicks(chord);
+            trailtime = static_cast<int>(std::min<long long>(500, (closingTicks * NoteEvent::NOTE_LENGTH) / chordTicks));
+        } else if (chord->dots() == 1) {
             trailtime = floor(667 * weighta);
         } else if (chord->dots() == 2) {
             trailtime = floor(571 * weighta);
@@ -1020,7 +1095,7 @@ bool CompatMidiRender::renderNoteArticulation(NoteEventList* events, Note* note,
     }
 
     if (articulationType == SymId::ornamentTrill) {
-        return renderTrillArticulation(events, note, ornamentStyle, ornament, graceOnBeatProportion);
+        return renderTrillArticulation(events, note, ornament, graceOnBeatProportion);
     }
 
     std::vector<int> emptypattern = {};
@@ -1040,7 +1115,7 @@ bool CompatMidiRender::renderNoteArticulation(NoteEventList* events, Note* note,
 //---------------------------------------------------------
 
 bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note, const Trill* trill,
-                                               double graceOnBeatProportion)
+                                               double graceOnBeatProportion, double trailProportion)
 {
     if (!trill) {
         return false;
@@ -1051,11 +1126,33 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
                                                         graceOnBeatProportion, trill->ornament());
     }
 
-    return renderTrillArticulation(events, note, trill->ornamentStyle(), trill->ornament(), graceOnBeatProportion);
+    return renderTrillArticulation(events, note, trill->ornament(), graceOnBeatProportion, trailProportion);
 }
 
-bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note, OrnamentStyle ornamentStyle,
-                                               const Ornament* ornament, double graceOnBeatProportion)
+static const Chord* lastTiedChord(const Note* note)
+{
+    const Note* last = note;
+    while (last->tieFor() && last->tieFor()->endNote()) {
+        last = last->tieFor()->endNote();
+    }
+
+    return last->chord();
+}
+
+// Pianomania trill.
+//
+// The trill begins on the written note, because that note is the scored target, alternates
+// with the upper neighbour at the expert rate from trillIntervalTicks, and always comes home
+// to the written note: never on the upper note, and never striking the written note twice
+// in a row. It adds no closing turn of its own; when the score writes one as after-grace
+// notes, the alternation ends on the written note and the written notes take over at trill
+// speed. The last generated event holds until the written note ends. Very short notes get a
+// three-note Pralltriller (written, upper, written).
+//
+// Every generated group therefore ends on the written note, which the Helper's ornament gate
+// requires before it accepts the export.
+bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note, const Ornament* ornament,
+                                               double graceOnBeatProportion, double trailProportion)
 {
     if (!events || !note || !note->staff()->isPitchedStaff(note->tick())) {
         return false;
@@ -1073,19 +1170,13 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
         startTick = std::min(spanTicks - 1, static_cast<int>(std::lround(graceOnBeatProportion * spanTicks)));
     }
 
-    const int playableTicks = spanTicks - startTick;
-    if (playableTicks < MIN_TRILL_EVENT_TICKS * 2) {
-        return false;
+    int endTick = spanTicks;
+    if (trailProportion > 0.0) {
+        endTick = std::max(startTick + 1, spanTicks - static_cast<int>(std::lround(trailProportion * chordTicks)));
     }
 
-    int ticksPerNote = boundedTrillTicksPerNote(chord);
-    int eventCount = playableTicks / ticksPerNote;
-    if (eventCount < 2) {
-        eventCount = 2;
-        ticksPerNote = playableTicks / eventCount;
-    }
-
-    if (ticksPerNote <= 0) {
+    const int playableTicks = endTick - startTick;
+    if (playableTicks < 3) {
         return false;
     }
 
@@ -1097,7 +1188,53 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
         return false;
     }
 
-    const bool startOnUpper = ornamentStyle == OrnamentStyle::BAROQUE || (ornament && ornament->startOnUpperNote());
+    const bool writtenAfterGraces = !lastTiedChord(note)->graceNotesAfter(true).empty();
+
+    const int nominalInterval = CompatMidiRender::trillIntervalTicks(chord);
+    const int fastestInterval = fastestTrillIntervalTicks(chord);
+
+    // Pitch offsets in order. The last entry is the note that holds until the trill ends.
+    std::vector<int> sequence;
+    double finalWeight = TRILL_FINAL_NOTE_WEIGHT;
+    if (playableTicks < 3 * fastestInterval) {
+        sequence = { 0, upperPitchOffset, 0 };
+        finalWeight = 1.0;
+    } else {
+        const double shortestInterval = nominalInterval / TRILL_MAX_COMPRESSION;
+        if (writtenAfterGraces) {
+            // The written after-grace notes follow at trill speed, so the final written note
+            // of the alternation is one ordinary trill step long.
+            finalWeight = 1.0;
+        }
+        const int maxEvents = std::max(3, static_cast<int>(std::floor(playableTicks / shortestInterval - finalWeight + 1.0)));
+
+        const int pairs = std::max(1, (maxEvents - 1) / 2);
+        for (int i = 0; i < pairs; ++i) {
+            sequence.push_back(0);
+            sequence.push_back(upperPitchOffset);
+        }
+        sequence.push_back(0);
+    }
+
+    const size_t eventCount = sequence.size();
+    if (eventCount < 3) {
+        return false;
+    }
+
+    std::vector<double> weights(eventCount, 1.0);
+    if (playableTicks >= 3 * fastestInterval) {
+        for (size_t i = 0; i + 1 < eventCount; ++i) {
+            weights[i] = sequence[i] == 0 ? TRILL_MAIN_NOTE_WEIGHT : TRILL_AUXILIARY_WEIGHT;
+        }
+        weights.front() += TRILL_FIRST_NOTE_EXTRA_WEIGHT;
+        weights.back() = finalWeight;
+    }
+
+    double weightSum = 0.0;
+    for (double weight : weights) {
+        weightSum += weight;
+    }
+
     const double velocityMultiplier = note->ghost()
                                       ? NoteEvent::GHOST_VELOCITY_MULTIPLIER
                                       : NoteEvent::DEFAULT_VELOCITY_MULTIPLIER;
@@ -1106,26 +1243,22 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
     };
 
     NoteEventList trillEvents;
+    double cursor = 0.0;
     int eventStartTick = startTick;
-    for (int i = 0; i < eventCount; ++i) {
-        const int durationTicks = (i == eventCount - 1) ? spanTicks - eventStartTick : ticksPerNote;
-        if (durationTicks <= 1) {
-            break;
+    for (size_t i = 0; i < eventCount; ++i) {
+        cursor += weights[i];
+        const int eventEndTick = (i + 1 == eventCount)
+                                 ? endTick
+                                 : startTick + static_cast<int>(std::lround(playableTicks * cursor / weightSum));
+        const int durationTicks = eventEndTick - eventStartTick;
+        if (durationTicks <= 0) {
+            return false;
         }
 
         const int ontime = toPermille(eventStartTick);
-        const int len = toPermille(durationTicks);
-        if (len <= 0) {
-            break;
-        }
-
-        const bool upper = (i % 2 == 0) == startOnUpper;
-        trillEvents.push_back(NoteEvent(upper ? upperPitchOffset : 0, ontime, len, velocityMultiplier));
-        eventStartTick += ticksPerNote;
-    }
-
-    if (trillEvents.size() < 2) {
-        return false;
+        const int len = std::max(1, toPermille(durationTicks));
+        trillEvents.push_back(NoteEvent(sequence[i], ontime, len, velocityMultiplier));
+        eventStartTick = eventEndTick;
     }
 
     events->clear();
@@ -1296,7 +1429,8 @@ int CompatMidiRender::adjustTrailtime(int trailtime, Chord* currentChord, Chord*
     if (hasGraceBend) {
         reducedTicks = graceBendTicks(currentChord);
     } else if (!graceNotesBeforeBar.empty()) {
-        reducedTicks = std::min(graceNotesBeforeBar[0]->ticks().ticks(), currentTicks / 2);
+        const std::vector<int> leads = CompatMidiRendererInternal::acciaccaturaLeadTicks(nextChord, currentTicks);
+        reducedTicks = leads.empty() ? 0 : leads.front();
     } else {
         bool anySlidesIn = std::any_of(notes.begin(), notes.end(), [](const Note* note) {
             return note->slideToType() == Note::SlideType::DownToNote
