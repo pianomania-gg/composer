@@ -551,8 +551,8 @@ void MidiExportTimingTests::basicTrillAlternatesWithSaneDurations()
     QVERIFY(hasBalancedNotePairs(midiFile));
 
     std::vector<ExportedMidiNote> trillNotes = notesForPitches(notes, { 60, 62 });
-    QVERIFY(static_cast<int>(trillNotes.size()) >= 20);
-    QVERIFY(static_cast<int>(trillNotes.size()) <= 28);
+    QVERIFY(static_cast<int>(trillNotes.size()) >= 24);
+    QVERIFY(static_cast<int>(trillNotes.size()) <= 34);
 
     for (size_t i = 1; i < std::min<size_t>(trillNotes.size(), 10); ++i) {
         QVERIFY(trillNotes[i].start > trillNotes[i - 1].start);
@@ -561,7 +561,7 @@ void MidiExportTimingTests::basicTrillAlternatesWithSaneDurations()
 
     bool sawOrnamentNoteOff = false;
     for (const ExportedMidiNote& note : trillNotes) {
-        QVERIFY(note.duration() >= 60);
+        QVERIFY(note.duration() >= 50);
         QVERIFY(note.duration() <= 140);
         if (note.pitch == 62 && note.offVelocity == 127) {
             sawOrnamentNoteOff = true;
@@ -582,7 +582,7 @@ void MidiExportTimingTests::fastTempoTrillAvoidsTinyArtifacts()
     QVERIFY(static_cast<int>(trillNotes.size()) <= 16);
 
     for (const ExportedMidiNote& note : trillNotes) {
-        QVERIFY(note.duration() >= 120);
+        QVERIFY(note.duration() >= 100);
     }
 }
 
@@ -598,7 +598,7 @@ void MidiExportTimingTests::slowTempoTrillStaysDenseEnough()
     QVERIFY(static_cast<int>(trillNotes.size()) <= 90);
 
     for (const ExportedMidiNote& note : trillNotes) {
-        QVERIFY(note.duration() >= 20);
+        QVERIFY(note.duration() >= 16);
     }
 }
 
@@ -610,8 +610,8 @@ void MidiExportTimingTests::tiedTrillContinuesAcrossTie()
     QVERIFY(hasBalancedNotePairs(midiFile));
 
     std::vector<ExportedMidiNote> trillNotes = notesForPitches(notes, { 60, 62 });
-    QVERIFY(static_cast<int>(trillNotes.size()) >= 42);
-    QVERIFY(static_cast<int>(trillNotes.size()) <= 54);
+    QVERIFY(static_cast<int>(trillNotes.size()) >= 50);
+    QVERIFY(static_cast<int>(trillNotes.size()) <= 68);
 
     int latestEnd = 0;
     for (const ExportedMidiNote& note : trillNotes) {

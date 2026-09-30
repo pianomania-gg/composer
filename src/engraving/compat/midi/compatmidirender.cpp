@@ -48,28 +48,29 @@ static bool isOnBeatGraceType(NoteType type);
 
 // Trill speed model.
 //
-// Measured expert piano trills run near 11 notes per second in the right hand and about
-// 9 in the left, almost independent of tempo and note value (Moore 1992; Han & Bresin 2019;
-// Goebl & Palmer 2013). The rate drifts only mildly with tempo, so an adagio trills a little
-// slower and a brilliant allegro a little faster. A trill therefore gets more alternations on
-// a longer note, not slower ones.
+// Measured expert piano trills average near 11 to 12 notes per second, almost independent
+// of tempo and note value (Moore 1992; Han & Bresin 2019; Goebl & Palmer 2013), with
+// brilliant Classical trills at the top of that range. Pianomania targets 13 per second at a
+// moderate tempo, drifting only mildly with tempo, so an adagio trills a little slower and a
+// brilliant allegro a little faster. A trill therefore gets more alternations on a longer note,
+// not slower ones. The left hand trills about a tenth slower than the right.
 static constexpr int MIN_TRILL_EVENT_TICKS = Constants::DIVISION / 20;
-static constexpr double TRILL_BASE_NOTES_PER_SECOND = 11.0;
+static constexpr double TRILL_BASE_NOTES_PER_SECOND = 13.0;
 static constexpr double TRILL_REFERENCE_BPM = 100.0;
 static constexpr double TRILL_TEMPO_EXPONENT = 0.2;
-static constexpr double TRILL_MIN_NOTES_PER_SECOND = 9.0;
-static constexpr double TRILL_MAX_NOTES_PER_SECOND = 13.0;
+static constexpr double TRILL_MIN_NOTES_PER_SECOND = 11.0;
+static constexpr double TRILL_MAX_NOTES_PER_SECOND = 15.0;
 static constexpr double TRILL_LEFT_HAND_RATE_FACTOR = 0.9;
-// No pianist sustains more than about 14 notes per second; shorter notes get fewer
+// No pianist sustains more than about 16 notes per second; shorter notes get fewer
 // alternations rather than a faster trill.
-static constexpr double TRILL_FASTEST_NOTES_PER_SECOND = 14.0;
+static constexpr double TRILL_FASTEST_NOTES_PER_SECOND = 16.0;
 // The alternation may tighten by this factor so the trill fills the written span exactly.
 static constexpr double TRILL_MAX_COMPRESSION = 1.10;
 // Measured trills hold the written note slightly longer than the auxiliary, lean on the first
 // note, and settle on the final written note (Han & Bresin 2019).
 static constexpr double TRILL_MAIN_NOTE_WEIGHT = 1.08;
 static constexpr double TRILL_AUXILIARY_WEIGHT = 0.92;
-static constexpr double TRILL_FIRST_NOTE_EXTRA_WEIGHT = 0.15;
+static constexpr double TRILL_FIRST_NOTE_EXTRA_WEIGHT = 0.10;
 static constexpr double TRILL_FINAL_NOTE_WEIGHT = 1.5;
 
 static bool isLeftHandStaff(const Chord* chord)
