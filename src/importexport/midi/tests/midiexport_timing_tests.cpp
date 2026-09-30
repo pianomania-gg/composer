@@ -299,6 +299,8 @@ private slots:
     void trillEndsOnWrittenNoteWithoutGeneratedTurn();
     void acciaccaturaBeforeLeapTakesMoreTime();
     void writtenAfterGraceTurnPlaysAtTrillSpeed();
+    void gracePairPlaysBeforeTheBeat();
+    void shortWrittenGracePlaysBeforeTheBeat();
 
 private:
     bool exportFixture(const QString& fixtureName, MidiFile& midiFile, std::vector<ExportedMidiNote>& notes);
@@ -911,6 +913,80 @@ void MidiExportTimingTests::acciaccaturaBeforeLeapTakesMoreTime()
     QCOMPARE(bFlat4.front().end, 479);
     QCOMPARE(bFlat4.front().offVelocity, 64);
     QCOMPARE(f6.front().start, 480);
+}
+
+void MidiExportTimingTests::gracePairPlaysBeforeTheBeat()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_grace_pair_before_beat.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    // Two unslashed sixteenth graces before an eighth E are a pre-beat turn: each takes 65 ms
+    // (62 ticks at 120 bpm) from the previous quarter, and the written E stays on the beat.
+    const std::vector<ExportedMidiNote> g4 = notesForPitchInRange(notes, 67, 0, 480);
+    const std::vector<ExportedMidiNote> e5Grace = notesForPitchInRange(notes, 76, 0, 480);
+    const std::vector<ExportedMidiNote> f5Grace = notesForPitchInRange(notes, 77, 0, 480);
+    const std::vector<ExportedMidiNote> e5Main = notesForPitchInRange(notes, 76, 480, 720);
+    const std::vector<ExportedMidiNote> d5 = notesForPitchInRange(notes, 74, 720, 960);
+    QCOMPARE(static_cast<int>(g4.size()), 1);
+    QCOMPARE(static_cast<int>(e5Grace.size()), 1);
+    QCOMPARE(static_cast<int>(f5Grace.size()), 1);
+    QCOMPARE(static_cast<int>(e5Main.size()), 1);
+    QCOMPARE(static_cast<int>(d5.size()), 1);
+    QCOMPARE(g4.front().end, 354);
+    QCOMPARE(e5Grace.front().start, 355);
+    QCOMPARE(e5Grace.front().end, 417);
+    QCOMPARE(e5Grace.front().offVelocity, 64);
+    QCOMPARE(f5Grace.front().start, 418);
+    QCOMPARE(f5Grace.front().end, 479);
+    QCOMPARE(f5Grace.front().offVelocity, 64);
+    QCOMPARE(e5Main.front().start, 480);
+    QCOMPARE(e5Main.front().end, 719);
+    QCOMPARE(d5.front().start, 720);
+}
+
+void MidiExportTimingTests::shortWrittenGracePlaysBeforeTheBeat()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_short_grace_before_beat.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    // A single unslashed grace written as a sixteenth is a short grace: it is crushed into
+    // the previous note and the written C stays on the beat.
+    const std::vector<ExportedMidiNote> e5 = notesForPitchInRange(notes, 76, 0, 480);
+    const std::vector<ExportedMidiNote> d5Grace = notesForPitchInRange(notes, 74, 0, 480);
+    const std::vector<ExportedMidiNote> c5 = notesForPitchInRange(notes, 72, 480, 720);
+    const std::vector<ExportedMidiNote> b4 = notesForPitchInRange(notes, 71, 720, 960);
+    QCOMPARE(static_cast<int>(e5.size()), 1);
+    QCOMPARE(static_cast<int>(d5Grace.size()), 1);
+    QCOMPARE(static_cast<int>(c5.size()), 1);
+    QCOMPARE(static_cast<int>(b4.size()), 1);
+    QCOMPARE(e5.front().end, 417);
+    QCOMPARE(d5Grace.front().start, 418);
+    QCOMPARE(d5Grace.front().end, 479);
+    QCOMPARE(d5Grace.front().offVelocity, 64);
+    QCOMPARE(c5.front().start, 480);
+    QCOMPARE(c5.front().end, 719);
+    QCOMPARE(b4.front().start, 720);
+
+    // The same holds for a palette appoggiatura whose written value was shortened to a
+    // sixteenth: the written value decides, not the palette item.
+    const std::vector<ExportedMidiNote> a4 = notesForPitchInRange(notes, 69, 960, 1440);
+    const std::vector<ExportedMidiNote> f5Grace = notesForPitchInRange(notes, 77, 960, 1440);
+    const std::vector<ExportedMidiNote> e5Main = notesForPitchInRange(notes, 76, 1440, 1680);
+    const std::vector<ExportedMidiNote> d5 = notesForPitchInRange(notes, 74, 1680, 1920);
+    QCOMPARE(static_cast<int>(a4.size()), 1);
+    QCOMPARE(static_cast<int>(f5Grace.size()), 1);
+    QCOMPARE(static_cast<int>(e5Main.size()), 1);
+    QCOMPARE(static_cast<int>(d5.size()), 1);
+    QCOMPARE(a4.front().end, 1377);
+    QCOMPARE(f5Grace.front().start, 1378);
+    QCOMPARE(f5Grace.front().end, 1439);
+    QCOMPARE(e5Main.front().start, 1440);
+    QCOMPARE(e5Main.front().end, 1679);
+    QCOMPARE(d5.front().start, 1680);
 }
 
 void MidiExportTimingTests::appoggiaturaTakesHalfOfTheWrittenNote()

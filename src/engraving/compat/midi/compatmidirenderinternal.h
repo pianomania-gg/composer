@@ -182,11 +182,16 @@ public:
     static const int ARTICULATION_CONV_FACTOR { 100000 };
     static bool graceNotesMerged(Chord* chord);
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
-    // For each slashed grace note before `chord`, in written order, the ticks before the
+    // Whether the grace notes before `chord` are crushed before the beat so the written note
+    // stays on it. Only a single unslashed grace written as an eighth or longer is a long
+    // appoggiatura that plays on the beat; a slashed grace, a group of two or more graces, or
+    // a single grace written as a sixteenth or shorter plays before the beat.
+    static bool graceNotesBeforePlayBeforeBeat(const Chord* chord);
+    // For each before-beat grace note before `chord`, in written order, the ticks before the
     // written note at which it is struck. The first value is the whole lead taken from the
     // previous written note. `previousTicks` is that note's length, or a non-positive value
-    // when it is unknown.
-    static std::vector<int> acciaccaturaLeadTicks(const Chord* chord, int previousTicks);
+    // when it is unknown. Empty when the graces play on the beat.
+    static std::vector<int> beforeBeatGraceLeadTicks(const Chord* chord, int previousTicks);
 
 private:
 
