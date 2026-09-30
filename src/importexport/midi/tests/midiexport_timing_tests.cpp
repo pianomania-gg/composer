@@ -294,6 +294,10 @@ private slots:
     void gameplayTrillsStartOnWrittenAnchorAndReturn();
     void gameplayTurnsStartOnWrittenAnchorAndReturn();
     void gameplayTremblementStartsOnWrittenAnchorAndReturn();
+    void acciaccaturaCrushesAtConstantLeadRegardlessOfWrittenValue();
+    void appoggiaturaTakesHalfOfTheWrittenNote();
+    void trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNote();
+    void writtenAfterGraceTurnPlaysAtTrillSpeed();
 
 private:
     bool exportFixture(const QString& fixtureName, MidiFile& midiFile, std::vector<ExportedMidiNote>& notes);
@@ -449,10 +453,12 @@ void MidiExportTimingTests::samePitchAcciaccaturaRestrikesAfterPreviousNote()
     QCOMPARE(static_cast<int>(e4.size()), 2);
     QCOMPARE(static_cast<int>(f4.size()), 1);
 
+    // The slashed grace is crushed into 65 ms (62 ticks at 120 bpm), taken from the previous
+    // note, and the written F stays on the beat.
     QCOMPARE(e4[0].start, 0);
-    QCOMPARE(e4[0].end, 119);
+    QCOMPARE(e4[0].end, 177);
     QCOMPARE(e4[0].offVelocity, 64);
-    QCOMPARE(e4[1].start, 120);
+    QCOMPARE(e4[1].start, 178);
     QCOMPARE(e4[1].end, 239);
     QCOMPARE(e4[1].offVelocity, 64);
     QCOMPARE(f4.front().start, 240);
@@ -473,9 +479,9 @@ void MidiExportTimingTests::measureBoundaryAcciaccaturaGetsDistinctStartTick()
     QCOMPARE(static_cast<int>(f4.size()), 1);
 
     QCOMPARE(e4[0].start, 1200);
-    QCOMPARE(e4[0].end, 1319);
+    QCOMPARE(e4[0].end, 1377);
     QCOMPARE(e4[0].offVelocity, 64);
-    QCOMPARE(e4[1].start, 1320);
+    QCOMPARE(e4[1].start, 1378);
     QCOMPARE(e4[1].end, 1439);
     QCOMPARE(e4[1].offVelocity, 64);
     QCOMPARE(f4.front().start, 1440);
@@ -846,6 +852,162 @@ void MidiExportTimingTests::gameplayTremblementStartsOnWrittenAnchorAndReturn()
     QCOMPARE(attacks.front().start, 0);
     QCOMPARE(attacks.front().pitch, 52);
     QCOMPARE(attacks.back().pitch, 52);
+}
+
+void MidiExportTimingTests::acciaccaturaCrushesAtConstantLeadRegardlessOfWrittenValue()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_acciaccatura_crush_lead.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    // A slashed eighth before the F takes 65 ms (62 ticks at 120 bpm) from the previous quarter.
+    const std::vector<ExportedMidiNote> e4 = notesForPitchInRange(notes, 64, 0, 480);
+    const std::vector<ExportedMidiNote> d4Single = notesForPitchInRange(notes, 62, 0, 480);
+    const std::vector<ExportedMidiNote> f4 = notesForPitchInRange(notes, 65, 480, 960);
+    QCOMPARE(static_cast<int>(e4.size()), 1);
+    QCOMPARE(static_cast<int>(d4Single.size()), 1);
+    QCOMPARE(static_cast<int>(f4.size()), 1);
+    QCOMPARE(e4.front().end, 417);
+    QCOMPARE(d4Single.front().start, 418);
+    QCOMPARE(d4Single.front().end, 479);
+    QCOMPARE(d4Single.front().offVelocity, 64);
+    QCOMPARE(f4.front().start, 480);
+
+    // Two slashed graces take 65 ms each, in written order, and the written E stays on the beat.
+    const std::vector<ExportedMidiNote> c4 = notesForPitchInRange(notes, 60, 480, 960);
+    const std::vector<ExportedMidiNote> d4Pair = notesForPitchInRange(notes, 62, 480, 960);
+    const std::vector<ExportedMidiNote> e4Main = notesForPitchInRange(notes, 64, 960, 1440);
+    QCOMPARE(static_cast<int>(c4.size()), 1);
+    QCOMPARE(static_cast<int>(d4Pair.size()), 1);
+    QCOMPARE(static_cast<int>(e4Main.size()), 1);
+    QCOMPARE(f4.front().end, 834);
+    QCOMPARE(c4.front().start, 835);
+    QCOMPARE(c4.front().end, 896);
+    QCOMPARE(d4Pair.front().start, 897);
+    QCOMPARE(d4Pair.front().end, 958);
+    QCOMPARE(e4Main.front().start, 960);
+    QCOMPARE(e4Main.front().end, 1439);
+}
+
+void MidiExportTimingTests::appoggiaturaTakesHalfOfTheWrittenNote()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_appoggiatura_half_value.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    // A written-eighth appoggiatura before an eighth takes half: the C is a sixteenth on the
+    // beat and the written B is the second sixteenth, ending where it is written.
+    const std::vector<ExportedMidiNote> c5 = notesForPitchInRange(notes, 72, 0, 480);
+    const std::vector<ExportedMidiNote> b4 = notesForPitchInRange(notes, 71, 0, 480);
+    const std::vector<ExportedMidiNote> a4 = notesForPitchInRange(notes, 69, 0, 480);
+    QCOMPARE(static_cast<int>(c5.size()), 1);
+    QCOMPARE(static_cast<int>(b4.size()), 1);
+    QCOMPARE(static_cast<int>(a4.size()), 1);
+    QCOMPARE(c5.front().start, 0);
+    QCOMPARE(c5.front().end, 119);
+    QCOMPARE(c5.front().offVelocity, 64);
+    QCOMPARE(b4.front().start, 120);
+    QCOMPARE(b4.front().end, 239);
+    QCOMPARE(b4.front().offVelocity, 64);
+    QCOMPARE(a4.front().start, 240);
+
+    // Before a dotted quarter the written eighth is shorter than two thirds, so it keeps its
+    // written value and the dotted note ends where it is written.
+    const std::vector<ExportedMidiNote> d5 = notesForPitchInRange(notes, 74, 1920, 2640);
+    const std::vector<ExportedMidiNote> c5Dotted = notesForPitchInRange(notes, 72, 1920, 2640);
+    const std::vector<ExportedMidiNote> b4Next = notesForPitchInRange(notes, 71, 2640, 2880);
+    QCOMPARE(static_cast<int>(d5.size()), 1);
+    QCOMPARE(static_cast<int>(c5Dotted.size()), 1);
+    QCOMPARE(static_cast<int>(b4Next.size()), 1);
+    QCOMPARE(d5.front().start, 1920);
+    QVERIFY(d5.front().end >= 2157 && d5.front().end <= 2159);
+    QVERIFY(c5Dotted.front().start >= 2158 && c5Dotted.front().start <= 2160);
+    QVERIFY(c5Dotted.front().end >= 2637 && c5Dotted.front().end <= 2639);
+    QCOMPARE(b4Next.front().start, 2640);
+}
+
+void MidiExportTimingTests::trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNote()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_trill_closing_turn.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    const std::vector<ExportedMidiNote> trill = notesInRange(notes, 0, 960);
+    QVERIFY(static_cast<int>(trill.size()) >= 10);
+    QVERIFY(static_cast<int>(trill.size()) <= 14);
+
+    // The written note is the scored first attack; everything after it is ornament playback.
+    QCOMPARE(trill.front().pitch, 72);
+    QCOMPARE(trill.front().start, 0);
+    QCOMPARE(trill.front().offVelocity, 64);
+    for (size_t i = 1; i < trill.size(); ++i) {
+        QCOMPARE(trill[i].offVelocity, 127);
+        QVERIFY(trill[i].start > trill[i - 1].start);
+        QVERIFY(trill[i].pitch != trill[i - 1].pitch);
+    }
+
+    // The closing turn strikes the lower neighbour exactly once, right before the final written
+    // note, which holds until the next written note.
+    int lowerCount = 0;
+    for (const ExportedMidiNote& note : trill) {
+        if (note.pitch == 71) {
+            ++lowerCount;
+        }
+    }
+    QCOMPARE(lowerCount, 1);
+    QCOMPARE(trill[trill.size() - 2].pitch, 71);
+    QCOMPARE(trill.back().pitch, 72);
+    QVERIFY(trill.back().end < 960);
+    QVERIFY(trill.back().end >= 940);
+    QVERIFY(trill.back().duration() > trill[trill.size() - 2].duration());
+
+    const std::vector<ExportedMidiNote> following = notesForPitchInRange(notes, 71, 960, 961);
+    QCOMPARE(static_cast<int>(following.size()), 1);
+    QCOMPARE(following.front().duration(), 479);
+    QCOMPARE(following.front().offVelocity, 64);
+}
+
+void MidiExportTimingTests::writtenAfterGraceTurnPlaysAtTrillSpeed()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_trill_written_after_grace_turn.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    const std::vector<ExportedMidiNote> span = notesInRange(notes, 0, 960);
+    QVERIFY(static_cast<int>(span.size()) >= 10);
+
+    // The two written after-grace notes are the closing turn: written notes, in written order,
+    // each one trill step long, ending where the trilled note ends.
+    std::vector<ExportedMidiNote> written;
+    for (const ExportedMidiNote& note : span) {
+        if (note.offVelocity == 64 && note.start > 0) {
+            written.push_back(note);
+        }
+    }
+    QCOMPARE(static_cast<int>(written.size()), 2);
+    QCOMPARE(written[0].pitch, 71);
+    QCOMPARE(written[1].pitch, 72);
+    QVERIFY(written[0].start > 700);
+    QVERIFY(written[1].start > written[0].start);
+    QVERIFY(written[1].end < 960);
+    QVERIFY(written[0].duration() >= 60 && written[0].duration() <= 110);
+    QVERIFY(written[1].duration() >= 60 && written[1].duration() <= 110);
+
+    // No generated turn is added, and the alternation hands over to the written turn from the
+    // upper note.
+    ExportedMidiNote lastGenerated = span.front();
+    for (const ExportedMidiNote& note : span) {
+        QVERIFY(!(note.pitch == 71 && note.offVelocity == 127));
+        if (note.offVelocity == 127 && note.start >= lastGenerated.start) {
+            lastGenerated = note;
+        }
+    }
+    QCOMPARE(lastGenerated.pitch, 74);
+    QVERIFY(lastGenerated.end < written[0].start);
 }
 
 QTEST_MAIN(MidiExportTimingTests)

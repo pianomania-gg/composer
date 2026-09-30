@@ -77,6 +77,10 @@ static PitchWheelSpecs g_wheelSpec;
 static constexpr int LET_RING_MAX_TICKS = Constants::DIVISION * 16;
 static constexpr int DEFAULT_NOTE_OFF_VELOCITY = 64;
 static constexpr int ORNAMENT_NOTE_OFF_VELOCITY = 127;
+// Expert pianists crush a slashed grace note into roughly 50-90 ms whatever the tempo
+// (Timmers, Ashley, Desain, Honing & Windsor 2002; Windsor et al. 2000). The written
+// note stays on the beat; the grace takes its time from the previous note.
+static constexpr double ACCIACCATURA_MILLISECONDS = 65.0;
 // TODO this should be a (configurable?) constant somewhere
 static constexpr Fraction ARTICULATION_CHANGE_TIME_MAX = Fraction(1, 16);
 std::unordered_map<String,
@@ -307,6 +311,38 @@ static std::vector<size_t> playableEventIndexes(const NoteEventList& events)
     return result;
 }
 
+// A rendered trill already satisfies the gameplay contract when it starts and ends on the
+// written note and never strikes the same pitch twice in a row. Its closing turn may use the
+// lower neighbour, which the index-parity repair below must not repitch.
+static bool isGameplayTrillSequence(const NoteEventList& events, const std::vector<size_t>& playableEvents)
+{
+    if (playableEvents.size() < 3) {
+        return false;
+    }
+
+    if (events[playableEvents.front()].pitch() != 0 || events[playableEvents.back()].pitch() != 0) {
+        return false;
+    }
+
+    for (size_t i = 1; i < playableEvents.size(); ++i) {
+        if (events[playableEvents[i]].pitch() == events[playableEvents[i - 1]].pitch()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool hasWrittenAfterGraceNotes(const Note* note)
+{
+    const Note* last = note;
+    while (last && last->tieFor() && last->tieFor()->endNote()) {
+        last = last->tieFor()->endNote();
+    }
+
+    return last && last->chord() && !last->chord()->graceNotesAfter(true).empty();
+}
+
 static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note, const Ornament* ornament)
 {
     const int upperPitchOffset = trillUpperPitchOffset(note, ornament);
@@ -315,6 +351,15 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
     }
 
     const std::vector<size_t> playableEvents = playableEventIndexes(events);
+    if (isGameplayTrillSequence(events, playableEvents)) {
+        return;
+    }
+
+    // Written after-grace notes are the trill's closing turn, so the alternation ends on the
+    // upper note and the written notes bring the trill home.
+    if (playableEvents.size() >= 2 && events[playableEvents.front()].pitch() == 0 && hasWrittenAfterGraceNotes(note)) {
+        return;
+    }
 
     if (playableEvents.empty()) {
         events.push_back(NoteEvent(0, 0, NoteEvent::NOTE_LENGTH));
@@ -352,10 +397,10 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
         events[playableEvents[i]].setPitch(i % 2 == 0 ? 0 : upperPitchOffset);
     }
 
-    if (playableEvents.size() == 2) {
+    // An even count would end on the upper note. Split the final upper note so the trill returns
+    // to the written note instead of striking it twice in a row.
+    if (playableEvents.size() % 2 == 0) {
         addTrillReturn(events, playableEvents.back());
-    } else if (playableEvents.size() % 2 == 0) {
-        events[playableEvents.back()].setPitch(0);
     }
 }
 
@@ -1506,12 +1551,12 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
     }
 
     if (acciacaturaGraceSize > 0) {
-        graceTickSum = graceNotesBeforeBar[0]->ticks().ticks();
+        int previousTicks = 0;
         if (previousGraceChordRest) {
-            int previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
-            graceTickSum = std::min(previousTicks / 2, graceTickSum);
+            previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
         }
 
+        graceTickSum = acciaccaturaLeadTicks(chord, previousTicks);
         graceTickOffset = graceTickSum / static_cast<int>(acciacaturaGraceSize);
     } else {
         bool hasGraceBend = std::any_of(grChords.begin(), grChords.end(), [](Chord* ch) {
@@ -2255,6 +2300,33 @@ const
 // can synthesize the ornamental motion from the main chord's articulation events.
 // Written grace notes remain score notes and must be exported through the grace
 // chord paths so Pianomania receives their MIDI note events.
+
+int CompatMidiRendererInternal::acciaccaturaLeadTicks(const Chord* chord, int previousTicks)
+{
+    if (!chord) {
+        return 0;
+    }
+
+    int acciaccaturaCount = 0;
+    for (const Chord* grace : chord->graceNotesBefore()) {
+        if (grace->noteType() == NoteType::ACCIACCATURA) {
+            ++acciaccaturaCount;
+        }
+    }
+
+    if (acciaccaturaCount == 0) {
+        return 0;
+    }
+
+    const double ticksPerSecond = chord->score()->multipliedTempo(chord->tick()).val * Constants::DIVISION;
+    const double leadTicks = acciaccaturaCount * ACCIACCATURA_MILLISECONDS * ticksPerSecond / 1000.0;
+    int lead = std::max(acciaccaturaCount, static_cast<int>(std::lround(leadTicks)));
+    if (previousTicks > 0) {
+        lead = std::min(lead, std::max(acciaccaturaCount, previousTicks / 2));
+    }
+
+    return lead;
+}
 
 bool CompatMidiRendererInternal::graceNotesMerged(Chord* chord)
 {

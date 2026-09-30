@@ -182,6 +182,9 @@ public:
     static const int ARTICULATION_CONV_FACTOR { 100000 };
     static bool graceNotesMerged(Chord* chord);
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
+    // Ticks that the slashed grace notes before `chord` take from the previous written note.
+    // `previousTicks` is that note's length, or a non-positive value when it is unknown.
+    static int acciaccaturaLeadTicks(const Chord* chord, int previousTicks);
 
 private:
 

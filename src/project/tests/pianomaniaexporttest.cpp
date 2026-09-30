@@ -1427,14 +1427,14 @@ INSTANTIATE_TEST_SUITE_P(
         ExportCase {
             "cross_staff_trill_restrike",
             "src/importexport/midi/tests/midiexport_data/testTrillCrossStaff.mscx",
-            false, false, 0, 4, 0, 0, 0, 44,
-            { { "base", 48, 4, 44 } }
+            false, false, 0, 4, 0, 0, 0, 40,
+            { { "base", 44, 4, 40 } }
         },
         ExportCase {
             "trill_after_grace_restrike",
             "src/importexport/midi/tests/midiexport_data/pianomania_trill_after_grace_canonical.mscx",
-            false, false, 0, 3, 2, 0, 0, 22,
-            { { "base", 25, 3, 22 } }
+            false, false, 0, 3, 2, 0, 0, 21,
+            { { "base", 24, 3, 21 } }
         },
         ExportCase {
             "unison_same_onset_alias",
