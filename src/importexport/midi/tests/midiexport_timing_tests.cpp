@@ -296,7 +296,8 @@ private slots:
     void gameplayTremblementStartsOnWrittenAnchorAndReturn();
     void acciaccaturaCrushesAtConstantLeadRegardlessOfWrittenValue();
     void appoggiaturaTakesHalfOfTheWrittenNote();
-    void trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNote();
+    void trillEndsOnWrittenNoteWithoutGeneratedTurn();
+    void acciaccaturaBeforeLeapTakesMoreTime();
     void writtenAfterGraceTurnPlaysAtTrillSpeed();
 
 private:
@@ -883,11 +884,33 @@ void MidiExportTimingTests::acciaccaturaCrushesAtConstantLeadRegardlessOfWritten
     QCOMPARE(static_cast<int>(e4Main.size()), 1);
     QCOMPARE(f4.front().end, 834);
     QCOMPARE(c4.front().start, 835);
-    QCOMPARE(c4.front().end, 896);
-    QCOMPARE(d4Pair.front().start, 897);
-    QCOMPARE(d4Pair.front().end, 958);
+    QCOMPARE(c4.front().end, 897);
+    QCOMPARE(d4Pair.front().start, 898);
+    QCOMPARE(d4Pair.front().end, 959);
     QCOMPARE(e4Main.front().start, 960);
     QCOMPARE(e4Main.front().end, 1439);
+}
+
+void MidiExportTimingTests::acciaccaturaBeforeLeapTakesMoreTime()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_acciaccatura_leap_lead.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    // The hand has to travel from B-flat 4 up to F6 (19 semitones), so the crush widens from
+    // 65 ms to 125 ms (120 ticks at 120 bpm). The written F stays on the beat.
+    const std::vector<ExportedMidiNote> c5 = notesForPitchInRange(notes, 72, 0, 480);
+    const std::vector<ExportedMidiNote> bFlat4 = notesForPitchInRange(notes, 70, 0, 480);
+    const std::vector<ExportedMidiNote> f6 = notesForPitchInRange(notes, 89, 480, 960);
+    QCOMPARE(static_cast<int>(c5.size()), 1);
+    QCOMPARE(static_cast<int>(bFlat4.size()), 1);
+    QCOMPARE(static_cast<int>(f6.size()), 1);
+    QCOMPARE(c5.front().end, 359);
+    QCOMPARE(bFlat4.front().start, 360);
+    QCOMPARE(bFlat4.front().end, 479);
+    QCOMPARE(bFlat4.front().offVelocity, 64);
+    QCOMPARE(f6.front().start, 480);
 }
 
 void MidiExportTimingTests::appoggiaturaTakesHalfOfTheWrittenNote()
@@ -928,7 +951,7 @@ void MidiExportTimingTests::appoggiaturaTakesHalfOfTheWrittenNote()
     QCOMPARE(b4Next.front().start, 2640);
 }
 
-void MidiExportTimingTests::trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNote()
+void MidiExportTimingTests::trillEndsOnWrittenNoteWithoutGeneratedTurn()
 {
     MidiFile midiFile;
     std::vector<ExportedMidiNote> notes;
@@ -949,18 +972,12 @@ void MidiExportTimingTests::trillClosesWithLowerNeighbourTurnAndEndsOnWrittenNot
         QVERIFY(trill[i].pitch != trill[i - 1].pitch);
     }
 
-    // The closing turn goes written note, lower neighbour, written note: the lower neighbour is
-    // struck exactly once, between two written-note attacks, and the final one holds until the
-    // next written note.
-    int lowerCount = 0;
+    // No closing turn is generated: the alternation simply comes home to the written note,
+    // which holds until the next written note.
     for (const ExportedMidiNote& note : trill) {
-        if (note.pitch == 71) {
-            ++lowerCount;
-        }
+        QVERIFY(note.pitch == 72 || note.pitch == 74);
     }
-    QCOMPARE(lowerCount, 1);
-    QCOMPARE(trill[trill.size() - 3].pitch, 72);
-    QCOMPARE(trill[trill.size() - 2].pitch, 71);
+    QCOMPARE(trill[trill.size() - 2].pitch, 74);
     QCOMPARE(trill.back().pitch, 72);
     QVERIFY(trill.back().end < 960);
     QVERIFY(trill.back().end >= 940);

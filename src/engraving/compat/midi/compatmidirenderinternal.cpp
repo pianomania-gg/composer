@@ -79,8 +79,13 @@ static constexpr int DEFAULT_NOTE_OFF_VELOCITY = 64;
 static constexpr int ORNAMENT_NOTE_OFF_VELOCITY = 127;
 // Expert pianists crush a slashed grace note into roughly 50-90 ms whatever the tempo
 // (Timmers, Ashley, Desain, Honing & Windsor 2002; Windsor et al. 2000). The written
-// note stays on the beat; the grace takes its time from the previous note.
+// note stays on the beat; the grace takes its time from the previous note. When the hand
+// has to travel to reach the next key, the crush widens: measured graces before a large leap
+// ran 115 ms and more, so beyond a fifth each further semitone adds a few milliseconds.
 static constexpr double ACCIACCATURA_MILLISECONDS = 65.0;
+static constexpr int ACCIACCATURA_FREE_LEAP_SEMITONES = 7;
+static constexpr double ACCIACCATURA_MILLISECONDS_PER_LEAP_SEMITONE = 5.0;
+static constexpr double ACCIACCATURA_MAX_MILLISECONDS = 180.0;
 // TODO this should be a (configurable?) constant somewhere
 static constexpr Fraction ARTICULATION_CHANGE_TIME_MAX = Fraction(1, 16);
 std::unordered_map<String,
@@ -1520,7 +1525,6 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
     });
 
     int graceTickSum = 0;
-    int graceTickOffset = 0;
 
     size_t acciacaturaGraceSize = graceNotesBeforeBar.size();
     // prevChords is reset when another voice has a later segment and this voice
@@ -1534,14 +1538,15 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
         previousGraceChord = toChord(previousGraceChordRest);
     }
 
+    std::vector<int> acciaccaturaLeads;
     if (acciacaturaGraceSize > 0) {
         int previousTicks = 0;
         if (previousGraceChordRest) {
             previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
         }
 
-        graceTickSum = acciaccaturaLeadTicks(chord, previousTicks);
-        graceTickOffset = graceTickSum / static_cast<int>(acciacaturaGraceSize);
+        acciaccaturaLeads = acciaccaturaLeadTicks(chord, previousTicks);
+        graceTickSum = acciaccaturaLeads.empty() ? 0 : acciaccaturaLeads.front();
     } else {
         bool hasGraceBend = std::any_of(grChords.begin(), grChords.end(), [](Chord* ch) {
             return std::any_of(ch->notes().begin(), ch->notes().end(), [](Note* n) {
@@ -1574,8 +1579,9 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
                 }
 
                 if (note->noteType() == NoteType::ACCIACCATURA) {
-                    params.graceOffsetOn = graceTickSum - graceTickOffset * currentBeaforeBeatNote;
-                    params.graceOffsetOff = graceTickSum - graceTickOffset * (currentBeaforeBeatNote + 1);
+                    const size_t leadIndex = static_cast<size_t>(currentBeaforeBeatNote);
+                    params.graceOffsetOn = leadIndex < acciaccaturaLeads.size() ? acciaccaturaLeads[leadIndex] : 0;
+                    params.graceOffsetOff = leadIndex + 1 < acciaccaturaLeads.size() ? acciaccaturaLeads[leadIndex + 1] : 0;
 
                     collectNote(events, note, params, st, pitchWheelRenderer, m_context);
                 } else if (note->noteType() == NoteType::APPOGGIATURA) {
@@ -2285,31 +2291,66 @@ const
 // Written grace notes remain score notes and must be exported through the grace
 // chord paths so Pianomania receives their MIDI note events.
 
-int CompatMidiRendererInternal::acciaccaturaLeadTicks(const Chord* chord, int previousTicks)
+static int nearestPitchDistance(const Chord* from, const Chord* to)
 {
-    if (!chord) {
-        return 0;
-    }
-
-    int acciaccaturaCount = 0;
-    for (const Chord* grace : chord->graceNotesBefore()) {
-        if (grace->noteType() == NoteType::ACCIACCATURA) {
-            ++acciaccaturaCount;
+    int nearest = std::numeric_limits<int>::max();
+    for (const Note* a : from->notes()) {
+        for (const Note* b : to->notes()) {
+            nearest = std::min(nearest, std::abs(a->pitch() - b->pitch()));
         }
     }
 
-    if (acciaccaturaCount == 0) {
-        return 0;
+    return nearest == std::numeric_limits<int>::max() ? 0 : nearest;
+}
+
+std::vector<int> CompatMidiRendererInternal::acciaccaturaLeadTicks(const Chord* chord, int previousTicks)
+{
+    std::vector<int> leads;
+    if (!chord) {
+        return leads;
+    }
+
+    std::vector<const Chord*> graces;
+    for (const Chord* grace : chord->graceNotesBefore()) {
+        if (grace->noteType() == NoteType::ACCIACCATURA) {
+            graces.push_back(grace);
+        }
+    }
+
+    if (graces.empty()) {
+        return leads;
     }
 
     const double ticksPerSecond = chord->score()->multipliedTempo(chord->tick()).val * Constants::DIVISION;
-    const double leadTicks = acciaccaturaCount * ACCIACCATURA_MILLISECONDS * ticksPerSecond / 1000.0;
-    int lead = std::max(acciaccaturaCount, static_cast<int>(std::lround(leadTicks)));
-    if (previousTicks > 0) {
-        lead = std::min(lead, std::max(acciaccaturaCount, previousTicks / 2));
+    // Each grace lasts until the next attack: the following grace, or the written note.
+    std::vector<double> spanTicks;
+    for (size_t i = 0; i < graces.size(); ++i) {
+        const Chord* next = i + 1 < graces.size() ? graces[i + 1] : chord;
+        const int leap = std::max(0, nearestPitchDistance(graces[i], next) - ACCIACCATURA_FREE_LEAP_SEMITONES);
+        const double milliseconds = std::min(ACCIACCATURA_MAX_MILLISECONDS,
+                                             ACCIACCATURA_MILLISECONDS + leap * ACCIACCATURA_MILLISECONDS_PER_LEAP_SEMITONE);
+        spanTicks.push_back(std::max(1.0, milliseconds * ticksPerSecond / 1000.0));
     }
 
-    return lead;
+    double total = 0.0;
+    for (double span : spanTicks) {
+        total += span;
+    }
+
+    const int graceCount = static_cast<int>(graces.size());
+    double scale = 1.0;
+    if (previousTicks > 0 && total > std::max(graceCount, previousTicks / 2)) {
+        scale = std::max(graceCount, previousTicks / 2) / total;
+    }
+
+    // Cumulative leads counted back from the written note, in written order.
+    double remaining = total * scale;
+    for (double span : spanTicks) {
+        leads.push_back(std::max(1, static_cast<int>(std::lround(remaining))));
+        remaining -= span * scale;
+    }
+
+    return leads;
 }
 
 bool CompatMidiRendererInternal::graceNotesMerged(Chord* chord)

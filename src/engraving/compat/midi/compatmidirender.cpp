@@ -71,9 +71,6 @@ static constexpr double TRILL_MAIN_NOTE_WEIGHT = 1.08;
 static constexpr double TRILL_AUXILIARY_WEIGHT = 0.92;
 static constexpr double TRILL_FIRST_NOTE_EXTRA_WEIGHT = 0.15;
 static constexpr double TRILL_FINAL_NOTE_WEIGHT = 1.5;
-// A generated closing turn (written note, lower neighbour, written note) needs room for two
-// alternation pairs before it: main, upper, main, upper, main, lower, main.
-static constexpr int TRILL_MIN_EVENTS_FOR_CLOSING_TURN = 7;
 
 static bool isLeftHandStaff(const Chord* chord)
 {
@@ -1141,49 +1138,15 @@ static const Chord* lastTiedChord(const Note* note)
     return last->chord();
 }
 
-static bool chordHasPitch(const Chord* chord, int pitch)
-{
-    for (const Note* note : chord->notes()) {
-        if (note->pitch() == pitch) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// The score already writes the closing turn as ordinary short notes (lower neighbour, then the
-// written note) directly after the trill, so the trill must not add another one.
-static bool hasWrittenClosingTurn(const Note* note, const Chord* trillEndChord, int lowerPitch)
-{
-    ChordRestNavigateOptions options;
-    options.skipGrace = true;
-    const ChordRest* next = nextChordRest(trillEndChord, options);
-    if (!next || !next->isChord()) {
-        return false;
-    }
-
-    const Chord* lowerChord = toChord(next);
-    const int shortTicks = std::min(trillEndChord->actualTicks().ticks() / 2, Constants::DIVISION / 4);
-    if (lowerChord->actualTicks().ticks() > shortTicks || !chordHasPitch(lowerChord, lowerPitch)) {
-        return false;
-    }
-
-    const ChordRest* after = nextChordRest(lowerChord, options);
-    return after && after->isChord() && chordHasPitch(toChord(after), note->pitch());
-}
-
 // Pianomania trill.
 //
 // The trill begins on the written note, because that note is the scored target, alternates
 // with the upper neighbour at the expert rate from trillIntervalTicks, and always comes home
 // to the written note: never on the upper note, and never striking the written note twice
-// in a row. When there is room, it closes with the conventional turn at trill speed, the way
-// C.P.E. Bach writes it out: the alternation ends on the written note, then the lower
-// neighbour, then the written note again. When the score writes that turn itself, as
-// after-grace notes or as short ordinary notes, the alternation simply ends on the written
-// note and the written notes take over. The last generated event holds until the written note
-// ends. Very short notes get a three-note Pralltriller (written, upper, written).
+// in a row. It adds no closing turn of its own; when the score writes one as after-grace
+// notes, the alternation ends on the written note and the written notes take over at trill
+// speed. The last generated event holds until the written note ends. Very short notes get a
+// three-note Pralltriller (written, upper, written).
 //
 // Every generated group therefore ends on the written note, which the Helper's ornament gate
 // requires before it accepts the export.
@@ -1224,12 +1187,7 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
         return false;
     }
 
-    const int lowerPitchOffset = ornamentPitchOffset(note, ornament, -1);
-    const Chord* trillEndChord = lastTiedChord(note);
-    const bool writtenAfterGraces = !trillEndChord->graceNotesAfter(true).empty();
-    const bool writtenClosingTurn = writtenAfterGraces
-                                    || (lowerPitchOffset != 0
-                                        && hasWrittenClosingTurn(note, trillEndChord, note->pitch() + lowerPitchOffset));
+    const bool writtenAfterGraces = !lastTiedChord(note)->graceNotesAfter(true).empty();
 
     const int nominalInterval = CompatMidiRender::trillIntervalTicks(chord);
     const int fastestInterval = fastestTrillIntervalTicks(chord);
@@ -1249,23 +1207,12 @@ bool CompatMidiRender::renderTrillArticulation(NoteEventList* events, Note* note
         }
         const int maxEvents = std::max(3, static_cast<int>(std::floor(playableTicks / shortestInterval - finalWeight + 1.0)));
 
-        if (!writtenClosingTurn && lowerPitchOffset != 0 && maxEvents >= TRILL_MIN_EVENTS_FOR_CLOSING_TURN) {
-            const int pairs = (maxEvents - 3) / 2;
-            for (int i = 0; i < pairs; ++i) {
-                sequence.push_back(0);
-                sequence.push_back(upperPitchOffset);
-            }
+        const int pairs = std::max(1, (maxEvents - 1) / 2);
+        for (int i = 0; i < pairs; ++i) {
             sequence.push_back(0);
-            sequence.push_back(lowerPitchOffset);
-            sequence.push_back(0);
-        } else {
-            const int pairs = std::max(1, (maxEvents - 1) / 2);
-            for (int i = 0; i < pairs; ++i) {
-                sequence.push_back(0);
-                sequence.push_back(upperPitchOffset);
-            }
-            sequence.push_back(0);
+            sequence.push_back(upperPitchOffset);
         }
+        sequence.push_back(0);
     }
 
     const size_t eventCount = sequence.size();
@@ -1481,7 +1428,8 @@ int CompatMidiRender::adjustTrailtime(int trailtime, Chord* currentChord, Chord*
     if (hasGraceBend) {
         reducedTicks = graceBendTicks(currentChord);
     } else if (!graceNotesBeforeBar.empty()) {
-        reducedTicks = CompatMidiRendererInternal::acciaccaturaLeadTicks(nextChord, currentTicks);
+        const std::vector<int> leads = CompatMidiRendererInternal::acciaccaturaLeadTicks(nextChord, currentTicks);
+        reducedTicks = leads.empty() ? 0 : leads.front();
     } else {
         bool anySlidesIn = std::any_of(notes.begin(), notes.end(), [](const Note* note) {
             return note->slideToType() == Note::SlideType::DownToNote
