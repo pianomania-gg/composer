@@ -22,7 +22,9 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <memory>
@@ -40,12 +42,15 @@
 #include "engraving/dom/masterscore.h"
 #include "engraving/dom/excerpt.h"
 #include "engraving/dom/chord.h"
+#include "engraving/dom/chordrest.h"
 #include "engraving/dom/dynamic.h"
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/page.h"
+#include "engraving/dom/pedal.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/segment.h"
 #include "engraving/dom/spanner.h"
@@ -1742,13 +1747,14 @@ TEST_F(Mei_Tests, mei_export_unresolved_pedal_endpoint_omits_pm_geometry) {
         unresolvedTagCount++;
         EXPECT_TRUE(xmlAttributeValue(tag, "startid").has_value());
         EXPECT_FALSE(xmlAttributeValue(tag, "endid").has_value());
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:pedal-lines").has_value());
     }
 
     EXPECT_GT(unresolvedTagCount, 0u);
     EXPECT_GT(geometryTagCount, 0u);
 }
 
-TEST_F(Mei_Tests, mei_export_connected_pedal_keeps_pm_geometry) {
+TEST_F(Mei_Tests, mei_export_connected_pedal_includes_owned_rendered_segments) {
     auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
         MeiWriter meiWriter;
         return meiWriter.writeScore(score, path);
@@ -1757,25 +1763,94 @@ TEST_F(Mei_Tests, mei_export_connected_pedal_keeps_pm_geometry) {
     MasterScore* score = ScoreRW::readScore(MEI_DIR + u"pedal-01.mscx", false);
     ASSERT_TRUE(score);
 
+    std::vector<std::array<double, 5>> expectedSegments;
+    const std::vector<Page*>& pages = score->pages();
+    const double pageHeight = score->style().styleD(Sid::pageHeight);
+    for (const auto& entry : score->spannerMap().map()) {
+        const Spanner* spanner = entry.second;
+        if (!spanner || !spanner->isPedal()) {
+            continue;
+        }
+        for (const SpannerSegment* segment : spanner->spannerSegments()) {
+            const System* system = segment ? segment->system() : nullptr;
+            const Page* page = system ? system->page() : nullptr;
+            auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
+            if (!segment || !page || pageIt == pages.cend()) {
+                continue;
+            }
+            const std::vector<System*>& systems = page->systems();
+            ASSERT_NE(std::find(systems.cbegin(), systems.cend(), system), systems.cend());
+
+            const PointF start = segment->pagePos();
+            const PointF end = segment->pagePos() + segment->pos2();
+            expectedSegments.push_back({
+                static_cast<double>(std::distance(pages.cbegin(), pageIt)),
+                start.x() / DPI,
+                pageHeight - (start.y() / DPI),
+                end.x() / DPI,
+                pageHeight - (end.y() / DPI),
+            });
+        }
+    }
+    ASSERT_FALSE(expectedSegments.empty());
+
     const String outputName = u"pedal-01.pm-geometry.test.mei";
-    bool output = ScoreRW::saveScore(score, outputName, exportFunc);
-    ASSERT_TRUE(output);
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
     delete score;
 
-    const std::string meiText = readTestTextFile(outputName);
-    const std::vector<std::string> pedalTags = collectStartTags(meiText, "pedal");
-
-    ASSERT_GT(pedalTags.size(), 0u);
-
-    size_t geometryTagCount = 0;
+    const std::vector<std::string> pedalTags
+        = collectStartTags(readTestTextFile(outputName), "pedal");
+    std::vector<std::array<double, 5>> actualSegments;
     for (const std::string& tag : pedalTags) {
-        if (xmlAttributeValue(tag, "pm:x1y1x2y2").has_value()) {
-            geometryTagCount++;
-            EXPECT_TRUE(xmlAttributeValue(tag, "endid").has_value());
+        const std::optional<std::string> lines = xmlAttributeValue(tag, "pm:pedal-lines");
+        if (!lines.has_value()) {
+            continue;
+        }
+        size_t entryStart = 0;
+        while (entryStart < lines->size()) {
+            const size_t entryEnd = lines->find(';', entryStart);
+            const std::string entryText = lines->substr(entryStart, entryEnd - entryStart);
+            std::array<double, 5> actual {};
+            ASSERT_EQ(
+                std::sscanf(
+                    entryText.c_str(),
+                    "%lf,%lf,%lf,%lf,%lf",
+                    &actual[0],
+                    &actual[1],
+                    &actual[2],
+                    &actual[3],
+                    &actual[4]
+                ),
+                5
+            );
+            actualSegments.push_back(actual);
+            if (entryEnd == std::string::npos) {
+                break;
+            }
+            entryStart = entryEnd + 1;
         }
     }
 
-    EXPECT_GT(geometryTagCount, 0u);
+    ASSERT_EQ(actualSegments.size(), expectedSegments.size());
+    std::vector<bool> matched(actualSegments.size(), false);
+    for (const std::array<double, 5>& expected : expectedSegments) {
+        bool found = false;
+        for (size_t i = 0; i < actualSegments.size(); ++i) {
+            if (matched[i]) {
+                continue;
+            }
+            bool equal = static_cast<int>(actualSegments[i][0]) == static_cast<int>(expected[0]);
+            for (size_t coordinate = 1; coordinate < expected.size(); ++coordinate) {
+                equal = equal && std::abs(actualSegments[i][coordinate] - expected[coordinate]) <= 0.0006;
+            }
+            if (equal) {
+                matched[i] = true;
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found);
+    }
 }
 
 TEST_F(Mei_Tests, pianomania_graces_do_not_duplicate_parent_segment_controls) {
