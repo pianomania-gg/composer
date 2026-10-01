@@ -3922,6 +3922,8 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
 
       std::string segmentData;
       std::string hairpinLineData;
+      std::optional<PointF> firstOwnedSegmentStart;
+      std::optional<PointF> lastOwnedSegmentEnd;
       auto appendHairpinLine = [&hairpinLineData, this](int pageIndex,
                                                   double x1,
                                                   double y1,
@@ -3946,8 +3948,22 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
           continue;
         }
 
+        const System *segmentSystem = hairpinSeg->system();
+        const Page *segmentPage = segmentSystem ? segmentSystem->page() : nullptr;
+        const std::vector<Page *> &scorePages = m_score->pages();
+        auto pageIt = std::find(scorePages.cbegin(), scorePages.cend(), segmentPage);
+        if (!segmentPage || pageIt == scorePages.cend()) {
+          LOGW() << "MeiExporter::writeHairpin excludes a hairpin segment without an owning score page";
+          continue;
+        }
+        int pageIndex = static_cast<int>(std::distance(scorePages.cbegin(), pageIt));
+
         PointF segStart = hairpinSeg->pagePos();
         PointF segEnd = hairpinSeg->pagePos() + hairpinSeg->pos2();
+        if (!firstOwnedSegmentStart.has_value()) {
+          firstOwnedSegmentStart = segStart;
+        }
+        lastOwnedSegmentEnd = segEnd;
         auto [sx, sy] = makePoint(segStart);
         auto [ex, ey] = makePoint(segEnd);
 
@@ -3959,10 +3975,6 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
                        formatDecimalStr(sy, 3) + std::string(",") +
                        formatDecimalStr(ex, 3) + std::string(",") +
                        formatDecimalStr(ey, 3);
-
-        const System *segmentSystem = hairpinSeg->system();
-        const Page *segmentPage = segmentSystem ? segmentSystem->page() : nullptr;
-        int pageIndex = segmentPage ? static_cast<int>(segmentPage->pageNumber()) : 0;
 
         const PointF *linePoints = hairpinSeg->ldata()->points.data();
         if (linePoints && hairpinSeg->ldata()->npoints >= 4) {
@@ -3978,6 +3990,16 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
           auto [l2ex, l2ey] = makePoint(line2End);
           appendHairpinLine(pageIndex, l2sx, l2sy, l2ex, l2ey);
         }
+      }
+
+      if (firstOwnedSegmentStart.has_value() && lastOwnedSegmentEnd.has_value()) {
+        auto [ownedX1, ownedY1] = makePoint(*firstOwnedSegmentStart);
+        auto [ownedX2, ownedY2] = makePoint(*lastOwnedSegmentEnd);
+        std::string ownedHairpinXY = formatDecimalStr(ownedX1, 3) + std::string(",") +
+                                     formatDecimalStr(ownedY1, 3) + std::string(",") +
+                                     formatDecimalStr(ownedX2, 3) + std::string(",") +
+                                     formatDecimalStr(ownedY2, 3);
+        hairpinNode.attribute("pm:x1y1x2y2").set_value(ownedHairpinXY.c_str());
       }
 
       if (!segmentData.empty()) {
@@ -5016,16 +5038,57 @@ bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
     return segmentPos + segment->ups(grip).pos();
   };
 
+  std::vector<const SlurSegment *> exportSegments;
+  if (!slur->segmentsEmpty()) {
+    const ChordRest *startCR = dynamic_cast<const ChordRest *>(slur->startElement());
+    const ChordRest *endCR = dynamic_cast<const ChordRest *>(slur->endElement());
+    const Page *startPage = startCR && startCR->measure() && startCR->measure()->system()
+                                ? startCR->measure()->system()->page()
+                                : nullptr;
+    const Page *endPage = endCR && endCR->measure() && endCR->measure()->system()
+                              ? endCR->measure()->system()->page()
+                              : nullptr;
+    const std::vector<Page *> &scorePages = m_score->pages();
+    auto startPageIt = std::find(scorePages.cbegin(), scorePages.cend(), startPage);
+    auto endPageIt = std::find(scorePages.cbegin(), scorePages.cend(), endPage);
+    if (!startPage || !endPage || startPageIt == scorePages.cend()
+        || endPageIt == scorePages.cend() || startPageIt > endPageIt) {
+      LOGE() << "MeiExporter::writeSlur cannot resolve the slur endpoint page range";
+      return false;
+    }
+
+    for (size_t i = 0; i < slur->nsegments(); ++i) {
+      const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
+      const System *segmentSystem = segment ? segment->system() : nullptr;
+      const Page *segmentPage = segmentSystem ? segmentSystem->page() : nullptr;
+      auto segmentPageIt = std::find(scorePages.cbegin(), scorePages.cend(), segmentPage);
+      if (!segmentPage || segmentPageIt == scorePages.cend()) {
+        LOGW() << "MeiExporter::writeSlur excludes a slur segment without an owning score page";
+        continue;
+      }
+      if (segmentPageIt < startPageIt || segmentPageIt > endPageIt) {
+        LOGW() << "MeiExporter::writeSlur excludes a slur segment outside its endpoint page range";
+        continue;
+      }
+      exportSegments.push_back(segment);
+    }
+
+    if (exportSegments.empty()) {
+      LOGE() << "MeiExporter::writeSlur found no segments inside the slur endpoint page range";
+      return false;
+    }
+  }
+
   PointF startPos = slur->startElement()->pagePos();
   PointF endPos = slur->endElement()->pagePos();
 
-  if (!slur->segmentsEmpty()) {
-    if (const SlurSegment *firstSegment = slur->frontSegment()) {
+  if (!exportSegments.empty()) {
+    if (const SlurSegment *firstSegment = exportSegments.front()) {
       if (auto absolute = gripPos(firstSegment, Grip::START)) {
         startPos = *absolute;
       }
     }
-    if (const SlurSegment *lastSegment = slur->backSegment()) {
+    if (const SlurSegment *lastSegment = exportSegments.back()) {
       if (auto absolute = gripPos(lastSegment, Grip::END)) {
         endPos = *absolute;
       }
@@ -5040,14 +5103,9 @@ bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
                        formatDecimalStr(y2, 3);
   slurNode.append_attribute("pm:x1y1x2y2") = slurXY.c_str();
 
-  if (!slur->segmentsEmpty()) {
+  if (!exportSegments.empty()) {
     std::string bezierData;
-    for (size_t i = 0; i < slur->nsegments(); ++i) {
-      const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
-      if (!segment) {
-        continue;
-      }
-
+    for (const SlurSegment *segment : exportSegments) {
       auto startGrip = gripPos(segment, Grip::START);
       auto bezier1Grip = gripPos(segment, Grip::BEZIER1);
       auto bezier2Grip = gripPos(segment, Grip::BEZIER2);

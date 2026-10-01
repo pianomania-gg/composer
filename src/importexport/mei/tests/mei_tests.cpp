@@ -1105,6 +1105,7 @@ TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_pr
 
     size_t hairpinTagCount = 0;
     size_t inspectedTagCount = 0;
+    size_t crossPageHairpinCount = 0;
     size_t cursor = 0;
 
     while ((cursor = meiText.find("<hairpin", cursor)) != std::string::npos) {
@@ -1117,6 +1118,31 @@ TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_pr
         if (tag.find("pm:x1y1x2y2=") != std::string::npos) {
             inspectedTagCount++;
             EXPECT_NE(tag.find("pm:hairpin-lines="), std::string::npos);
+
+            const std::optional<std::string> lines = xmlAttributeValue(tag, "pm:hairpin-lines");
+            ASSERT_TRUE(lines.has_value());
+            std::vector<int> pageIndexes;
+            size_t entryStart = 0;
+            while (entryStart < lines->size()) {
+                size_t entryEnd = lines->find(';', entryStart);
+                const std::string entry = lines->substr(entryStart, entryEnd - entryStart);
+                int pageIndex = -1;
+                ASSERT_EQ(std::sscanf(entry.c_str(), "%d,", &pageIndex), 1);
+                ASSERT_GE(pageIndex, 0);
+                if (!pageIndexes.empty()) {
+                    EXPECT_GE(pageIndex, pageIndexes.back());
+                }
+                pageIndexes.push_back(pageIndex);
+                if (entryEnd == std::string::npos) {
+                    break;
+                }
+                entryStart = entryEnd + 1;
+            }
+
+            ASSERT_FALSE(pageIndexes.empty());
+            if (pageIndexes.front() != pageIndexes.back()) {
+                crossPageHairpinCount++;
+            }
         }
 
         cursor = end + 1;
@@ -1124,6 +1150,7 @@ TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_pr
 
     EXPECT_GT(hairpinTagCount, 0u);
     EXPECT_GE(hairpinTagCount, inspectedTagCount);
+    EXPECT_GT(crossPageHairpinCount, 0u);
 
     size_t centeredHairpinCount = 0;
     size_t nonCenteredHairpinCount = 0;
