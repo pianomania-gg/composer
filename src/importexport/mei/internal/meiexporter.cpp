@@ -4206,25 +4206,99 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
 
   meiPedal.Write(pedalNode, this->getXmlIdFor(pedal, 'p'));
 
-  // Pianomania: export pedal start and end positions in inches when both
-  // spanner anchors resolved. Broken source connectors still export as MEI.
-  const EngravingItem *startElement = pedal->startElement();
-  const EngravingItem *endElement = pedal->endElement();
-  if (startElement && endElement) {
-    PointF startPos = startElement->pagePos();
-    PointF endPos = endElement->pagePos();
-    double x1 = startPos.x() / DPI;
-    double y1 = toBottomLeftInches(startPos.y());
-    double x2 = endPos.x() / DPI;
-    double y2 = toBottomLeftInches(endPos.y());
-    std::string pedalXY = formatDecimalStr(x1, 3) + std::string(",") +
-                         formatDecimalStr(y1, 3) + std::string(",") +
-                         formatDecimalStr(x2, 3) + std::string(",") +
-                         formatDecimalStr(y2, 3);
+  struct OwnedPedalSegment {
+    const PedalSegment *segment = nullptr;
+    size_t pageIndex = 0;
+  };
+
+  const std::vector<Page *> &scorePages = m_score->pages();
+  auto findPageIndex = [&scorePages](const Page *page) -> std::optional<size_t> {
+    auto pageIt = std::find(scorePages.cbegin(), scorePages.cend(), page);
+    if (!page || pageIt == scorePages.cend()) {
+      return std::nullopt;
+    }
+    return static_cast<size_t>(std::distance(scorePages.cbegin(), pageIt));
+  };
+  auto findAnchorPageIndex = [&findPageIndex](const EngravingItem *anchor)
+      -> std::optional<size_t> {
+    const ChordRest *chordRest = dynamic_cast<const ChordRest *>(anchor);
+    const System *system = chordRest && chordRest->measure()
+                               ? chordRest->measure()->system()
+                               : nullptr;
+    return findPageIndex(system ? system->page() : nullptr);
+  };
+
+  const std::optional<size_t> startAnchorPage
+      = findAnchorPageIndex(pedal->startElement());
+  const std::optional<size_t> endAnchorPage
+      = findAnchorPageIndex(pedal->endElement());
+  std::vector<OwnedPedalSegment> ownedSegments;
+  for (const SpannerSegment *spannerSegment : pedal->spannerSegments()) {
+    const PedalSegment *segment = spannerSegment && spannerSegment->isPedalSegment()
+                                      ? static_cast<const PedalSegment *>(spannerSegment)
+                                      : nullptr;
+    const System *system = segment ? segment->system() : nullptr;
+    const Page *page = system ? system->page() : nullptr;
+    const std::optional<size_t> pageIndex = findPageIndex(page);
+    if (!segment || !system || !pageIndex.has_value()) {
+      LOGW() << "MeiExporter::writePedal excludes a pedal segment without an owning score page";
+      continue;
+    }
+
+    const std::vector<System *> &pageSystems = page->systems();
+    auto systemIt = std::find(pageSystems.cbegin(), pageSystems.cend(), system);
+    if (systemIt == pageSystems.cend()) {
+      LOGW() << "MeiExporter::writePedal excludes a pedal segment without an owning page system";
+      continue;
+    }
+    if (startAnchorPage.has_value() && endAnchorPage.has_value()
+        && (pageIndex.value() < std::min(startAnchorPage.value(), endAnchorPage.value())
+            || pageIndex.value() > std::max(startAnchorPage.value(), endAnchorPage.value()))) {
+      LOGW() << "MeiExporter::writePedal excludes a pedal segment outside its anchor page range";
+      continue;
+    }
+
+    ownedSegments.push_back({
+      segment,
+      pageIndex.value(),
+    });
+  }
+
+  // Pianomania: retain the collision-aware laid-out pedal span rather than
+  // exporting its note anchors.
+  const bool hasResolvedEndpoints = pedal->startElement() && pedal->endElement();
+  if (hasResolvedEndpoints && !ownedSegments.empty()) {
+    const PointF start = ownedSegments.front().segment->pagePos();
+    const PedalSegment *lastSegment = ownedSegments.back().segment;
+    const PointF end = lastSegment->pagePos() + lastSegment->pos2();
+    const std::string pedalXY
+        = formatDecimalStr(start.x() / DPI, 3) + std::string(",")
+          + formatDecimalStr(toBottomLeftInches(start.y()), 3) + std::string(",")
+          + formatDecimalStr(end.x() / DPI, 3) + std::string(",")
+          + formatDecimalStr(toBottomLeftInches(end.y()), 3);
     pedalNode.append_attribute("pm:x1y1x2y2") = pedalXY.c_str();
   } else {
     LOGD() << "MeiExporter::writePedal skipping pm:x1y1x2y2 for "
-              "unresolved pedal spanner";
+              "unresolved pedal spanner or pedal without rendered segments";
+  }
+
+  if (hasResolvedEndpoints) {
+    std::string pedalLineData;
+    for (const OwnedPedalSegment &owner : ownedSegments) {
+      const PointF start = owner.segment->pagePos();
+      const PointF end = owner.segment->pagePos() + owner.segment->pos2();
+      if (!pedalLineData.empty()) {
+        pedalLineData += ";";
+      }
+      pedalLineData += std::to_string(owner.pageIndex) + std::string(",")
+                       + formatDecimalStr(start.x() / DPI, 3) + std::string(",")
+                       + formatDecimalStr(toBottomLeftInches(start.y()), 3) + std::string(",")
+                       + formatDecimalStr(end.x() / DPI, 3) + std::string(",")
+                       + formatDecimalStr(toBottomLeftInches(end.y()), 3);
+    }
+    if (!pedalLineData.empty()) {
+      pedalNode.append_attribute("pm:pedal-lines") = pedalLineData.c_str();
+    }
   }
 
   // Add the node to the map of open control events
