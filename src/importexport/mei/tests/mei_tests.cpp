@@ -47,6 +47,7 @@
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
 #include "engraving/dom/hairpin.h"
+#include "engraving/dom/line.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
 #include "engraving/dom/page.h"
@@ -57,6 +58,7 @@
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stafftext.h"
 #include "engraving/dom/system.h"
+#include "engraving/dom/tuplet.h"
 
 #include "modularity/ioc.h"
 #include "importexport/mei/imeiconfiguration.h"
@@ -958,6 +960,201 @@ TEST_F(Mei_Tests, mei_export_tuplets_include_complete_resolved_geometry) {
     EXPECT_TRUE(foundRatio);
     EXPECT_TRUE(foundHorizontalBracket);
     EXPECT_TRUE(foundSlopedBracket);
+}
+
+namespace {
+struct GhostSegmentCase {
+    const char16_t* fixture;
+    bool (*matches)(const Spanner* spanner);
+    const char* elementName;
+    const char* requiredText;
+};
+
+size_t countSegments(const std::string& segments)
+{
+    return segments.empty() ? 0u : static_cast<size_t>(std::count(segments.begin(), segments.end(), ';')) + 1u;
+}
+} // namespace
+
+TEST_F(Mei_Tests, mei_export_omits_spanner_segments_without_a_score_page) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    const std::vector<GhostSegmentCase> cases = {
+        { u"hairpin-01.mscx", [](const Spanner* s) { return s->isHairpin() && toHairpin(s)->isLineType(); }, "dir", "mscore-hairpin" },
+        { u"octave-01.mscx", [](const Spanner* s) { return s->isOttava(); }, "octave", "" },
+        { u"pianomania-rubato-zone.mscx", [](const Spanner* s) { return s->isRubatoZone(); }, "line", "pm-rubato-zone" },
+        { u"pianomania-pyro-span.mscx", [](const Spanner* s) { return s->isPyroSpan(); }, "line", "pm-pyro-span" },
+        { u"pianomania-laser-span.mscx", [](const Spanner* s) { return s->isLaserSpan(); }, "line", "pm-laser-span" },
+    };
+
+    for (const GhostSegmentCase& testCase : cases) {
+        SCOPED_TRACE(String(testCase.fixture).toStdString());
+        MasterScore* score = ScoreRW::readScore(MEI_DIR + String(testCase.fixture), false);
+        ASSERT_TRUE(score);
+        score->setLayoutAll();
+        score->doLayout();
+
+        SLine* line = nullptr;
+        std::vector<Spanner*> others;
+        for (const auto& entry : score->spannerMap().map()) {
+            Spanner* spanner = entry.second;
+            if (!spanner || !testCase.matches(spanner)) {
+                continue;
+            }
+            if (!line && !spanner->segmentsEmpty()) {
+                line = static_cast<SLine*>(spanner);
+            } else {
+                others.push_back(spanner);
+            }
+        }
+        ASSERT_TRUE(line);
+        // Keep one spanner of the kind so the exported element is unambiguous.
+        for (Spanner* other : others) {
+            score->removeSpanner(other);
+        }
+        const size_t placedSegments = line->spannerSegments().size();
+
+        // A recycled layout system that no page holds, as left behind by an earlier layout pass.
+        System* unplacedSystem = Factory::createSystem(score->dummy()->page());
+        LineSegment* ghost = line->createLineSegment(unplacedSystem);
+        ghost->setSystem(unplacedSystem);
+        ghost->setPos(PointF(36.0, 50.0));
+        ghost->setPos2(PointF(160.0, 0.0));
+        line->add(ghost);
+        ASSERT_EQ(line->spannerSegments().size(), placedSegments + 1);
+
+        const String outputName = String(u"pianomania-ghost-segment-") + String(testCase.fixture) + u".test.mei";
+        ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+
+        const std::string meiText = readTestTextFile(outputName);
+        std::vector<std::string> tags;
+        for (const std::string& tag : collectStartTags(meiText, testCase.elementName)) {
+            if (tag.find(testCase.requiredText) != std::string::npos) {
+                tags.push_back(tag);
+            }
+        }
+        ASSERT_EQ(tags.size(), 1u);
+        const std::optional<std::string> segments = xmlAttributeValue(tags[0], "pm:segments");
+        const std::optional<std::string> extent = xmlAttributeValue(tags[0], "pm:x1y1x2y2");
+        ASSERT_TRUE(segments.has_value()) << tags[0];
+        ASSERT_TRUE(extent.has_value()) << tags[0];
+        EXPECT_EQ(countSegments(*segments), placedSegments) << tags[0];
+        const size_t lastSeparator = segments->rfind(';');
+        const std::string lastSegment = lastSeparator == std::string::npos ? *segments : segments->substr(lastSeparator + 1);
+        // The overall extent ends where the last placed segment ends, not at the ghost.
+        EXPECT_EQ(extent->substr(extent->find(',', extent->find(',') + 1)),
+                  lastSegment.substr(lastSegment.find(',', lastSegment.find(',') + 1))) << tags[0];
+        delete score;
+    }
+}
+
+TEST_F(Mei_Tests, mei_export_hairpins_ending_without_onset_bind_end_element) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false);
+    ASSERT_TRUE(score);
+
+    Chord* sustainedChord = nullptr;
+    ChordRest* lastChordRest = nullptr;
+    for (Segment* segment = score->firstSegment(SegmentType::ChordRest); segment;
+         segment = segment->next1(SegmentType::ChordRest)) {
+        EngravingItem* item = segment->element(0);
+        if (!item || !item->isChordRest()) {
+            continue;
+        }
+        lastChordRest = toChordRest(item);
+        if (!sustainedChord && item->isChord() && toChord(item)->actualTicks() >= Fraction(1, 4)) {
+            sustainedChord = toChord(item);
+        }
+    }
+    ASSERT_TRUE(sustainedChord);
+    ASSERT_TRUE(lastChordRest);
+
+    const auto addHairpin = [score](const Fraction& tick, const Fraction& tick2) {
+        Hairpin* hairpin = Factory::createHairpin(score->dummy()->segment());
+        hairpin->setHairpinType(HairpinType::DIM_HAIRPIN);
+        hairpin->setTick(tick);
+        hairpin->setTick2(tick2);
+        hairpin->setTrack(0);
+        hairpin->setTrack2(0);
+        hairpin->setAnchor(Spanner::Anchor::SEGMENT);
+        score->addSpanner(hairpin);
+    };
+    // One hairpin ends inside a sustained note; the other ends at the final barline.
+    addHairpin(sustainedChord->tick(), sustainedChord->tick() + sustainedChord->actualTicks() * Fraction(1, 2));
+    addHairpin(lastChordRest->tick(), score->endTick());
+    score->setLayoutAll();
+    score->doLayout();
+
+    const String outputName = u"pianomania-hairpin-end-without-onset.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    delete score;
+
+    const std::string meiText = readTestTextFile(outputName);
+    const std::vector<std::string> hairpinTags = collectStartTags(meiText, "hairpin");
+    ASSERT_GE(hairpinTags.size(), 2u);
+    for (const std::string& tag : hairpinTags) {
+        const std::optional<std::string> endId = xmlAttributeValue(tag, "endid");
+        ASSERT_TRUE(endId.has_value()) << tag;
+        EXPECT_NE(meiText.find("xml:id=\"" + endId->substr(1) + "\""), std::string::npos) << tag;
+    }
+
+    const std::vector<std::string> measureRestTags = collectStartTags(meiText, "mRest");
+    ASSERT_FALSE(measureRestTags.empty());
+    for (const std::string& tag : measureRestTags) {
+        EXPECT_TRUE(xmlAttributeValue(tag, "pm:xy").has_value()) << tag;
+    }
+}
+
+TEST_F(Mei_Tests, mei_export_hidden_tuplet_semantic_visibility_matches_drawn_geometry) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"tuplet-03.mscx", false);
+    ASSERT_TRUE(score);
+    Tuplet* hiddenTuplet = nullptr;
+    for (Segment* segment = score->firstSegment(SegmentType::ChordRest); segment && !hiddenTuplet;
+         segment = segment->next1(SegmentType::ChordRest)) {
+        for (EngravingItem* item : segment->elist()) {
+            if (item && item->isChordRest() && toChordRest(item)->tuplet()) {
+                hiddenTuplet = toChordRest(item)->tuplet();
+                break;
+            }
+        }
+    }
+    ASSERT_TRUE(hiddenTuplet);
+    // A tuplet hidden in the score keeps its number type, as in published catalog scores.
+    hiddenTuplet->setVisible(false);
+    score->setLayoutAll();
+    score->doLayout();
+
+    const String outputName = u"pianomania-hidden-tuplet-visibility.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    delete score;
+
+    const std::vector<std::string> tags = collectStartTags(readTestTextFile(outputName), "tuplet");
+    ASSERT_FALSE(tags.empty());
+    size_t hiddenTags = 0;
+    for (const std::string& tag : tags) {
+        const bool drawnNumber = xmlAttributeValue(tag, "pm:tuplet-number-visible") == "true";
+        const bool drawnBracket = xmlAttributeValue(tag, "pm:tuplet-bracket-visible") == "true";
+        EXPECT_EQ(xmlAttributeValue(tag, "num.visible") != "false", drawnNumber) << tag;
+        if (!drawnBracket) {
+            EXPECT_NE(xmlAttributeValue(tag, "bracket.visible"), "true") << tag;
+        }
+        if (!drawnNumber && !drawnBracket) {
+            ++hiddenTags;
+        }
+    }
+    EXPECT_GE(hiddenTags, 1u);
 }
 
 TEST_F(Mei_Tests, mei_breaks_01) {
