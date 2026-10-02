@@ -772,6 +772,95 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringClearsVisibleRestObstacle)
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, sparseCrossVoiceFingeringKeepsNoteOwnership)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-cross-voice-ownership.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+    const StructuralAssignment originalStructure = captureStructuralAssignment(score);
+    const PrettifySnapshot original = capturePrettifySnapshot(score);
+
+    const auto result = applyPrettifyCommand(score);
+    EXPECT_TRUE(result.changed);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+    const auto fingerings = collectFingeringsByText(score, u"4");
+    const auto ownerDigit = std::find_if(fingerings.begin(), fingerings.end(), [](const Fingering* fingering) {
+        return fingering->note()->pitch() == 55;
+    });
+    ASSERT_NE(ownerDigit, fingerings.end());
+    const Fingering* fingering = *ownerDigit;
+    const Note* owner = fingering->note();
+    const Segment* segment = owner->chord()->segment();
+    const Note* other = nullptr;
+    for (const EngravingItem* item : segment->elist()) {
+        if (item && item->isChord() && item->vStaffIdx() == owner->chord()->vStaffIdx()) {
+            for (const Note* note : toChord(item)->notes()) {
+                if (note->pitch() == 59) {
+                    other = note;
+                }
+            }
+        }
+    }
+    ASSERT_TRUE(other);
+    auto assertOwnership = [&]() {
+        EXPECT_EQ(fingering->note(), owner);
+        const RectF digitRect = fingeringSystemRect(fingering);
+        const RectF ownerRect = noteSystemRect(owner);
+        const RectF otherRect = noteSystemRect(other);
+        const double clearance = 0.15 * fingering->spatium();
+        EXPECT_FALSE(rectsOverlap(digitRect.adjusted(-clearance, -clearance, clearance, clearance), otherRect));
+        EXPECT_FALSE(rectsOverlap(digitRect.adjusted(-clearance, -clearance, clearance, clearance), ownerRect));
+        // An isolated digit above B would visually assign it to B. It must
+        // remain closer in pitch height to its G, alongside or below G.
+        EXPECT_LT(std::abs(digitRect.center().y() - ownerRect.center().y()),
+                  std::abs(digitRect.center().y() - otherRect.center().y()));
+        EXPECT_EQ(originalStructure, captureStructuralAssignment(score));
+    };
+    assertOwnership();
+    const PrettifySnapshot prettified = capturePrettifySnapshot(score);
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    assertOwnership();
+    EditData editData;
+    score->undoStack()->undo(&editData);
+    relayoutScore(score);
+    EXPECT_TRUE(snapshotsEquivalent(original, capturePrettifySnapshot(score)));
+    score->undoStack()->redo(&editData);
+    relayoutScore(score);
+    EXPECT_TRUE(snapshotsEquivalent(prettified, capturePrettifySnapshot(score)));
+    assertOwnership();
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, sparseChordFingeringsKeepOwnershipOnEitherSide)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-chord-ownership.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+    const StructuralAssignment structure = captureStructuralAssignment(score);
+    const auto result = applyPrettifyCommand(score);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+    for (const String& text : { String(u"4"), String(u"1") }) {
+        const auto fingerings = collectFingeringsByText(score, text);
+        ASSERT_EQ(fingerings.size(), 1);
+        const Fingering* fingering = fingerings.front();
+        const Note* owner = fingering->note();
+        const RectF digitRect = fingeringSystemRect(fingering);
+        const RectF ownerRect = noteSystemRect(owner);
+        const double clearance = 0.15 * fingering->spatium();
+        for (const Note* note : owner->chord()->notes()) {
+            const RectF noteRect = noteSystemRect(note);
+            EXPECT_FALSE(rectsOverlap(digitRect.adjusted(-clearance, -clearance, clearance, clearance), noteRect));
+            if (note != owner) {
+                EXPECT_LT(std::abs(digitRect.center().y() - ownerRect.center().y()),
+                          std::abs(digitRect.center().y() - noteRect.center().y()));
+            }
+        }
+    }
+    EXPECT_EQ(structure, captureStructuralAssignment(score));
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, tupletBlockedFingeringFlipsToClearNoteheadSide)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-tuplet-obstacle.mscx");
