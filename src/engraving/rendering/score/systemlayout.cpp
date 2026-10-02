@@ -2520,6 +2520,163 @@ void enforcePianomaniaFingeringRunCoherence(System* system, const std::vector<Fi
     }
 }
 
+bool noteHasVisibleFingering(const Note* note)
+{
+    return std::any_of(note->el().begin(), note->el().end(), [](const EngravingItem* item) {
+        return item->isFingering() && visibleObstacleItem(item);
+    });
+}
+
+bool noteSideFingeringClearsNotation(const RectF& rect, const Fingering* fingering, System* system,
+                                    const std::vector<FingeringObstacle>& obstacles)
+{
+    const staff_idx_t staffIdx = fingering->note()->chord()->vStaffIdx();
+    const double clearance = PM_FINGERING_NOTE_CLEARANCE_MIN * fingering->spatium();
+    const RectF padded = rect.adjusted(-clearance, -clearance, clearance, clearance);
+    std::set<const Beam*> seenBeams;
+    for (MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        Measure* measure = toMeasure(mb);
+        for (Segment& segment : measure->segments()) {
+            const PointF origin = measure->pos() + segment.pos() + PointF(0.0, staffYInSystem(system, staffIdx));
+            for (const ShapeElement& element : segment.staffShape(staffIdx).elements()) {
+                const EngravingItem* item = element.item();
+                if (!item || item == fingering || !visibleObstacleItem(item)) {
+                    continue;
+                }
+                // Segment shapes still contain the pre-pass digit positions.
+                const RectF obstacle = item->isFingering() ? fingeringSystemRect(toFingering(item))
+                                      : element.translated(origin);
+                if (rectsOverlap(padded, obstacle)) {
+                    return false;
+                }
+            }
+            for (EngravingItem* item : segment.elist()) {
+                if (!item || !item->isChord() || item->vStaffIdx() != staffIdx) {
+                    continue;
+                }
+                const Beam* beam = toChord(item)->beam();
+                if (!visibleObstacleItem(beam) || !seenBeams.insert(beam).second) {
+                    continue;
+                }
+                const double beamY = beamIsCrossStaff(beam) ? staffYInSystem(system, beam->staffIdx()) : 0.0;
+                for (const BeamSegment* beamSegment : beam->beamSegments()) {
+                    for (const ShapeElement& box : beamSegment->shape().elements()) {
+                        if (rectsOverlap(padded, box.translated(0.0, beamY))) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (const FingeringObstacle& obstacle : obstacles) {
+        if (obstacle.staffIdx == staffIdx && !obstacle.slurSegment && rectsOverlap(padded, obstacle.rect)) {
+            return false;
+        }
+    }
+    const double staffTop = staffYInSystem(system, staffIdx);
+    return !slurAvoidanceForRect(rect, obstacles, staffIdx, staffTop, true, fingering->spatium()).conflict
+           && !slurAvoidanceForRect(rect, obstacles, staffIdx, staffTop, false, fingering->spatium()).conflict;
+}
+
+void placeSparseInnerNoteFingerings(System* system, const std::vector<FingeringObstacle>& obstacles)
+{
+    for (MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        for (Segment& segment : toMeasure(mb)->segments()) {
+            if (!segment.isChordRestType()) {
+                continue;
+            }
+            std::set<staff_idx_t> movedStaves;
+            for (EngravingItem* item : segment.elist()) {
+                if (!item || !item->isChord()) {
+                    continue;
+                }
+                const Chord* chord = toChord(item);
+                for (const Note* note : chord->notes()) {
+                    const RectF ownerRect = noteSystemRect(note);
+                    for (EngravingItem* noteItem : note->el()) {
+                        if (!noteItem->isFingering() || !visibleObstacleItem(noteItem)) {
+                            continue;
+                        }
+                        Fingering* fingering = toFingering(noteItem);
+                        const String text = fingering->plainText();
+                        // Multi-digit labels describe a whole chord stack.
+                        if (text.size() != 1 || !text.at(0).isDigit()) {
+                            continue;
+                        }
+                        const RectF digitRect = fingeringSystemRect(fingering);
+                        const double sp = fingering->spatium();
+                        bool crossesUnfingeredNote = false;
+                        for (EngravingItem* otherItem : segment.elist()) {
+                            if (!otherItem || !otherItem->isChord() || otherItem->vStaffIdx() != chord->vStaffIdx()) {
+                                continue;
+                            }
+                            for (const Note* other : toChord(otherItem)->notes()) {
+                                if (other == note || !visibleObstacleItem(other) || noteHasVisibleFingering(other)) {
+                                    continue;
+                                }
+                                const RectF otherRect = noteSystemRect(other);
+                                if (otherRect.left() > ownerRect.right() || otherRect.right() < ownerRect.left()) {
+                                    continue;
+                                }
+                                const double ownerY = ownerRect.center().y();
+                                const double digitY = digitRect.center().y();
+                                const double otherY = otherRect.center().y();
+                                const bool between = (otherY - ownerY) * (digitY - ownerY) > 0.0
+                                                     && std::abs(digitY - otherY) < std::abs(digitY - ownerY);
+                                crossesUnfingeredNote = crossesUnfingeredNote || between
+                                    || rectsOverlap(digitRect.adjusted(-0.15 * sp, -0.15 * sp, 0.15 * sp, 0.15 * sp), otherRect);
+                            }
+                        }
+                        if (!crossesUnfingeredNote) {
+                            continue;
+                        }
+                        // Lifting an isolated G digit over an unfingered B
+                        // clears ink but assigns the digit visually to B. Keep
+                        // the digit at its owner's pitch height, beside the
+                        // notehead, and test both sides against actual notation.
+                        bool placed = false;
+                        for (double extra : { 0.0, 0.25 * sp, 0.5 * sp }) {
+                            for (bool left : { true, false }) {
+                                const double x = left ? ownerRect.left() - 0.25 * sp - extra - digitRect.width()
+                                                 : ownerRect.right() + 0.25 * sp + extra;
+                                const RectF candidate(x, ownerRect.center().y() - 0.5 * digitRect.height(),
+                                                      digitRect.width(), digitRect.height());
+                                if (!noteSideFingeringClearsNotation(candidate, fingering, system, obstacles)) {
+                                    continue;
+                                }
+                                const PointF delta = candidate.center() - digitRect.center();
+                                fingering->mutldata()->moveX(delta.x());
+                                fingering->mutldata()->moveY(delta.y());
+                                movedStaves.insert(chord->vStaffIdx());
+                                placed = true;
+                                break;
+                            }
+                            if (placed) {
+                                break;
+                            }
+                        }
+                        if (!placed) {
+                            ++MScore::pianomaniaManualReviewFingerings;
+                            LOGW() << "Pianomania inner-note fingering ownership needs manual review at tick "
+                                   << chord->tick().ticks() << ", track " << chord->track();
+                        }
+                    }
+                }
+            }
+            for (staff_idx_t staffIdx : movedStaves) {
+                segment.createShape(staffIdx);
+            }
+        }
+    }
+}
+
 void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addFinalRectsToSkylines)
 {
     const std::vector<FingeringObstacle> obstacles = collectPianomaniaFingeringObstacles(system);
@@ -2660,6 +2817,7 @@ void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addF
 
     enforcePianomaniaSlurTuckCoherence(adjustments, obstacles);
     enforcePianomaniaFingeringRunCoherence(system, obstacles);
+    placeSparseInnerNoteFingerings(system, obstacles);
 
     // The skylines were built before this pass, so they hold every digit at
     // its vanilla position. Publishing the final rects lets everything laid
