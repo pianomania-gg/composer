@@ -236,8 +236,76 @@ bool shouldExportDurationElement(const DurationElement *element) {
          shouldExportChordRest(toChordRest(element));
 }
 
+const ChordRest *exportedChordRestInStaff(const Segment *segment,
+                                          staff_idx_t staffIdx,
+                                          track_idx_t trackCount) {
+  const track_idx_t firstTrack = staff2track(staffIdx);
+  const track_idx_t endTrack = std::min(firstTrack + VOICES, trackCount);
+  for (track_idx_t track = firstTrack; track < endTrack; ++track) {
+    const EngravingItem *item = segment->element(track);
+    if (item && item->isChordRest() &&
+        shouldExportChordRest(toChordRest(item))) {
+      return toChordRest(item);
+    }
+  }
+  return nullptr;
+}
+
+/**
+ * A hairpin can end on a tick where its staff starts no ChordRest: inside a
+ * sustained note (a MuseScore time-tick anchor) or at the end of the score.
+ * MEI @endid must still name an element, so the end binds to the staff's next
+ * exported onset after that tick. When the staff has no later onset, it binds
+ * to the staff's last exported ChordRest before the tick.
+ */
+const ChordRest *findExportedEndAnchorAroundTick(const Spanner *spanner) {
+  const Score *score = spanner->score();
+  const Fraction endTick = spanner->tick2();
+  const staff_idx_t staffIdx = track2staff(spanner->effectiveTrack2());
+  const track_idx_t trackCount = score->ntracks();
+
+  for (const Segment *segment = score->firstSegment(SegmentType::ChordRest);
+       segment; segment = segment->next1(SegmentType::ChordRest)) {
+    if (segment->tick() < endTick) {
+      continue;
+    }
+    if (const ChordRest *next =
+            exportedChordRestInStaff(segment, staffIdx, trackCount)) {
+      return next;
+    }
+  }
+
+  const ChordRest *last = nullptr;
+  for (const Segment *segment = score->firstSegment(SegmentType::ChordRest);
+       segment && segment->tick() < endTick;
+       segment = segment->next1(SegmentType::ChordRest)) {
+    if (const ChordRest *candidate =
+            exportedChordRestInStaff(segment, staffIdx, trackCount)) {
+      last = candidate;
+    }
+  }
+  return last;
+}
+
+const ChordRest *findExportedSpannerEndpointAtTick(Spanner *spanner,
+                                                   bool start);
+
 const ChordRest *findExportedSpannerEndpointAnchor(Spanner *spanner,
                                                     bool start) {
+  if (const ChordRest *anchor =
+          findExportedSpannerEndpointAtTick(spanner, start)) {
+    return anchor;
+  }
+  // Hairpins must always name an end element. Pedals keep their documented
+  // unresolved-end export, which omits their geometry.
+  if (start || !spanner || !spanner->score() || !spanner->isHairpin()) {
+    return nullptr;
+  }
+  return findExportedEndAnchorAroundTick(spanner);
+}
+
+const ChordRest *findExportedSpannerEndpointAtTick(Spanner *spanner,
+                                                   bool start) {
   if (!spanner || !spanner->score()) {
     return nullptr;
   }
@@ -492,17 +560,40 @@ void MeiExporter::appendCenteredPmPosition(pugi::xml_node node,
   node.append_attribute("pm:xy") = xyStr.c_str();
 }
 
+MeiExporter::TupletDrawnVisibility
+MeiExporter::resolveTupletDrawnVisibility(const Tuplet *tuplet) {
+  const bool drawVisible = tuplet->visible() && !tuplet->ldata()->isSkipDraw();
+  const bool numberVisible = drawVisible && tuplet->number() &&
+                             tuplet->number()->visible() &&
+                             !tuplet->number()->ldata()->isSkipDraw();
+  const bool bracketVisible = drawVisible && tuplet->hasBracket();
+  return {numberVisible, bracketVisible};
+}
+
+void MeiExporter::applyDrawnTupletVisibility(libmei::Tuplet &meiTuplet,
+                                             const Tuplet *tuplet) {
+  // The semantic number and bracket visibility must describe what the score
+  // draws. A hidden tuplet, or a hidden tuplet number, keeps its MuseScore
+  // number type, so the converter alone would still claim a visible number.
+  const TupletDrawnVisibility drawn = resolveTupletDrawnVisibility(tuplet);
+  if (!drawn.numberVisible) {
+    meiTuplet.SetNumVisible(libmei::BOOLEAN_false);
+  }
+  if (!drawn.bracketVisible &&
+      meiTuplet.GetBracketVisible() == libmei::BOOLEAN_true) {
+    meiTuplet.SetBracketVisible(libmei::BOOLEAN_false);
+  }
+}
+
 bool MeiExporter::appendPmTupletGeometry(pugi::xml_node node,
                                          const Tuplet *tuplet) const {
   if (!node || !tuplet) {
     return false;
   }
 
-  const bool drawVisible = tuplet->visible() && !tuplet->ldata()->isSkipDraw();
-  const bool numberVisible = drawVisible && tuplet->number() &&
-                             tuplet->number()->visible() &&
-                             !tuplet->number()->ldata()->isSkipDraw();
-  const bool bracketVisible = drawVisible && tuplet->hasBracket();
+  const TupletDrawnVisibility drawn = resolveTupletDrawnVisibility(tuplet);
+  const bool numberVisible = drawn.numberVisible;
+  const bool bracketVisible = drawn.bracketVisible;
   node.append_attribute("pm:tuplet-geometry-version") = "1";
   node.append_attribute("pm:tuplet-placement") =
       tuplet->isUp() ? "above" : "below";
@@ -562,17 +653,63 @@ bool MeiExporter::appendPmTupletGeometry(pugi::xml_node node,
   return true;
 }
 
+/**
+ * Pianomania: the spanner segments MuseScore placed on a page of this score.
+ * Layout can leave a spanner holding segments whose system is not on any page
+ * (a system recycled by an earlier layout pass). Their positions are relative
+ * to that unplaced system, so writing them would draw them at the top-left of
+ * a page.
+ */
+std::vector<const SpannerSegment *>
+MeiExporter::segmentsOnScorePages(const Spanner *spanner) const {
+  std::vector<const SpannerSegment *> placed;
+  if (!spanner) {
+    return placed;
+  }
+
+  const std::vector<Page *> &scorePages = m_score->pages();
+  for (const SpannerSegment *segment : spanner->spannerSegments()) {
+    const System *system = segment ? segment->system() : nullptr;
+    const Page *page = system ? system->page() : nullptr;
+    if (!page || std::find(scorePages.cbegin(), scorePages.cend(), page) ==
+                     scorePages.cend()) {
+      LOGW() << "MEI export excludes a " << spanner->typeName()
+             << " segment without an owning score page";
+      continue;
+    }
+    placed.push_back(segment);
+  }
+  return placed;
+}
+
+std::string MeiExporter::formatPlacedSegments(
+    const std::vector<const SpannerSegment *> &segments) const {
+  std::string segmentData;
+  for (const SpannerSegment *segment : segments) {
+    const PointF segStart = segment->pagePos();
+    const PointF segEnd = segment->pagePos() + segment->pos2();
+    if (!segmentData.empty()) {
+      segmentData += ";";
+    }
+    segmentData += formatDecimalStr(segStart.x() / DPI, 3) + std::string(",") +
+                   formatDecimalStr(toBottomLeftInches(segStart.y()), 3) +
+                   std::string(",") + formatDecimalStr(segEnd.x() / DPI, 3) +
+                   std::string(",") +
+                   formatDecimalStr(toBottomLeftInches(segEnd.y()), 3);
+  }
+  return segmentData;
+}
+
 std::optional<std::array<double, 4>>
 MeiExporter::getLineEndpointsInches(const Spanner *spanner) const {
-  if (!spanner || spanner->segmentsEmpty()) {
+  const std::vector<const SpannerSegment *> placed =
+      segmentsOnScorePages(spanner);
+  if (placed.empty()) {
     return std::nullopt;
   }
 
-  const SpannerSegment *firstSegment = spanner->frontSegment();
-  const SpannerSegment *lastSegment = spanner->backSegment();
-  if (!firstSegment || !lastSegment) {
-    return std::nullopt;
-  }
+  const SpannerSegment *firstSegment = placed.front();
+  const SpannerSegment *lastSegment = placed.back();
 
   PointF startPos = firstSegment->pagePos();
   PointF endPos = lastSegment->pagePos() + lastSegment->pos2();
@@ -714,7 +851,9 @@ bool MeiExporter::write(std::string &meiData) {
 
     this->writeHeader();
 
-    this->writeScore();
+    if (!this->writeScore()) {
+      return false;
+    }
 
     // Currently not used. To be enabled for unfolding MuseScore Jumps into
     // `@jumpto` MEI attribute if it becomes available on MEI repeatMark
@@ -865,7 +1004,7 @@ bool isExportedAttackedChord(const ChordRest *chordRest) {
 }
 
 const ChordRest *findExportedLaserChordAnchor(Spanner *span, bool start) {
-  const ChordRest *endpoint = findExportedSpannerEndpointAnchor(span, start);
+  const ChordRest *endpoint = findExportedSpannerEndpointAtTick(span, start);
   if (isExportedAttackedChord(endpoint)) {
     return endpoint;
   }
@@ -1203,6 +1342,18 @@ bool MeiExporter::writeScore() {
   // non critical assert
   assert(this->isCurrentNode(libmei::Section()));
   m_currentNode = m_currentNode.parent();
+
+  // Practice and Game Mode bind every hairpin to its end element, so an
+  // unresolved hairpin end makes the export unusable.
+  for (const auto &[item, node] : m_openControlEventMap) {
+    UNUSED(node);
+    if (item && item->isHairpin()) {
+      LOGE() << "MEI export could not resolve the end element of the hairpin "
+                "at tick "
+             << toHairpin(item)->tick().ticks();
+      return false;
+    }
+  }
 
   return true;
 }
@@ -3310,6 +3461,14 @@ bool MeiExporter::writeRest(const Rest *rest, const Staff *staff) {
                static_cast<int>(mu::engraving::Note::PianomaniaHand::Right)) {
       mRestNode.append_attribute("hand") = "right";
     }
+
+    // Pianomania: Practice draws the measure rest glyph and anchors fermatas
+    // to it, so it needs the same page position as any other rest.
+    PointF mRestPos = rest->pagePos();
+    std::string mRestXY = formatDecimalStr(mRestPos.x() / DPI, 3) +
+                          std::string(",") +
+                          formatDecimalStr(toBottomLeftInches(mRestPos.y()), 3);
+    mRestNode.append_attribute("pm:xy") = mRestXY.c_str();
   } else {
     bool closingBeam = false;
     bool closingTuplet = false;
@@ -3436,6 +3595,7 @@ bool MeiExporter::writeTuplet(const Tuplet *tuplet, const EngravingItem *item,
     }
     */
     libmei::Tuplet meiTuplet = Convert::tupletToMEI(tuplet);
+    applyDrawnTupletVisibility(meiTuplet, tuplet);
     m_currentNode = m_currentNode.append_child();
     std::string xmlId = this->getXmlIdFor(tuplet, 't');
     meiTuplet.Write(m_currentNode, xmlId);
@@ -3646,37 +3806,9 @@ bool MeiExporter::writeDir(const TextLineBase *dir,
   appendPmLineEndpoints(dirNode, dir, "pm:x1y1x2y2");
 
   // Export individual segments for multi-system directives.
-  if (!dir->segmentsEmpty()) {
-    auto makePoint = [this](const PointF &pagePoint) {
-      double x = pagePoint.x() / DPI;
-      double y = toBottomLeftInches(pagePoint.y());
-      return std::pair<double, double>(x, y);
-    };
-
-    std::string segmentData;
-    for (const SpannerSegment *seg : dir->spannerSegments()) {
-      if (!seg) {
-        continue;
-      }
-
-      PointF segStart = seg->pagePos();
-      PointF segEnd = seg->pagePos() + seg->pos2();
-      auto [sx, sy] = makePoint(segStart);
-      auto [ex, ey] = makePoint(segEnd);
-
-      if (!segmentData.empty()) {
-        segmentData += ";";
-      }
-
-      segmentData += formatDecimalStr(sx, 3) + std::string(",") +
-                     formatDecimalStr(sy, 3) + std::string(",") +
-                     formatDecimalStr(ex, 3) + std::string(",") +
-                     formatDecimalStr(ey, 3);
-    }
-
-    if (!segmentData.empty()) {
-      dirNode.append_attribute("pm:segments") = segmentData.c_str();
-    }
+  const std::string dirSegments = formatPlacedSegments(segmentsOnScorePages(dir));
+  if (!dirSegments.empty()) {
+    dirNode.append_attribute("pm:segments") = dirSegments.c_str();
   }
 
   this->writeLines(dirNode, meiLines);
@@ -4120,59 +4252,12 @@ bool MeiExporter::writeOctave(const Ottava *ottava,
   double endHookHeight = getOctaveEndHookHeight(ottava);
   octaveNode.append_attribute("hook.len") = formatDecimalStr(endHookHeight, 1);
 
-  if (!ottava->segmentsEmpty()) {
-    auto makePoint = [this](const PointF &pagePoint) {
-      double x = pagePoint.x() / DPI;
-      double y = toBottomLeftInches(pagePoint.y());
-      return std::pair<double, double>(x, y);
-    };
-
-    const OttavaSegment *firstSegment = ottava->frontSegment()
-                                            ? toOttavaSegment(ottava->frontSegment())
-                                            : nullptr;
-    const OttavaSegment *lastSegment = ottava->backSegment()
-                                           ? toOttavaSegment(ottava->backSegment())
-                                           : nullptr;
-
-    if (firstSegment && lastSegment) {
-      auto [x1, y1] = makePoint(firstSegment->pagePos());
-      PointF lastEndPos = lastSegment->pagePos() + lastSegment->pos2();
-      auto [x2, y2] = makePoint(lastEndPos);
-
-      std::string octaveXY = formatDecimalStr(x1, 3) + std::string(",") +
-                             formatDecimalStr(y1, 3) + std::string(",") +
-                             formatDecimalStr(x2, 3) + std::string(",") +
-                             formatDecimalStr(y2, 3);
-      octaveNode.append_attribute("pm:x1y1x2y2") = octaveXY.c_str();
-
-      std::string segmentData;
-      for (const SpannerSegment *seg : ottava->spannerSegments()) {
-        const OttavaSegment *ottavaSeg = seg->isOttavaSegment()
-                                             ? toOttavaSegment(seg)
-                                             : nullptr;
-        if (!ottavaSeg) {
-          continue;
-        }
-
-        PointF segStart = ottavaSeg->pagePos();
-        PointF segEnd = ottavaSeg->pagePos() + ottavaSeg->pos2();
-        auto [sx, sy] = makePoint(segStart);
-        auto [ex, ey] = makePoint(segEnd);
-
-        if (!segmentData.empty()) {
-          segmentData += ";";
-        }
-
-        segmentData += formatDecimalStr(sx, 3) + std::string(",") +
-                       formatDecimalStr(sy, 3) + std::string(",") +
-                       formatDecimalStr(ex, 3) + std::string(",") +
-                       formatDecimalStr(ey, 3);
-      }
-
-      if (!segmentData.empty()) {
-        octaveNode.append_attribute("pm:segments") = segmentData.c_str();
-      }
-    }
+  // Pianomania: page geometry comes only from segments placed on a page.
+  appendPmLineEndpoints(octaveNode, ottava, "pm:x1y1x2y2");
+  const std::string octaveSegments =
+      formatPlacedSegments(segmentsOnScorePages(ottava));
+  if (!octaveSegments.empty()) {
+    octaveNode.append_attribute("pm:segments") = octaveSegments.c_str();
   }
 
   // Add the node to the map of open control events.
@@ -4349,52 +4434,12 @@ bool MeiExporter::writeRubatoZone(const RubatoZone *rubatoZone,
   zoneNode.append_attribute("pm:whole-measures") = "true";
   zoneNode.append_attribute("startid") = startid.c_str();
 
-  if (!rubatoZone->segmentsEmpty()) {
-    auto makePoint = [this](const PointF &pagePoint) {
-      double x = pagePoint.x() / DPI;
-      double y = toBottomLeftInches(pagePoint.y());
-      return std::pair<double, double>(x, y);
-    };
-
-    const SpannerSegment *firstSegment = rubatoZone->frontSegment();
-    const SpannerSegment *lastSegment = rubatoZone->backSegment();
-
-    if (firstSegment && lastSegment) {
-      auto [x1, y1] = makePoint(firstSegment->pagePos());
-      PointF lastEndPos = lastSegment->pagePos() + lastSegment->pos2();
-      auto [x2, y2] = makePoint(lastEndPos);
-
-      std::string zoneXY = formatDecimalStr(x1, 3) + std::string(",") +
-                           formatDecimalStr(y1, 3) + std::string(",") +
-                           formatDecimalStr(x2, 3) + std::string(",") +
-                           formatDecimalStr(y2, 3);
-      zoneNode.append_attribute("pm:x1y1x2y2") = zoneXY.c_str();
-
-      std::string segmentData;
-      for (const SpannerSegment *seg : rubatoZone->spannerSegments()) {
-        if (!seg) {
-          continue;
-        }
-
-        PointF segStart = seg->pagePos();
-        PointF segEnd = seg->pagePos() + seg->pos2();
-        auto [sx, sy] = makePoint(segStart);
-        auto [ex, ey] = makePoint(segEnd);
-
-        if (!segmentData.empty()) {
-          segmentData += ";";
-        }
-
-        segmentData += formatDecimalStr(sx, 3) + std::string(",") +
-                       formatDecimalStr(sy, 3) + std::string(",") +
-                       formatDecimalStr(ex, 3) + std::string(",") +
-                       formatDecimalStr(ey, 3);
-      }
-
-      if (!segmentData.empty()) {
-        zoneNode.append_attribute("pm:segments") = segmentData.c_str();
-      }
-    }
+  // Pianomania: page geometry comes only from segments placed on a page.
+  appendPmLineEndpoints(zoneNode, rubatoZone, "pm:x1y1x2y2");
+  const std::string zoneSegments =
+      formatPlacedSegments(segmentsOnScorePages(rubatoZone));
+  if (!zoneSegments.empty()) {
+    zoneNode.append_attribute("pm:segments") = zoneSegments.c_str();
   }
 
   // Add the node to the map of open control events so @endid resolves.
@@ -4473,52 +4518,12 @@ bool MeiExporter::writeDanceShowSpan(const Spanner *span,
   spanNode.append_attribute("pm:end-beat") =
       formatBeatPosition(endPosition->second).c_str();
 
-  if (!span->segmentsEmpty()) {
-    auto makePoint = [this](const PointF &pagePoint) {
-      double x = pagePoint.x() / DPI;
-      double y = toBottomLeftInches(pagePoint.y());
-      return std::pair<double, double>(x, y);
-    };
-
-    const SpannerSegment *firstSegment = span->frontSegment();
-    const SpannerSegment *lastSegment = span->backSegment();
-
-    if (firstSegment && lastSegment) {
-      auto [x1, y1] = makePoint(firstSegment->pagePos());
-      PointF lastEndPos = lastSegment->pagePos() + lastSegment->pos2();
-      auto [x2, y2] = makePoint(lastEndPos);
-
-      std::string spanXY = formatDecimalStr(x1, 3) + std::string(",") +
-                           formatDecimalStr(y1, 3) + std::string(",") +
-                           formatDecimalStr(x2, 3) + std::string(",") +
-                           formatDecimalStr(y2, 3);
-      spanNode.append_attribute("pm:x1y1x2y2") = spanXY.c_str();
-
-      std::string segmentData;
-      for (const SpannerSegment *seg : span->spannerSegments()) {
-        if (!seg) {
-          continue;
-        }
-
-        PointF segStart = seg->pagePos();
-        PointF segEnd = seg->pagePos() + seg->pos2();
-        auto [sx, sy] = makePoint(segStart);
-        auto [ex, ey] = makePoint(segEnd);
-
-        if (!segmentData.empty()) {
-          segmentData += ";";
-        }
-
-        segmentData += formatDecimalStr(sx, 3) + std::string(",") +
-                       formatDecimalStr(sy, 3) + std::string(",") +
-                       formatDecimalStr(ex, 3) + std::string(",") +
-                       formatDecimalStr(ey, 3);
-      }
-
-      if (!segmentData.empty()) {
-        spanNode.append_attribute("pm:segments") = segmentData.c_str();
-      }
-    }
+  // Pianomania: page geometry comes only from segments placed on a page.
+  appendPmLineEndpoints(spanNode, span, "pm:x1y1x2y2");
+  const std::string spanSegments =
+      formatPlacedSegments(segmentsOnScorePages(span));
+  if (!spanSegments.empty()) {
+    spanNode.append_attribute("pm:segments") = spanSegments.c_str();
   }
 
   // Add the node to the map of open control events so @endid resolves.

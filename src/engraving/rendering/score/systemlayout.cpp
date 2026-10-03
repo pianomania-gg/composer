@@ -719,7 +719,9 @@ void uniteVisibleBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const Sy
 
     const double beamStaffY = staffYInSystem(system, beam->staffIdx());
     for (const BeamSegment* beamSegment : beam->beamSegments()) {
-        for (const ShapeElement& box : beamSegment->shape().elements()) {
+        // BeamSegment::shape() returns a temporary; keep it alive for the loop.
+        const Shape beamSegmentShape = beamSegment->shape();
+        for (const ShapeElement& box : beamSegmentShape.elements()) {
             if (box.left() > xRight || box.right() < xLeft) {
                 continue;
             }
@@ -777,7 +779,9 @@ void uniteSameStaffBeamDangerForGraceGroup(RectF& danger, const std::vector<Fing
             }
             bool united = false;
             for (const BeamSegment* beamSegment : beam->beamSegments()) {
-                for (const ShapeElement& box : beamSegment->shape().elements()) {
+                // BeamSegment::shape() returns a temporary; keep it alive for the loop.
+                const Shape beamSegmentShape = beamSegment->shape();
+                for (const ShapeElement& box : beamSegmentShape.elements()) {
                     if (box.left() <= digitRect.right() && box.right() >= digitRect.left()) {
                         uniteRect(danger, box);
                         united = true;
@@ -822,7 +826,9 @@ void uniteSameStaffBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const 
 
     bool united = false;
     for (const BeamSegment* beamSegment : beam->beamSegments()) {
-        for (const ShapeElement& box : beamSegment->shape().elements()) {
+        // BeamSegment::shape() returns a temporary; keep it alive for the loop.
+        const Shape beamSegmentShape = beamSegment->shape();
+        for (const ShapeElement& box : beamSegmentShape.elements()) {
             if (box.left() <= digitRect.right() && box.right() >= digitRect.left()) {
                 uniteRect(danger, box);
                 united = true;
@@ -2563,7 +2569,9 @@ bool noteSideFingeringClearsNotation(const RectF& rect, const Fingering* fingeri
                 }
                 const double beamY = beamIsCrossStaff(beam) ? staffYInSystem(system, beam->staffIdx()) : 0.0;
                 for (const BeamSegment* beamSegment : beam->beamSegments()) {
-                    for (const ShapeElement& box : beamSegment->shape().elements()) {
+                    // BeamSegment::shape() returns a temporary; keep it alive for the loop.
+                    const Shape beamSegmentShape = beamSegment->shape();
+                    for (const ShapeElement& box : beamSegmentShape.elements()) {
                         if (rectsOverlap(padded, box.translated(0.0, beamY))) {
                             return false;
                         }
