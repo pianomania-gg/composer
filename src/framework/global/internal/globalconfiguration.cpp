@@ -152,7 +152,11 @@ bool GlobalConfiguration::enableExperimental() const
 
 bool GlobalConfiguration::devModeEnabled() const
 {
+#ifdef PIANOMANIA_COMPOSER_PRODUCTION
+    return false;
+#else
     return settings()->value(DEV_MODE_ENABLED_KEY).toBool();
+#endif
 }
 
 void GlobalConfiguration::setDevModeEnabled(bool enabled)

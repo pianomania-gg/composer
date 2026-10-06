@@ -81,7 +81,11 @@ void AppMenuModel::load()
         items << makeHelpMenu(false);
         items << makeDiagnosticsMenu();
     } else {
+#ifdef PIANOMANIA_COMPOSER_PRODUCTION
+        items << makeHelpMenu(false);
+#else
         items << makeHelpMenu(true);
+#endif
     }
 
     setItems(items);
