@@ -507,6 +507,9 @@ endif()
 # Miscellaneous Microsoft Visual Studio settings
 #################################################
 if (MSVC)
+    if (TARGET translations)
+        add_dependencies(MuseScoreStudio translations)
+    endif()
     # Add a post-build event to deploy the application to the output folder. Same as building the INSTALL target.
     string(TOUPPER ${CMAKE_GENERATOR} UPPER_CMAKE_GENERATOR)
     if (${UPPER_CMAKE_GENERATOR} MATCHES "VISUAL STUDIO")

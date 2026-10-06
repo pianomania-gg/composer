@@ -128,6 +128,7 @@ struct PianomaniaExportResult {
 };
 
 RepeatExportInfo analyzeRepeatExportInfo(mu::engraving::Score* score);
+void prepareComposerScore(mu::engraving::MasterScore* score);
 std::unique_ptr<mu::engraving::MasterScore> buildNoRepeatScoreForFinalEnding(mu::engraving::Score* score, int finalEndingNumber);
 bool writeMidiFile(mu::engraving::Score* score, const muse::io::path_t& path, bool expandRepeats, bool exportRpns);
 muse::RetVal<PianomaniaExportResult> exportPianomaniaBundle(mu::engraving::Score* score,

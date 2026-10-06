@@ -22,6 +22,14 @@
 #include "projectactionscontroller.h"
 
 #include <QBuffer>
+#include <QApplication>
+#include <QFileDialog>
+#include <QImageReader>
+#include <QMessageBox>
+#include <QSaveFile>
+#include <QTemporaryDir>
+#include "composerpackage.h"
+#include "composersession.h"
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -98,7 +106,11 @@ void ProjectActionsController::init()
     dispatcher()->reg(this, "file-share-audio", this, &ProjectActionsController::shareAudio);
 
     dispatcher()->reg(this, "file-export", this, &ProjectActionsController::exportScore);
+    dispatcher()->reg(this, "file-export-composer", this, &ProjectActionsController::exportComposer);
+    dispatcher()->reg(this, "composer-account", []() { composer::showAccount(QApplication::activeWindow()); });
+#ifndef PIANOMANIA_COMPOSER_PRODUCTION
     dispatcher()->reg(this, "file-export-pianomania", this, &ProjectActionsController::exportPianomania);
+#endif
     dispatcher()->reg(this, "file-import-pdf", this, &ProjectActionsController::importPdf);
     dispatcher()->reg(this, "file-import-audio-to-score", this, &ProjectActionsController::importAudioToScore);
 
@@ -138,6 +150,9 @@ INotationSelectionPtr ProjectActionsController::currentNotationSelection() const
 
 bool ProjectActionsController::canReceiveAction(const ActionCode& code) const
 {
+#ifdef PIANOMANIA_COMPOSER_PRODUCTION
+    if (code == "file-export-pianomania") return false;
+#endif
     if (!currentNotationProject()) {
         static const std::unordered_set<ActionCode> DONT_REQUIRE_OPEN_PROJECT {
             "file-new",
@@ -146,6 +161,7 @@ bool ProjectActionsController::canReceiveAction(const ActionCode& code) const
             "file-import-audio-to-score",
             "continue-last-session",
             "clear-recent",
+            "composer-account",
         };
 
         return muse::contains(DONT_REQUIRE_OPEN_PROJECT, code);
@@ -1894,6 +1910,66 @@ void ProjectActionsController::exportScore()
     static const Uri EXPORT_URI("musescore://project/export");
     if (!interactive()->isOpened(EXPORT_URI).val) {
         interactive()->open(EXPORT_URI);
+    }
+}
+
+void ProjectActionsController::exportComposer()
+{
+    QWidget* parent = QApplication::activeWindow();
+    try {
+        auto notation = currentNotation();
+        if (!notation || !notation->elements()->msScore()) return;
+        QString coverPath = QFileDialog::getOpenFileName(parent, "Background image", {}, "Images (*.png *.jpg *.jpeg)");
+        if (coverPath.isEmpty()) return;
+        QFile coverFile(coverPath);
+        QImageReader image(coverPath);
+        QSize dimensions = image.size();
+        if (!coverFile.open(QIODevice::ReadOnly) || coverFile.size() > 20 * 1024 * 1024 || !dimensions.isValid()
+            || dimensions.width() > 8192 || dimensions.height() > 8192 || image.read().isNull())
+            throw std::runtime_error("Choose a PNG or JPEG image under 20 MB and 8192 pixels per side.");
+        QByteArray cover = coverFile.readAll();
+        QString destination = QFileDialog::getSaveFileName(parent, "Pianomania Composer", notation->name() + ".pm", "Pianomania (*.pm)");
+        if (destination.isEmpty()) return;
+        if (!destination.endsWith(".pm", Qt::CaseInsensitive)) destination += ".pm";
+
+        // All engraving changes belong to this snapshot. The authored project stays unchanged.
+        std::unique_ptr<mu::engraving::MasterScore> snapshot(notation->elements()->msScore()->masterScore()->clone());
+        if (!snapshot) throw std::runtime_error("Could not prepare the score export.");
+        pianomania::prepareComposerScore(snapshot.get());
+        QTemporaryDir temporary;
+        if (!temporary.isValid()) throw std::runtime_error("Could not create the export workspace.");
+        QString base = temporary.path() + "/song";
+        auto result = pianomania::exportPianomaniaBundle(snapshot.get(), muse::io::path_t("composer.mscz"),
+            muse::io::path_t(base), muse::io::path_t(base + ".mei"), false);
+        if (!result.ret) throw std::runtime_error("The score could not be exported for Pianomania.");
+        if (!pianomania::writePianomaniaManifest(muse::io::path_t(temporary.path() + "/manifest.json"), result.val))
+            throw std::runtime_error("Could not create the export manifest.");
+        QVector<composer::Section> sections;
+        auto add = [&](quint8 type, const QString& name) {
+            QFile file(temporary.path() + "/" + name);
+            if (!file.open(QIODevice::ReadOnly) || file.size() == 0 || file.size() > 128 * 1024 * 1024)
+                throw std::runtime_error("A required export file is missing or too large.");
+            sections.append({type, name, file.readAll()});
+        };
+        add(1, "song.mei"); add(2, "song.mid"); add(4, "manifest.json");
+        if (result.val.repeatInfo.hasRepeats) add(3, "song-repeats.mid");
+        sections.append({5, "cover." + QFileInfo(coverPath).suffix().toLower(), cover});
+        QString hash = composer::meiHash(sections);
+        QByteArray license = composer::license(hash, parent);
+        composer::validateLicense(license, composer::currentUid(), hash);
+        sections.append({6, "license.json", license});
+        QByteArray bytes = composer::encode(sections);
+        QSaveFile output(destination);
+        output.setDirectWriteFallback(false);
+        if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit())
+            throw std::runtime_error("Could not save the Pianomania file. The previous file was preserved.");
+        QMessageBox saved(QMessageBox::Information, "Pianomania Composer",
+                          "Your Pianomania file was exported successfully.", QMessageBox::Ok, parent);
+        saved.setInformativeText("Saved to:\n" + QDir::toNativeSeparators(destination));
+        saved.setTextFormat(Qt::PlainText);
+        saved.exec();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(parent, "Pianomania Composer", QString::fromUtf8(error.what()));
     }
 }
 

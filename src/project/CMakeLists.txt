@@ -61,6 +61,10 @@ target_sources(project PRIVATE
     internal/projectautosaver.h
     internal/pianomaniaexport.cpp
     internal/pianomaniaexport.h
+    internal/composerpackage.cpp
+    internal/composerpackage.h
+    internal/composersession.cpp
+    internal/composersession.h
     internal/projectactionscontroller.cpp
     internal/projectactionscontroller.h
     internal/engravingpluginapihelper.cpp
@@ -116,6 +120,12 @@ target_link_libraries(project PRIVATE notation)
 
 # Pianomania coordinated export drives the MEI and MIDI exporters directly.
 target_link_libraries(project PRIVATE iex_midi iex_mei)
+target_link_libraries(project PRIVATE Qt::Network Qt::Widgets)
+if(WIN32)
+    target_link_libraries(project PRIVATE Advapi32)
+elseif(APPLE)
+    target_link_libraries(project PRIVATE "-framework Security")
+endif()
 
 if (QT_ADD_CONCURRENT)
     target_link_libraries(project PRIVATE Qt::Concurrent)
