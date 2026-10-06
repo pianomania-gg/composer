@@ -277,48 +277,7 @@ static emscripten::val pmConvert(const emscripten::val& input)
         return errorResult("No score found in the file.");
     }
 
-    // 2) Normalize the page + part layout so Composer output matches Pianomania
-    //    catalog geometry in-game. Source-file page settings otherwise leak
-    //    through as portrait pages, tight margins, headers, and oversized staves.
-    {
-        using namespace mu::engraving;
-
-        pm::stripHeaderFramesAndFooters(masterScore);
-        pm::applyPianomaniaStyle(masterScore);
-
-        // Single-staff sources (lead sheets, melodies) get an empty bass staff +
-        // brace so the export is a grand staff like every catalog song. The game
-        // renders grand staves only (MeiParserLib.GetInitialClefs defaults a
-        // missing bottom staff to a bass clef drawn over the single system).
-        if (masterScore->nstaves() == 1) {
-            Staff* top = masterScore->staff(0);
-            Part* part = top->part();
-            KeyList keys = masterScore->keyList();
-
-            Staff* bass = Factory::createStaff(part);
-            bass->setDefaultClefType(ClefTypeList(ClefType::F));
-            masterScore->undoInsertStaff(bass, 1, /*createRests*/ true);
-            masterScore->adjustKeySigs(1, 2, keys);
-
-            top->setBracketType(0, BracketType::BRACE);
-            top->setBracketSpan(0, 2);
-            top->setBarLineSpan(1); // barlines run through both staves
-        } else if (masterScore->nstaves() == 2) {
-            // Bracket-less two-staff sources still get the catalog brace +
-            // through barlines so the export matches catalog piano scores.
-            Staff* top = masterScore->staff(0);
-            if (top->bracketType(0) == BracketType::NO_BRACKET) {
-                top->setBracketType(0, BracketType::BRACE);
-                top->setBracketSpan(0, 2);
-                top->setBarLineSpan(1);
-            }
-        }
-    }
-
-    // 3) Lay out the score so MEI coordinates (pm:xy, beziers, …) are correct.
-    masterScore->setUpTempoMap();
-    masterScore->setPlaylistDirty();
-    mu::engraving::pm::applyPianomaniaAutoLayout(masterScore);
+    mu::project::pianomania::prepareComposerScore(masterScore);
 
     // 4) Coordinated MEI, MIDI variants, and provenance manifest.
     {

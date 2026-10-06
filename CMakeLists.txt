@@ -55,6 +55,7 @@ set(MUSE_FRAMEWORK_SRC_PATH ${CMAKE_CURRENT_LIST_DIR}/src/framework)
 # Setup option and build settings
 ###########################################
 include(GetPaths)
+include(PianomaniaComposer)
 
 set(MUSESCORE_BUILD_CONFIGURATION "app" CACHE STRING "Build configuration")
 # Possible MUSESCORE_BUILD_CONFIGURATION values:

@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "appmenumodel.h"
+#include "project/internal/composersession.h"
 
 #include "types/translatablestring.h"
 
@@ -80,7 +81,11 @@ void AppMenuModel::load()
         items << makeHelpMenu(false);
         items << makeDiagnosticsMenu();
     } else {
+#ifdef PIANOMANIA_COMPOSER_PRODUCTION
+        items << makeHelpMenu(false);
+#else
         items << makeHelpMenu(true);
+#endif
     }
 
     setItems(items);
@@ -99,6 +104,15 @@ bool AppMenuModel::isGlobalMenuAvailable()
 
 void AppMenuModel::setupConnections()
 {
+    auto updateComposerAccount = [this]() {
+        auto state = composer::accountState();
+        auto title = !state->error().isEmpty() ? TranslatableString("action", "Pianomania account unavailable…")
+            : state->signedIn() ? TranslatableString("action", "Pianomania account (signed in)…")
+                               : TranslatableString("action", "Sign in to Pianomania…");
+        for (auto item : findItems(ActionCode("composer-account"))) item->setTitle(title);
+    };
+    connect(composer::accountState(), &composer::AccountState::changed, this, updateComposerAccount);
+    updateComposerAccount();
     recentFilesController()->recentFilesListChanged().onNotify(this, [this]() {
         MenuItem& recentScoreListItem = findMenu("menu-file-open");
 
@@ -204,14 +218,23 @@ MenuItem* AppMenuModel::makeFileMenu()
         makeSeparator(),
         makeMenuItem("file-save"),
         makeMenuItem("file-save-as"),
+#ifndef PIANOMANIA_COMPOSER_PRODUCTION
         makeMenuItem("file-save-to-cloud"),
+#endif
         makeMenu(TranslatableString("appshell/menu/file", "Save o&ther"), makeSaveOtherSubItems()),
+#ifndef PIANOMANIA_COMPOSER_PRODUCTION
         makeMenu(TranslatableString("appshell/menu/file", "Pu&blish online"), makePublishOnlineSubItems()),
+#endif
         makeSeparator(),
         makeMenuItem("file-import-pdf"),
         makeMenuItem("file-import-audio-to-score"),
         makeMenuItem("file-export"),
+        makeSeparator(),
+        makeMenuItem("file-export-composer"),
+        makeMenuItem("composer-account"),
+#ifndef PIANOMANIA_COMPOSER_PRODUCTION
         makeMenuItem("file-export-pianomania"),
+#endif
         makeSeparator(),
         makeMenuItem("project-properties"),
         makeMenuItem("parts", TranslatableString("action", "Parts…")),
@@ -221,6 +244,12 @@ MenuItem* AppMenuModel::makeFileMenu()
         makeMenuItem("quit", MenuItemRole::QuitRole)
     };
 
+    for (MenuItem* item : fileItems) {
+        if (item->action().code == "file-export-composer" || item->action().code == "composer-account"
+            || item->action().code == "file-export-pianomania") {
+            item->setSection("accent");
+        }
+    }
     return makeMenu(TranslatableString("appshell/menu/file", "&File"), fileItems, "menu-file");
 }
 

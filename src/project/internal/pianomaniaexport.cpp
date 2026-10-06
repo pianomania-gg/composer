@@ -41,6 +41,9 @@
 #include <QJsonObject>
 
 #include "engraving/dom/chord.h"
+#include "engraving/dom/factory.h"
+#include "engraving/pm/pmlayout.h"
+#include "engraving/pm/pmstyle.h"
 #include "engraving/dom/engravingitem.h"
 #include "engraving/dom/masterscore.h"
 #include "engraving/dom/measure.h"
@@ -59,6 +62,32 @@
 #include "log.h"
 
 using namespace mu::project::pianomania;
+
+void mu::project::pianomania::prepareComposerScore(mu::engraving::MasterScore* score)
+{
+    using namespace mu::engraving;
+    pm::stripHeaderFramesAndFooters(score);
+    pm::applyPianomaniaStyle(score);
+    if (score->nstaves() == 1) {
+        Staff* top = score->staff(0);
+        KeyList keys = score->keyList();
+        Staff* bass = Factory::createStaff(top->part());
+        bass->setDefaultClefType(ClefTypeList(ClefType::F));
+        score->undoInsertStaff(bass, 1, true);
+        score->adjustKeySigs(1, 2, keys);
+        top->setBracketType(0, BracketType::BRACE);
+        top->setBracketSpan(0, 2);
+        top->setBarLineSpan(1);
+    } else if (score->nstaves() == 2 && score->staff(0)->bracketType(0) == BracketType::NO_BRACKET) {
+        Staff* top = score->staff(0);
+        top->setBracketType(0, BracketType::BRACE);
+        top->setBracketSpan(0, 2);
+        top->setBarLineSpan(1);
+    }
+    score->setUpTempoMap();
+    score->setPlaylistDirty();
+    pm::applyPianomaniaAutoLayout(score);
+}
 
 namespace {
 struct MeasureRange {

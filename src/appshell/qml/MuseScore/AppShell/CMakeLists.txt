@@ -28,6 +28,8 @@ qt_add_qml_module(appshell_qml
         aboutmodel.h
         appmenumodel.cpp
         appmenumodel.h
+        composeraccountmodel.cpp
+        composeraccountmodel.h
         DevTools/Settings/settingslistmodel.cpp
         DevTools/Settings/settingslistmodel.h
         FirstLaunchSetup/firstlaunchsetupmodel.cpp
@@ -73,6 +75,7 @@ qt_add_qml_module(appshell_qml
         HomePage/HomePage.qml
         HomePage/PluginsPage.qml
         MainToolBar.qml
+        ComposerAccountButton.qml
         NotationPage/NotationPage.qml
         NotationPage/NotationStatusBar.qml
         platform/AppButtonBackground.qml

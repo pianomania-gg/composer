@@ -24,6 +24,7 @@
 #include "global/async/notification.h"
 
 #undef UNICODE
+#include <objbase.h>
 #include "ASIOSDK/common/asiosys.h"
 #include "ASIOSDK/common/asio.h"
 #include "ASIOSDK/common/iasiodrv.h"

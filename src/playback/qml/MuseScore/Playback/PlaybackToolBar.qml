@@ -32,6 +32,7 @@ Item {
     id: root
 
     property alias floating: thePlaybackModel.isToolbarFloating
+    property Component accountControl: null
 
     property NavigationPanel navigationPanel: NavigationPanel {
         id: navPanel
@@ -61,13 +62,12 @@ Item {
 
         width: childrenRect.width
 
-        enabled: thePlaybackModel.isPlayAllowed
-
         PlaybackToolBarActions {
             id: playbackActions
 
             playbackModel: thePlaybackModel
             floating: root.floating
+            accountControl: root.accountControl
 
             navPanel: root.navigationPanel
         }
@@ -78,6 +78,7 @@ Item {
             width: childrenRect.width
 
             sourceComponent: Column {
+                enabled: thePlaybackModel.isPlayAllowed
                 spacing: 8
 
                 width: childrenRect.width
