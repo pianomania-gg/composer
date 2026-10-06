@@ -22,6 +22,12 @@ muse_create_module(project)
 
 include(GetPlatformInfo)
 
+# Native credential and Qt network headers must not inherit using-directives
+# from other translation units in a combined-source build.
+set_source_files_properties(internal/composersession.cpp PROPERTIES
+    SKIP_UNITY_BUILD_INCLUSION ON
+)
+
 target_sources(project PRIVATE
     projectmodule.cpp
     projectmodule.h
