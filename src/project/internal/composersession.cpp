@@ -93,7 +93,7 @@ void load() {
     if (loaded) return;
     QByteArray stored = vaultRead();
     session = QJsonDocument::fromJson(stored).object();
-    if (!stored.isEmpty() && (session["uid"].toString().isEmpty() || session["refreshToken"].toString().isEmpty() || session["apiKey"].toString().isEmpty()))
+    if (!stored.isEmpty() && (session.value("uid").toString().isEmpty() || session.value("refreshToken").toString().isEmpty() || session.value("apiKey").toString().isEmpty()))
         throw std::runtime_error("The saved Pianomania account is invalid. Sign out and sign in again.");
     loaded = true;
 }
@@ -201,10 +201,10 @@ void signIn(QWidget* parent, bool switchAccount = false) {
 QByteArray token(QWidget* parent) {
     load();
     if (session.isEmpty()) signIn(parent);
-    QUrl url("https://securetoken.googleapis.com/v1/token"); QUrlQuery query; query.addQueryItem("key", session["apiKey"].toString()); url.setQuery(query);
-    QUrlQuery form; form.addQueryItem("grant_type", "refresh_token"); form.addQueryItem("refresh_token", session["refreshToken"].toString());
+    QUrl url("https://securetoken.googleapis.com/v1/token"); QUrlQuery query; query.addQueryItem("key", session.value("apiKey").toString()); url.setQuery(query);
+    QUrlQuery form; form.addQueryItem("grant_type", "refresh_token"); form.addQueryItem("refresh_token", session.value("refreshToken").toString());
     auto result = post(url, form.query(QUrl::FullyEncoded).toUtf8(), parent, {}, true);
-    if (result["user_id"].toString() != session["uid"].toString() || result["id_token"].toString().isEmpty() || result["refresh_token"].toString().isEmpty())
+    if (result["user_id"].toString() != session.value("uid").toString() || result["id_token"].toString().isEmpty() || result["refresh_token"].toString().isEmpty())
         throw std::runtime_error("The refreshed account did not match. Sign out and sign in again.");
     session["refreshToken"] = result["refresh_token"];
     vaultWrite(QJsonDocument(session).toJson(QJsonDocument::Compact));
@@ -214,7 +214,7 @@ QByteArray token(QWidget* parent) {
 AccountState::AccountState(QObject* parent) : QObject(parent) { refresh(); }
 void AccountState::refresh() {
     QString uid, email, error;
-    try { load(); uid = session["uid"].toString(); email = session["email"].toString(); }
+    try { load(); uid = session.value("uid").toString(); email = session.value("email").toString(); }
     catch (const std::exception& failure) { error = QString::fromUtf8(failure.what()); }
     if (uid == m_uid && email == m_email && error == m_error) return;
     m_uid = uid; m_email = email; m_error = error;
@@ -231,7 +231,7 @@ QJsonObject sessionFromFirebaseResponses(const QJsonObject& exchange, const QJso
     return {{"uid", uid}, {"apiKey", apiKey}, {"refreshToken", exchange["refreshToken"]},
             {"email", users[0].toObject()["email"]}};
 }
-QString currentUid() { load(); return session["uid"].toString(); }
+QString currentUid() { load(); return session.value("uid").toString(); }
 QByteArray license(const QString& hash, QWidget* parent) {
     QByteArray bearer = token(parent);
     auto result = post(QUrl(service() + "/api/composer/license"), QJsonDocument(QJsonObject {{"fileHash", hash}}).toJson(QJsonDocument::Compact), parent, bearer);
@@ -241,8 +241,8 @@ void showAccount(QWidget* parent) {
     try {
         load();
         if (session.isEmpty()) { signIn(parent); return; }
-        QString identity = session["email"].toString();
-        if (identity.isEmpty()) identity = session["uid"].toString();
+        QString identity = session.value("email").toString();
+        if (identity.isEmpty()) identity = session.value("uid").toString();
         QMessageBox dialog(QMessageBox::Information, "Pianomania Composer", identity, QMessageBox::Close, parent);
         auto signOut = dialog.addButton("Sign Out", QMessageBox::DestructiveRole);
         auto switchAccount = dialog.addButton("Switch account", QMessageBox::ActionRole);

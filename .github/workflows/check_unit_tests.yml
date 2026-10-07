@@ -61,6 +61,12 @@ jobs:
       run: |
         bash ./buildscripts/ci/linux/setup.sh
 
+    - name: Composer account regression
+      run: |
+        cmake -S src/project/tests/composeraccount -B build.account-tests
+        cmake --build build.account-tests --parallel 2
+        ctest --test-dir build.account-tests --output-on-failure --timeout 10 || { cat build.account-tests/account-test-results.txt; exit 1; }
+
     - name: Build
       env:
         GITHUB_EVENT_NAME: ${{ github.event_name }}
