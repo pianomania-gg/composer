@@ -86,4 +86,10 @@ if (MUSE_APP_IS_PRERELEASE)
     list(APPEND CPACK_WIX_CANDLE_EXTRA_FLAGS "-dMUSE_APP_IS_PRERELEASE=ON")
 endif()
 
+configure_file(
+    "${PROJECT_SOURCE_DIR}/buildscripts/packaging/ComposerPackageGuard.cmake.in"
+    "${PROJECT_BINARY_DIR}/ComposerPackageGuard.cmake"
+    @ONLY
+)
+set(CPACK_PROJECT_CONFIG_FILE "${PROJECT_BINARY_DIR}/ComposerPackageGuard.cmake")
 include(CPack)

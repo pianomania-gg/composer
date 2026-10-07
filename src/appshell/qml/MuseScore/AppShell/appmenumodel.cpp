@@ -230,8 +230,8 @@ MenuItem* AppMenuModel::makeFileMenu()
         makeMenuItem("file-import-audio-to-score"),
         makeMenuItem("file-export"),
         makeSeparator(),
-        makeMenuItem("file-export-composer"),
         makeMenuItem("composer-account"),
+        makeMenuItem("file-export-composer"),
 #ifndef PIANOMANIA_COMPOSER_PRODUCTION
         makeMenuItem("file-export-pianomania"),
 #endif

@@ -47,8 +47,6 @@ public:
     virtual std::string welcomeDialogLastShownVersion() const = 0;
     virtual void setWelcomeDialogLastShownVersion(const std::string& version) = 0;
 
-    virtual int welcomeDialogLastShownIndex() const = 0;
-    virtual void setWelcomeDialogLastShownIndex(int index) = 0;
 
     virtual StartupModeType startupModeType() const = 0;
     virtual void setStartupModeType(StartupModeType type) = 0;

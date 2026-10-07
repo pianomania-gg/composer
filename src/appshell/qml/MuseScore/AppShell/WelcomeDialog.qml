@@ -24,7 +24,6 @@ import QtQuick
 
 import Muse.Ui
 import Muse.UiComponents
-import Muse.GraphicalEffects
 
 import MuseScore.AppShell
 
@@ -34,28 +33,30 @@ StyledDialogView {
     title: qsTrc("appshell/welcome", "Welcome")
 
     contentHeight: contentColumn.height + footerArea.height
-    contentWidth: 812
+    contentWidth: 900
 
     WelcomeDialogModel {
-        id: model
+        id: welcomeModel
 
         Component.onCompleted: {
-            model.init()
+            welcomeModel.init()
         }
     }
 
     QtObject {
         id: prv
-        readonly property int imageWidth: 572
-        readonly property string titleText: model.currentItem ? model.currentItem.title : ""
-        readonly property string descText: model.currentItem ? model.currentItem.description : ""
+        readonly property int imageWidth: 740
+        readonly property bool isWelcome: Boolean(welcomeModel.currentItem && welcomeModel.currentItem.isWelcome)
+        readonly property bool hasMenuAction: Boolean(welcomeModel.currentItem && welcomeModel.currentItem.menuAction)
+        readonly property string titleText: welcomeModel.currentItem ? welcomeModel.currentItem.title : ""
+        readonly property string descText: welcomeModel.currentItem ? welcomeModel.currentItem.description : ""
     }
 
     function openCurrent() {
-        if (!model.currentItem) {
+        if (!welcomeModel.currentItem) {
             return
         }
-        api.launcher.openUrl(model.currentItem.destinationUrl)
+        api.launcher.openUrl(welcomeModel.currentItem.destinationUrl)
     }
 
     Column {
@@ -85,7 +86,7 @@ StyledDialogView {
         Row {
             id: imageAndArrowsRow
 
-            height: 322
+            height: 416
             anchors {
                 left: contentColumn.left
                 right: contentColumn.right
@@ -107,6 +108,7 @@ StyledDialogView {
 
                 FlatButton {
                     id: prevButton
+                    enabled: welcomeModel.currentIndex > 0
 
                     height: 48
                     width: prevButton.height
@@ -122,29 +124,145 @@ StyledDialogView {
                     navigation.accessible.description: qsTrc("appshell/welcome", "Previous item")
 
                     onClicked: {
-                        model.prevItem()
+                        welcomeModel.prevItem()
                     }
                 }
             }
 
-            Image {
+            Rectangle {
                 id: image
-
                 width: prv.imageWidth
                 height: imageAndArrowsRow.height
+                radius: 12
+                color: "#171e2d"
+                border.color: "#36475e"
+                clip: true
 
-                fillMode: Image.PreserveAspectCrop
-                source: model.currentItem ? model.currentItem.imageUrl : ""
+                Item {
+                    anchors.fill: parent
+                    visible: prv.isWelcome
 
-                layer.enabled: ui.isEffectsAllowed
-                layer.effect: RoundedCornersEffect {
-                    radius: 8
+                    Column {
+                        anchors.top: parent.top
+                        anchors.topMargin: 36
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width - 64
+                        spacing: 16
+
+                        StyledTextLabel {
+                            width: parent.width
+                            text: "PIANOMANIA"
+                            color: "#a6c8ef"
+                            font: ui.theme.tabBoldFont
+                        }
+                        StyledTextLabel {
+                            width: parent.width
+                            text: qsTrc("appshell/welcome", "Make it your music")
+                            color: "#f1f4f8"
+                            font.pixelSize: 36
+                            font.bold: true
+                        }
+                        StyledTextLabel {
+                            width: parent.width
+                            text: qsTrc("appshell/welcome", "Write and arrange for piano")
+                            color: "#c3cede"
+                            font: ui.theme.largeBodyFont
+                        }
+                    }
+
+                    Item {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 32
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 448
+                        height: 182
+
+                        Repeater {
+                            model: [0, 4, 7, 9, 11]
+                            Rectangle {
+                                required property int index
+                                required property int modelData
+                                x: modelData * 32 + 5
+                                y: index % 2 === 0 ? 6 : 26
+                                width: 20
+                                height: index % 2 === 0 ? 36 : 24
+                                radius: 5
+                                color: "#a6c8ef"
+                                opacity: 0.65
+                            }
+                        }
+                        Row {
+                            anchors.bottom: parent.bottom
+                            spacing: 2
+                            Repeater {
+                                model: 14
+                                Rectangle {
+                                    required property int index
+                                    width: 30
+                                    height: 116
+                                    radius: 4
+                                    color: [0, 4, 7, 9, 11].indexOf(index) >= 0 ? "#a6c8ef" : "#f1f4f8"
+                                }
+                            }
+                        }
+                        Repeater {
+                            model: [0, 1, 3, 4, 5, 7, 8, 10, 11, 12]
+                            Rectangle {
+                                required property int modelData
+                                x: (modelData + 1) * 32 - 11
+                                y: 66
+                                width: 20
+                                height: 72
+                                radius: 3
+                                color: "#171e2d"
+                            }
+                        }
+                    }
                 }
 
-                MouseArea {
-                    anchors.fill: image
-                    onClicked: {
-                        root.openCurrent()
+                Image {
+                    visible: !prv.isWelcome
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: prv.hasMenuAction ? 498 : parent.width
+                    height: parent.height
+                    source: !prv.isWelcome && welcomeModel.currentItem ? welcomeModel.currentItem.imageUrl : ""
+                    // Keep the highlighted account/export section readable within the tutorial.
+                    sourceClipRect: prv.hasMenuAction ? Qt.rect(12, 330, 500, 385) : Qt.rect(0, 0, 0, 0)
+                    fillMode: Image.PreserveAspectFit
+                }
+
+                Column {
+                    visible: prv.hasMenuAction
+                    anchors.right: parent.right
+                    anchors.rightMargin: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 192
+                    spacing: 18
+
+                    StyledTextLabel {
+                        width: parent.width
+                        text: qsTrc("appshell/welcome", "File")
+                        horizontalAlignment: Text.AlignLeft
+                        color: "#a6c8ef"
+                        font: ui.theme.tabBoldFont
+                    }
+                    Rectangle { width: 32; height: 2; color: "#a6c8ef" }
+                    StyledTextLabel {
+                        width: parent.width
+                        text: prv.hasMenuAction ? welcomeModel.currentItem.menuAction : ""
+                        horizontalAlignment: Text.AlignLeft
+                        wrapMode: Text.WordWrap
+                        color: "#f1f4f8"
+                        font: ui.theme.headerBoldFont
+                    }
+                    StyledTextLabel {
+                        width: parent.width
+                        text: prv.hasMenuAction ? welcomeModel.currentItem.menuHint : ""
+                        horizontalAlignment: Text.AlignLeft
+                        wrapMode: Text.WordWrap
+                        color: "#c3cede"
+                        font: ui.theme.largeBodyFont
                     }
                 }
             }
@@ -157,6 +275,7 @@ StyledDialogView {
 
                 FlatButton {
                     id: nextButton
+                    enabled: welcomeModel.currentIndex < welcomeModel.count - 1
 
                     height: 48
                     width: nextButton.height
@@ -172,7 +291,7 @@ StyledDialogView {
                     navigation.accessible.description: qsTrc("appshell/welcome", "Next item")
 
                     onClicked: {
-                        model.nextItem()
+                        welcomeModel.nextItem()
                     }
                 }
             }
@@ -181,7 +300,7 @@ StyledDialogView {
         StyledTextLabel {
             id: descriptionLabel
 
-            height: 84
+            height: 96
             width: prv.imageWidth
             anchors.horizontalCenter: contentColumn.horizontalCenter
 
@@ -198,7 +317,7 @@ StyledDialogView {
             height: 40
             anchors.horizontalCenter: contentColumn.horizontalCenter
 
-            text: model.currentItem ? model.currentItem.buttonText : ""
+            text: welcomeModel.currentItem ? welcomeModel.currentItem.buttonText : ""
             textFont: ui.theme.tabBoldFont
             accentButton: true
 
@@ -217,7 +336,7 @@ StyledDialogView {
         Item {
             id: indicatorArea
 
-            height: 60
+            height: 44
             width: contentColumn.width
 
             PageIndicator {
@@ -225,8 +344,8 @@ StyledDialogView {
 
                 indicatorSize: 10
 
-                count: model.count
-                currentIndex: model.currentIndex
+                count: welcomeModel.count
+                currentIndex: welcomeModel.currentIndex
             }
         }
     }
@@ -261,14 +380,14 @@ StyledDialogView {
             }
 
             text: qsTrc("appshell/welcome", "Don’t show welcome dialog on startup")
-            checked: !model.showOnStartup
+            checked: !welcomeModel.showOnStartup
 
             navigation.panel: footerPanel
             navigation.column: 1
             navigation.accessible.description: showOnStartup.text
 
             onClicked: {
-                model.showOnStartup = !model.showOnStartup
+                welcomeModel.showOnStartup = !welcomeModel.showOnStartup
             }
         }
 
@@ -283,14 +402,19 @@ StyledDialogView {
                 verticalCenter: footerArea.verticalCenter
             }
 
-            text: qsTrc("global", "OK")
+            text: welcomeModel.currentIndex < welcomeModel.count - 1
+                  ? qsTrc("global", "Next") : qsTrc("global", "Done")
 
             navigation.panel: footerPanel
             navigation.column: 0
             navigation.accessible.description: okButton.text
 
             onClicked: {
-                root.accept()
+                if (welcomeModel.currentIndex < welcomeModel.count - 1) {
+                    welcomeModel.nextItem()
+                } else {
+                    root.accept()
+                }
             }
         }
     }

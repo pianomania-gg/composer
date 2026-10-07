@@ -264,7 +264,6 @@ void StartupScenario::showStartupDialogsIfNeed(StartupModeType modeType)
         const Version currentMuseScoreVersion(configuration()->museScoreVersion());
         if (welcomeDialogLastShownVersion < currentMuseScoreVersion) {
             configuration()->setWelcomeDialogShowOnStartup(true); // override user preference
-            configuration()->setWelcomeDialogLastShownIndex(-1); // reset
         }
 
         const bool shouldCheckForMuseSamplerUpdate = modeType == StartupModeType::StartEmpty
