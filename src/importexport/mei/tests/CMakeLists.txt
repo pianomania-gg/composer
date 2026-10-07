@@ -40,6 +40,7 @@ set(MODULE_TEST_DATA_ROOT ${CMAKE_CURRENT_LIST_DIR})
 include(SetupGTest)
 
 string(CONCAT PIANOMANIA_MEI_TEST_FILTER
+    "Mei_Tests.mei_ending_label_exports_plain_display_text:"
     "Mei_Tests.mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present:"
     "Mei_Tests.mei_line_hairpin_exports_resolved_center_and_layout_y_offset:"
     "Mei_Tests.mei_directives_export_resolved_center_between_staves:"
@@ -78,5 +79,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*25 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*26 tests"
 )

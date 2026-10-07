@@ -1453,7 +1453,9 @@ libmei::Ending Convert::endingToMEI(const engraving::Volta* volta)
     meiEnding.SetType(endings.join(u" ").toStdString());
 
     // @label used for text
-    meiEnding.SetLabel(volta->text().toStdString());
+    engraving::Text label(const_cast<engraving::Volta*>(volta));
+    label.setXmlText(volta->text());
+    meiEnding.SetLabel(label.plainText().toStdString());
 
     // @lform
     if (volta->lineStyle() != engraving::LineType::SOLID) {
