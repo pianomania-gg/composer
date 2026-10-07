@@ -40,6 +40,7 @@ set(MODULE_TEST_DATA_ROOT ${CMAKE_CURRENT_LIST_DIR})
 include(SetupGTest)
 
 string(CONCAT PIANOMANIA_MEI_TEST_FILTER
+    "Mei_Tests.mei_ending_label_exports_plain_display_text:"
     "Mei_Tests.mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present:"
     "Mei_Tests.mei_line_hairpin_exports_resolved_center_and_layout_y_offset:"
     "Mei_Tests.mei_directives_export_resolved_center_between_staves:"
