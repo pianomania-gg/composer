@@ -39,6 +39,9 @@ jobs:
     - name: Clone repository
       uses: actions/checkout@v7
 
+    - name: Check build source reporting
+      run: node ./buildscripts/wasm/build-provenance.test.mjs
+
     - name: Restore ccache files
       id: restore-ccache
       uses: actions/cache/restore@v6
@@ -96,6 +99,14 @@ jobs:
         find "$QT_WASM_DIR" -iname '*zlib*' -maxdepth 5 || true
         echo "--- bundled archives ---"
         ls "$QT_WASM_DIR/lib" | grep -i -E 'bundled|zlib' || true
+
+    - name: Check CI source is clean
+      run: |
+        source_status="$(git status --porcelain --untracked-files=normal)"
+        if [ -n "$source_status" ]; then
+          printf 'CI setup changed the source tree:\n%s\n' "$source_status"
+          exit 1
+        fi
 
     - name: Build the converter
       env:

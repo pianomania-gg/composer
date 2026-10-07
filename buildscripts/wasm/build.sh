@@ -50,6 +50,15 @@ if [ ! -d "$QT_HOST_DIR" ]; then
     exit 1
 fi
 
+# Capture the source before configure/build can create or change files. Staged
+# changes and untracked source files also mean HEAD is not the complete source.
+SOURCE_COMMIT="$(git -C "$MUSESCORE_ROOT" rev-parse --verify HEAD)"
+SOURCE_STATUS="$(git -C "$MUSESCORE_ROOT" status --porcelain --untracked-files=normal)"
+SOURCE_DIRTY=""
+if [ -n "$SOURCE_STATUS" ]; then
+    SOURCE_DIRTY=" (working tree has uncommitted changes)"
+fi
+
 echo "==> Configuring (headless wasm profile)"
 cmake -S "$MUSESCORE_ROOT" -B "$BUILD_DIR" \
     -C "$MUSESCORE_ROOT/buildscripts/wasm/wasm-headless.cmake" \
@@ -103,5 +112,16 @@ if [ "$found" -ne 1 ]; then
     exit 1
 fi
 
+# The converter is a GPL binary, so whoever runs it must be able to get the
+# source it was built from. Print the commit and the tag that has to be
+# published alongside it; see WebApp/wwwroot/wasm/README.md in the monorepo.
+WASM_SHA256="$(shasum -a 256 "$WEBAPP_WASM_DIR/pm-converter.wasm" | cut -d' ' -f1)"
+
 echo "==> Done. Artifacts in $WEBAPP_WASM_DIR"
 ls -lh "$WEBAPP_WASM_DIR"
+echo
+echo "==> Corresponding source"
+echo "    expanded WASM SHA-256: $WASM_SHA256"
+echo "    source commit:         $SOURCE_COMMIT$SOURCE_DIRTY"
+echo "    publish this source as: composer-wasm-${WASM_SHA256:0:8}"
+echo "    then record the tag in WebApp/wwwroot/wasm/README.md and on the Composer page."
