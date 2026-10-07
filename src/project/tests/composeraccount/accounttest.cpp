@@ -30,7 +30,7 @@ private slots:
         loaded = true;
         session = {};
         selectAccountOnNextSignIn = false;
-        openedUrl = {};
+        openedUrl = QUrl();
         QDesktopServices::setUrlHandler("https", this, "openUrl");
     }
     void cleanup() { QDesktopServices::unsetUrlHandler("https"); }
