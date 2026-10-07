@@ -58,6 +58,7 @@
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stafftext.h"
 #include "engraving/dom/system.h"
+#include "engraving/dom/volta.h"
 #include "engraving/dom/tuplet.h"
 
 #include "modularity/ioc.h"
@@ -2228,5 +2229,32 @@ TEST_F(Mei_Tests, mei_tuplet_02) {
 
 TEST_F(Mei_Tests, mei_tuplet_03) {
     meiReadTest("tuplet-03");
+}
+
+// MEI ending labels are display text, not MuseScore rich-text markup.
+TEST_F(Mei_Tests, mei_ending_label_exports_plain_display_text) {
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"ending-01.mscx", false);
+    ASSERT_TRUE(score);
+    size_t count = 0;
+    for (const auto& entry : score->spannerMap().map()) {
+        if (entry.second->isVolta()) {
+            toVolta(entry.second)->setText(u"<font face=\"Times New Roman\"></font><b>1.</b>");
+            ++count;
+        }
+    }
+    ASSERT_GT(count, 0u);
+    score->setLayoutAll();
+    score->doLayout();
+    const String outputName = u"pianomania-ending-label.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, [](Score* value, const muse::io::path_t& path) -> Err {
+        MeiWriter writer;
+        return writer.writeScore(value, path);
+    }));
+    delete score;
+    const auto endings = collectStartTags(readTestTextFile(outputName), "ending");
+    ASSERT_FALSE(endings.empty());
+    for (const auto& ending : endings) {
+        EXPECT_EQ(xmlAttributeValue(ending, "label"), "1.");
+    }
 }
 }
