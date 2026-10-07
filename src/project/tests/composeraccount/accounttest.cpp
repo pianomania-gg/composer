@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <QApplication>
 #include <QTest>
+#include <QFontDatabase>
 // Exercise the actual session and dialog code with an in-memory account; never
 // read or alter the user's credential vault, and intercept all browser launches.
 #include "../../internal/composersession.cpp"
@@ -11,6 +12,20 @@ class AccountTest : public QObject {
     Q_OBJECT
     QUrl openedUrl;
 private slots:
+    void initTestCase() {
+#ifdef Q_OS_WIN
+        QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf");
+        QApplication::setFont(QFont("Segoe UI", 10));
+#endif
+        if (qEnvironmentVariableIsSet("COMPOSER_TEST_DARK")) {
+            auto palette = QApplication::palette();
+            palette.setColor(QPalette::Window, QColor("#2b2b2b"));
+            palette.setColor(QPalette::WindowText, QColor("#eeeeee"));
+            palette.setColor(QPalette::Button, QColor("#484848"));
+            palette.setColor(QPalette::ButtonText, QColor("#eeeeee"));
+            QApplication::setPalette(palette);
+        }
+    }
     void init() {
         loaded = true;
         session = {};
@@ -35,7 +50,7 @@ private slots:
         QTimer::singleShot(50, [] {
             for (auto widget : QApplication::topLevelWidgets()) {
                 if (auto progress = qobject_cast<QProgressDialog*>(widget)) {
-                    QMetaObject::invokeMethod(progress, "canceled");
+                    if (auto cancel = progress->findChild<QPushButton*>()) cancel->click();
                 }
                 if (auto message = qobject_cast<QMessageBox*>(widget)) message->reject();
             }
@@ -58,6 +73,36 @@ private slots:
         QVERIFY(state.signedIn());
         QCOMPARE(state.email(), QString("test@example.invalid"));
         QCOMPARE(currentUid(), QString("test-user"));
+        QCOMPARE(session, original);
+    }
+    void accountDialogShowsIdentityAndManagesAccount() {
+        session = {{"uid", "test-user"}, {"email", "pianist@example.com"},
+                   {"refreshToken", "test-token"}, {"apiKey", "test-key"}};
+        const auto original = session;
+        bool inspected = false;
+        QTimer::singleShot(50, [&] {
+            for (auto widget : QApplication::topLevelWidgets()) {
+                auto dialog = qobject_cast<QDialog*>(widget);
+                if (!dialog || dialog->objectName() != "composerAccountDialog") continue;
+                inspected = true;
+                auto email = dialog->findChild<QLabel*>("accountEmail");
+                QVERIFY(email);
+                QCOMPARE(email->text(), QString("pianist@example.com"));
+                QVERIFY(email->isVisible());
+                QVERIFY(dialog->grab().save("composer-account-dialog.png"));
+                QPushButton* done = nullptr;
+                for (auto button : dialog->findChildren<QPushButton*>()) {
+                    if (button->text() == "Manage account") button->click();
+                    if (button->text() == "Done") done = button;
+                }
+                QVERIFY(done);
+                QVERIFY(done->isDefault());
+                done->click();
+            }
+        });
+        showAccount(nullptr);
+        QVERIFY(inspected);
+        QCOMPARE(openedUrl.path(), QString("/beta-portal/account"));
         QCOMPARE(session, original);
     }
 public slots:

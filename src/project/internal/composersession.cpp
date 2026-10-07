@@ -7,6 +7,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMessageBox>
+#include <QDialog>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -243,14 +247,63 @@ void showAccount(QWidget* parent) {
         if (session.isEmpty()) { signIn(parent); return; }
         QString identity = session.value("email").toString();
         if (identity.isEmpty()) identity = session.value("uid").toString();
-        QMessageBox dialog(QMessageBox::Information, "Pianomania Composer", identity, QMessageBox::Close, parent);
-        auto signOut = dialog.addButton("Sign Out", QMessageBox::DestructiveRole);
-        auto switchAccount = dialog.addButton("Switch account", QMessageBox::ActionRole);
-        dialog.exec();
-        if (dialog.clickedButton() == signOut) {
+        QDialog dialog(parent);
+        dialog.setObjectName("composerAccountDialog");
+        dialog.setWindowTitle("Pianomania account");
+        dialog.setMinimumWidth(480);
+        dialog.setStyleSheet("QLabel { font-size: 14px; } QPushButton { font-size: 14px; padding: 9px 16px; }"
+                             "QPushButton#signOut { color: #ffffff; background-color: #b8323e; border: 1px solid #b8323e; border-radius: 4px; }"
+                             "QPushButton#signOut:hover { background-color: #982a34; }"
+                             "QPushButton#signOut:focus { border: 2px solid palette(highlight); }");
+        auto layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(24, 24, 24, 24);
+        layout->setSpacing(16);
+        auto heading = new QLabel("Signed in as", &dialog);
+        layout->addWidget(heading);
+        auto email = new QLabel(identity, &dialog);
+        email->setObjectName("accountEmail");
+        email->setTextFormat(Qt::PlainText);
+        email->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        email->setWordWrap(true);
+        email->setStyleSheet("font-size: 20px; font-weight: 600;");
+        layout->addWidget(email);
+        auto explanation = new QLabel("Songs you export belong to this account. Use the same account in Pianomania to play them.", &dialog);
+        explanation->setWordWrap(true);
+        layout->addWidget(explanation);
+        auto manageAccount = new QPushButton("Manage account", &dialog);
+        manageAccount->setToolTip("Open your Pianomania account in your browser");
+        auto switchAccount = new QPushButton("Switch account", &dialog);
+        auto accountActions = new QHBoxLayout;
+        accountActions->addWidget(manageAccount);
+        accountActions->addWidget(switchAccount);
+        layout->addLayout(accountActions);
+        auto browserNote = new QLabel("Account management opens in your browser.", &dialog);
+        browserNote->setWordWrap(true);
+        layout->addWidget(browserNote);
+        layout->addSpacing(8);
+        auto footer = new QHBoxLayout;
+        auto signOut = new QPushButton("Sign out", &dialog);
+        signOut->setObjectName("signOut");
+        auto close = new QPushButton("Done", &dialog);
+        close->setDefault(true);
+        for (auto button : {manageAccount, switchAccount, signOut}) button->setAutoDefault(false);
+        footer->addWidget(signOut);
+        footer->addStretch();
+        footer->addWidget(close);
+        layout->addLayout(footer);
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        QObject::connect(signOut, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(1); });
+        QObject::connect(switchAccount, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(2); });
+        QObject::connect(manageAccount, &QPushButton::clicked, &dialog, [&dialog] {
+            if (!QDesktopServices::openUrl(QUrl(service() + "/beta-portal/account")))
+                QMessageBox::warning(&dialog, "Pianomania account", "Could not open your browser.");
+        });
+        close->setFocus();
+        const int action = dialog.exec();
+        if (action == 1) {
             vaultWrite({}); session = {}; loaded = true; selectAccountOnNextSignIn = true;
             accountState()->refresh();
-        } else if (dialog.clickedButton() == switchAccount) { signIn(parent, true); }
+        } else if (action == 2) { signIn(parent, true); }
     } catch (const std::exception& error) { QMessageBox::warning(parent, "Pianomania Composer", QString::fromUtf8(error.what())); }
 }
 }
