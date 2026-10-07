@@ -7,6 +7,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMessageBox>
+#include <QDialog>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -93,7 +97,7 @@ void load() {
     if (loaded) return;
     QByteArray stored = vaultRead();
     session = QJsonDocument::fromJson(stored).object();
-    if (!stored.isEmpty() && (session["uid"].toString().isEmpty() || session["refreshToken"].toString().isEmpty() || session["apiKey"].toString().isEmpty()))
+    if (!stored.isEmpty() && (session.value("uid").toString().isEmpty() || session.value("refreshToken").toString().isEmpty() || session.value("apiKey").toString().isEmpty()))
         throw std::runtime_error("The saved Pianomania account is invalid. Sign out and sign in again.");
     loaded = true;
 }
@@ -201,10 +205,10 @@ void signIn(QWidget* parent, bool switchAccount = false) {
 QByteArray token(QWidget* parent) {
     load();
     if (session.isEmpty()) signIn(parent);
-    QUrl url("https://securetoken.googleapis.com/v1/token"); QUrlQuery query; query.addQueryItem("key", session["apiKey"].toString()); url.setQuery(query);
-    QUrlQuery form; form.addQueryItem("grant_type", "refresh_token"); form.addQueryItem("refresh_token", session["refreshToken"].toString());
+    QUrl url("https://securetoken.googleapis.com/v1/token"); QUrlQuery query; query.addQueryItem("key", session.value("apiKey").toString()); url.setQuery(query);
+    QUrlQuery form; form.addQueryItem("grant_type", "refresh_token"); form.addQueryItem("refresh_token", session.value("refreshToken").toString());
     auto result = post(url, form.query(QUrl::FullyEncoded).toUtf8(), parent, {}, true);
-    if (result["user_id"].toString() != session["uid"].toString() || result["id_token"].toString().isEmpty() || result["refresh_token"].toString().isEmpty())
+    if (result["user_id"].toString() != session.value("uid").toString() || result["id_token"].toString().isEmpty() || result["refresh_token"].toString().isEmpty())
         throw std::runtime_error("The refreshed account did not match. Sign out and sign in again.");
     session["refreshToken"] = result["refresh_token"];
     vaultWrite(QJsonDocument(session).toJson(QJsonDocument::Compact));
@@ -214,7 +218,7 @@ QByteArray token(QWidget* parent) {
 AccountState::AccountState(QObject* parent) : QObject(parent) { refresh(); }
 void AccountState::refresh() {
     QString uid, email, error;
-    try { load(); uid = session["uid"].toString(); email = session["email"].toString(); }
+    try { load(); uid = session.value("uid").toString(); email = session.value("email").toString(); }
     catch (const std::exception& failure) { error = QString::fromUtf8(failure.what()); }
     if (uid == m_uid && email == m_email && error == m_error) return;
     m_uid = uid; m_email = email; m_error = error;
@@ -231,7 +235,7 @@ QJsonObject sessionFromFirebaseResponses(const QJsonObject& exchange, const QJso
     return {{"uid", uid}, {"apiKey", apiKey}, {"refreshToken", exchange["refreshToken"]},
             {"email", users[0].toObject()["email"]}};
 }
-QString currentUid() { load(); return session["uid"].toString(); }
+QString currentUid() { load(); return session.value("uid").toString(); }
 QByteArray license(const QString& hash, QWidget* parent) {
     QByteArray bearer = token(parent);
     auto result = post(QUrl(service() + "/api/composer/license"), QJsonDocument(QJsonObject {{"fileHash", hash}}).toJson(QJsonDocument::Compact), parent, bearer);
@@ -241,16 +245,65 @@ void showAccount(QWidget* parent) {
     try {
         load();
         if (session.isEmpty()) { signIn(parent); return; }
-        QString identity = session["email"].toString();
-        if (identity.isEmpty()) identity = session["uid"].toString();
-        QMessageBox dialog(QMessageBox::Information, "Pianomania Composer", identity, QMessageBox::Close, parent);
-        auto signOut = dialog.addButton("Sign Out", QMessageBox::DestructiveRole);
-        auto switchAccount = dialog.addButton("Switch account", QMessageBox::ActionRole);
-        dialog.exec();
-        if (dialog.clickedButton() == signOut) {
+        QString identity = session.value("email").toString();
+        if (identity.isEmpty()) identity = session.value("uid").toString();
+        QDialog dialog(parent);
+        dialog.setObjectName("composerAccountDialog");
+        dialog.setWindowTitle("Pianomania account");
+        dialog.setMinimumWidth(480);
+        dialog.setStyleSheet("QLabel { font-size: 14px; } QPushButton { font-size: 14px; padding: 9px 16px; }"
+                             "QPushButton#signOut { color: #ffffff; background-color: #b8323e; border: 1px solid #b8323e; border-radius: 4px; }"
+                             "QPushButton#signOut:hover { background-color: #982a34; }"
+                             "QPushButton#signOut:focus { border: 2px solid palette(highlight); }");
+        auto layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(24, 24, 24, 24);
+        layout->setSpacing(16);
+        auto heading = new QLabel("Signed in as", &dialog);
+        layout->addWidget(heading);
+        auto email = new QLabel(identity, &dialog);
+        email->setObjectName("accountEmail");
+        email->setTextFormat(Qt::PlainText);
+        email->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        email->setWordWrap(true);
+        email->setStyleSheet("font-size: 20px; font-weight: 600;");
+        layout->addWidget(email);
+        auto explanation = new QLabel("Songs you export belong to this account. Use the same account in Pianomania to play them.", &dialog);
+        explanation->setWordWrap(true);
+        layout->addWidget(explanation);
+        auto manageAccount = new QPushButton("Manage account", &dialog);
+        manageAccount->setToolTip("Open your Pianomania account in your browser");
+        auto switchAccount = new QPushButton("Switch account", &dialog);
+        auto accountActions = new QHBoxLayout;
+        accountActions->addWidget(manageAccount);
+        accountActions->addWidget(switchAccount);
+        layout->addLayout(accountActions);
+        auto browserNote = new QLabel("Account management opens in your browser.", &dialog);
+        browserNote->setWordWrap(true);
+        layout->addWidget(browserNote);
+        layout->addSpacing(8);
+        auto footer = new QHBoxLayout;
+        auto signOut = new QPushButton("Sign out", &dialog);
+        signOut->setObjectName("signOut");
+        auto close = new QPushButton("Done", &dialog);
+        close->setDefault(true);
+        for (auto button : {manageAccount, switchAccount, signOut}) button->setAutoDefault(false);
+        footer->addWidget(signOut);
+        footer->addStretch();
+        footer->addWidget(close);
+        layout->addLayout(footer);
+        QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+        QObject::connect(signOut, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(1); });
+        QObject::connect(switchAccount, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(2); });
+        QObject::connect(manageAccount, &QPushButton::clicked, &dialog, [&dialog] {
+            if (!QDesktopServices::openUrl(QUrl(service() + "/beta-portal/account")))
+                QMessageBox::warning(&dialog, "Pianomania account", "Could not open your browser.");
+        });
+        close->setFocus();
+        const int action = dialog.exec();
+        if (action == 1) {
             vaultWrite({}); session = {}; loaded = true; selectAccountOnNextSignIn = true;
             accountState()->refresh();
-        } else if (dialog.clickedButton() == switchAccount) { signIn(parent, true); }
+        } else if (action == 2) { signIn(parent, true); }
     } catch (const std::exception& error) { QMessageBox::warning(parent, "Pianomania Composer", QString::fromUtf8(error.what())); }
 }
 }

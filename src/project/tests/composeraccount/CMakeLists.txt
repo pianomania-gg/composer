@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.16)
+project(ComposerAccountRegression LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_AUTOMOC ON)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Test)
+enable_testing()
+add_executable(composer_account_regression accounttest.cpp ../../internal/composersession.h)
+target_compile_definitions(composer_account_regression PRIVATE
+    PIANOMANIA_COMPOSER_PROFILE="account-regression"
+    PIANOMANIA_COMPOSER_SERVICE_URL="https://composer-test.invalid")
+target_link_libraries(composer_account_regression PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
+if(WIN32)
+    target_link_libraries(composer_account_regression PRIVATE Advapi32)
+elseif(APPLE)
+    target_link_libraries(composer_account_regression PRIVATE "-framework Security")
+endif()
+add_test(NAME composer_account_regression COMMAND composer_account_regression -platform offscreen -o account-test-results.txt,txt)
