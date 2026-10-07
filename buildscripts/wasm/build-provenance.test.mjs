@@ -50,6 +50,7 @@ for (const state of ['clean', 'unstaged', 'staged', 'untracked', 'missing-commit
         for (const directory of ['build.wasm', '.ccache', 'emsdk-cache', 'qt-host', 'qt-wasm']) {
             put(join(repo, directory, 'generated.txt'), 'generated\n');
         }
+        put(join(repo, 'aqtinstall.log'), 'Qt installer log\n');
 
         put(join(temp, 'bin/emcmake'), '#!/usr/bin/env bash\nexit 0\n');
         put(join(temp, 'bin/cmake'), `#!/usr/bin/env bash

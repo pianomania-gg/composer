@@ -100,6 +100,14 @@ jobs:
         echo "--- bundled archives ---"
         ls "$QT_WASM_DIR/lib" | grep -i -E 'bundled|zlib' || true
 
+    - name: Check CI source is clean
+      run: |
+        source_status="$(git status --porcelain --untracked-files=normal)"
+        if [ -n "$source_status" ]; then
+          printf 'CI setup changed the source tree:\n%s\n' "$source_status"
+          exit 1
+        fi
+
     - name: Build the converter
       env:
         QT_WASM_DIR: ${{ github.workspace }}/qt-wasm/Qt/${{ env.QT_VERSION }}/wasm_singlethread

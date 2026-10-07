@@ -19,6 +19,7 @@ build.qtc
 /emsdk-cache/
 /qt-host/
 /qt-wasm/
+/aqtinstall.log
 build-*
 build
 /muse
