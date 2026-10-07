@@ -30,13 +30,9 @@ StyledDialogView {
     id: root
 
     title: qsTrc("appshell/gettingstarted", "Getting started")
-
     contentWidth: 576
     contentHeight: 384
-
     margins: 20
-
-    readonly property Page currentPage: pageLoader.item as Page
 
     FirstLaunchSetupModel {
         id: model
@@ -44,180 +40,65 @@ StyledDialogView {
 
     Component.onCompleted: {
         model.load()
+        navigationActiveTimer.start()
     }
 
-    onAboutToClose: function(closeEvent) {
-        if (model.canFinish) {
-            model.finish()
-            return
-        }
+    onAboutToClose: model.finish()
 
-        let shouldClose = model.askAboutClosingEarly()
-        if (!shouldClose) {
-            closeEvent.accepted = false
-            return
+    Timer {
+        id: navigationActiveTimer
+        interval: 1000
+        repeat: false
+        onTriggered: {
+            doneButton.navigation.accessible.ignored = true
+            doneButton.navigation.requestActive()
+            themePage.readInfo()
         }
-
-        model.finish()
     }
 
     ColumnLayout {
-        id: content
-
         anchors.fill: parent
         anchors.leftMargin: 28
         anchors.rightMargin: 28
         spacing: 24
 
-        PageIndicator {
-            Layout.alignment: Qt.AlignCenter
-            count: model.numberOfPages
-            currentIndex: model.currentPageIndex
-        }
-
-        Loader {
-            id: pageLoader
-
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.topMargin: -8
-            source: model.currentPage.url
 
-            onLoaded: {
-                item.navigationSection = root.navigationSection
-                item.activeButtonTitle = buttons.activeButton.text
-
-                navigationActiveTimer.start()
-            }
-
-            Timer {
-                id: navigationActiveTimer
-
-                interval: 1000
-                repeat: false
-
-                onTriggered: {
-                    buttons.activeButton.navigation.accessible.ignored = true
-                    buttons.activeButton.navigation.requestActive()
-                    pageLoader.item.readInfo()
-                }
+            ThemesPage {
+                id: themePage
+                navigationSection: root.navigationSection
+                activeButtonTitle: doneButton.text
             }
         }
 
-        RowLayout {
-            id: buttons
+        FlatButton {
+            id: doneButton
+            Layout.alignment: Qt.AlignRight
+            text: qsTrc("global", "Done")
+            accentButton: true
 
-            spacing: 12
-
-            property var lastPressedButton: null
-            property var activeButton: {
-                if (Boolean(lastPressedButton) && lastPressedButton.visible === true) {
-                    return lastPressedButton
-                } else if (nextStepButton.visible === true) {
-                    return nextStepButton
-                } else {
-                    return backButton
-                }
-            }
-
-            property NavigationPanel navigationPanel: NavigationPanel {
+            navigation.name: "DoneButton"
+            navigation.panel: NavigationPanel {
                 name: "ButtonsPanel"
-                enabled: buttons.enabled && buttons.visible
+                enabled: doneButton.enabled && doneButton.visible
                 section: root.navigationSection
-                order: 1 // Lower than pages
+                order: 1
                 direction: NavigationPanel.Horizontal
             }
-
-            FlatButton {
-                id: backButton
-
-                Layout.alignment: Qt.AlignLeft
-
-                text: qsTrc("global", "Back")
-                visible: model.canGoBack
-
-                navigation.name: "BackButton"
-                navigation.panel: buttons.navigationPanel
-                navigation.column: 3
-                navigation.onActiveChanged: {
-                    if (!navigation.active) {
-                        accessible.ignored = false
-                        accessible.focused = true
-                        pageLoader.item.resetFocus()
-                    }
-                }
-
-                onClicked: {
-                    if (Boolean(buttons.lastPressedButton)) {
-                        buttons.lastPressedButton.navigation.accessible.ignored = true
-                    }
-
-                    buttons.lastPressedButton = backButton
-                    pageLoader.item.resetFocus()
-                    model.currentPageIndex--
+            navigation.column: 0
+            navigation.onActiveChanged: {
+                if (!navigation.active) {
+                    accessible.ignored = false
+                    accessible.focused = true
+                    themePage.resetFocus()
                 }
             }
 
-            Item {
-                Layout.fillWidth: true // spacer
-            }
-
-            FlatButton {
-                id: extraButton
-
-                Layout.alignment: Qt.AlignRight
-
-                visible: root.currentPage ? Boolean(root.currentPage.extraButtonTitle) : false
-                accentButton: true
-
-                text: root.currentPage ? root.currentPage.extraButtonTitle : ""
-
-                navigation.name: "ExtraButton"
-                navigation.panel: buttons.navigationPanel
-                navigation.column: 1
-
-                onClicked: {
-                    if (root.currentPage) {
-                        root.currentPage.extraButtonClicked()
-                    }
-                }
-            }
-
-            FlatButton {
-                id: nextStepButton
-
-                Layout.alignment: Qt.AlignRight
-
-                text: model.canFinish ? qsTrc("appshell/gettingstarted", "Finish")
-                                      : qsTrc("global", "Next")
-                accentButton: !extraButton.visible
-
-                navigation.name: "NextButton"
-                navigation.panel: buttons.navigationPanel
-                navigation.column: 2
-                navigation.onActiveChanged: {
-                    if (!navigation.active) {
-                        accessible.ignored = false
-                        accessible.focused = true
-                        pageLoader.item.resetFocus()
-                    }
-                }
-
-                onClicked: {
-                    if (model.canFinish) {
-                        model.finish()
-                        root.hide()
-                        return
-                    }
-
-                    if (Boolean(buttons.lastPressedButton)) {
-                        buttons.lastPressedButton.navigation.accessible.ignored = true
-                    }
-
-                    buttons.lastPressedButton = nextStepButton
-                    pageLoader.item.resetFocus()
-                    model.currentPageIndex++
-                }
+            onClicked: {
+                model.finish()
+                root.hide()
             }
         }
     }

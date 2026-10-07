@@ -26,7 +26,6 @@
 #include <qqmlintegration.h>
 
 #include "global/async/asyncable.h"
-
 #include "modularity/ioc.h"
 #include "iappshellconfiguration.h"
 #include "iinteractive.h"
@@ -35,15 +34,6 @@ namespace mu::appshell {
 class FirstLaunchSetupModel : public QObject, public muse::Contextable, public muse::async::Asyncable
 {
     Q_OBJECT
-
-    Q_PROPERTY(int numberOfPages READ numberOfPages CONSTANT)
-    Q_PROPERTY(int currentPageIndex READ currentPageIndex WRITE setCurrentPageIndex NOTIFY currentPageChanged)
-    Q_PROPERTY(QVariantMap currentPage READ currentPage NOTIFY currentPageChanged)
-
-    Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY currentPageChanged)
-    Q_PROPERTY(bool canGoForward READ canGoForward NOTIFY currentPageChanged)
-    Q_PROPERTY(bool canFinish READ canFinish NOTIFY currentPageChanged)
-
     QML_ELEMENT
 
     muse::GlobalInject<IAppShellConfiguration> configuration;
@@ -53,34 +43,6 @@ public:
     explicit FirstLaunchSetupModel(QObject* parent = nullptr);
 
     Q_INVOKABLE void load();
-
-    int numberOfPages() const;
-    int currentPageIndex() const;
-    QVariantMap currentPage() const;
-
-    bool canGoBack() const;
-    bool canGoForward() const;
-    bool canFinish() const;
-
-    Q_INVOKABLE bool askAboutClosingEarly();
-
     Q_INVOKABLE void finish();
-
-public slots:
-    void setCurrentPageIndex(int index);
-
-signals:
-    void currentPageChanged();
-
-private:
-    struct Page {
-        QString url;
-        std::string backgroundUri;
-
-        QVariantMap toMap() const;
-    };
-
-    QList<Page> m_pages;
-    int m_currentPageIndex = -1;
 };
 }

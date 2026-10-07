@@ -37,10 +37,10 @@ static constexpr QSize loadingScreenSize(800, 380);
 
 static const QColor messageColor("#F1F1EE");
 
-static const QString website("www.musescore.org");
+static const QString website("pianomania.gg");
 static constexpr QRectF websiteRect(loadingScreenSize.width() - 48, loadingScreenSize.height() - 48, 0, 0);
 
-static const QColor versionNumberColor("#19F3FF");
+static const QColor versionNumberColor("#dfc879");
 static constexpr qreal versionNumberSpacing = 5.0;
 
 LoadingScreenView::LoadingScreenView(QWidget* parent)
@@ -71,7 +71,15 @@ void LoadingScreenView::draw(QPainter* painter)
 
     // Draw message
     QFont font(QString::fromStdString(uiConfiguration()->fontFamily()));
+    font.setPixelSize(32);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 3.0);
+    painter->setFont(font);
+    painter->setPen(messageColor);
+    painter->drawText(QRectF(48, 204, loadingScreenSize.width() - 96, 48), Qt::AlignCenter,
+                      muse::qtrc("appshell", "Composer"));
+
     font.setPixelSize(uiConfiguration()->fontSize());
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 0.0);
 
     painter->setFont(font);
 
@@ -90,5 +98,5 @@ void LoadingScreenView::draw(QPainter* painter)
 
     painter->drawText(websiteRect.translated(0.0, -websiteBoundingRect.height() - versionNumberSpacing),
                       Qt::AlignBottom | alignment | Qt::TextDontClip,
-                      muse::qtrc("appshell", "Version %1").arg(application()->fullVersion().toString()));
+                      muse::qtrc("appshell", "Version %1").arg(application()->productVersion().toString()));
 }

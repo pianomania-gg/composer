@@ -164,9 +164,23 @@ DockPage {
 
             PlaybackToolBar {
                 accountControl: Component {
-                    ComposerAccountButton {
-                        navigation.panel: composerAccountNavigation
-                        navigation.order: 1
+                    Row {
+                        spacing: 8
+                        ComposerAccountModel { id: composerProfile }
+                        ComposerAccountButton {
+                            navigation.panel: composerAccountNavigation
+                            navigation.order: 1
+                        }
+                        FlatButton {
+                            visible: composerProfile.developmentBuild
+                            height: 30
+                            text: qsTrc("appshell", "Preview intro")
+                            toolTipTitle: qsTrc("appshell", "Preview Pianomania introduction")
+                            toolTipDescription: qsTrc("appshell", "Development preview. Reopens the welcome dialog from the first step.")
+                            navigation.panel: composerAccountNavigation
+                            navigation.order: 2
+                            onClicked: api.launcher.open("musescore://welcomedialog")
+                        }
                     }
                 }
                 navigationPanelSection: playbackToolBar.navigationSection

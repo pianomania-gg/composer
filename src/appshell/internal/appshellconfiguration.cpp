@@ -41,7 +41,6 @@ static const Settings::Key HAS_COMPLETED_FIRST_LAUNCH_SETUP(module_name, "applic
 
 static const Settings::Key WELCOME_DIALOG_SHOW_ON_STARTUP_KEY(module_name, "application/welcomeDialogShowOnStartup");
 static const Settings::Key WELCOME_DIALOG_LAST_SHOWN_VERSION_KEY(module_name, "application/welcomeDialogLastShownVersion");
-static const Settings::Key WELCOME_DIALOG_LAST_SHOWN_INDEX(module_name, "application/welcomeDialogLastShownIndex");
 
 static const Settings::Key STARTUP_MODE_TYPE(module_name, "application/startup/modeStart");
 static const Settings::Key STARTUP_SCORE_PATH(module_name, "application/startup/startScore");
@@ -79,7 +78,6 @@ void AppShellConfiguration::init()
     });
 
     settings()->setDefaultValue(WELCOME_DIALOG_LAST_SHOWN_VERSION_KEY, Val("0.0.0"));
-    settings()->setDefaultValue(WELCOME_DIALOG_LAST_SHOWN_INDEX, Val(-1));
 
     settings()->setDefaultValue(STARTUP_MODE_TYPE, Val(StartupModeType::StartEmpty));
     settings()->valueChanged(STARTUP_MODE_TYPE).onReceive(this, [this](const Val&) {
@@ -131,16 +129,6 @@ std::string AppShellConfiguration::welcomeDialogLastShownVersion() const
 void AppShellConfiguration::setWelcomeDialogLastShownVersion(const std::string& version)
 {
     settings()->setSharedValue(WELCOME_DIALOG_LAST_SHOWN_VERSION_KEY, Val(version));
-}
-
-int AppShellConfiguration::welcomeDialogLastShownIndex() const
-{
-    return settings()->value(WELCOME_DIALOG_LAST_SHOWN_INDEX).toInt();
-}
-
-void AppShellConfiguration::setWelcomeDialogLastShownIndex(int index)
-{
-    settings()->setSharedValue(WELCOME_DIALOG_LAST_SHOWN_INDEX, Val(index));
 }
 
 StartupModeType AppShellConfiguration::startupModeType() const

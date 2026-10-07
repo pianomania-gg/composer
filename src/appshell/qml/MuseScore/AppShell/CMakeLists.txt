@@ -36,8 +36,6 @@ qt_add_qml_module(appshell_qml
         FirstLaunchSetup/firstlaunchsetupmodel.h
         FirstLaunchSetup/themespagemodel.cpp
         FirstLaunchSetup/themespagemodel.h
-        FirstLaunchSetup/tutorialspagemodel.cpp
-        FirstLaunchSetup/tutorialspagemodel.h
         maintoolbarmodel.cpp
         maintoolbarmodel.h
         mainwindowtitleprovider.cpp
@@ -68,9 +66,7 @@ qt_add_qml_module(appshell_qml
         DevTools/Settings/SettingsPage.qml
         FirstLaunchSetup/FirstLaunchSetupDialog.qml
         FirstLaunchSetup/Page.qml
-        FirstLaunchSetup/PlaybackPage.qml
         FirstLaunchSetup/ThemesPage.qml
-        FirstLaunchSetup/TutorialsPage.qml
         HomePage/HomeMenu.qml
         HomePage/HomePage.qml
         HomePage/PluginsPage.qml
@@ -86,8 +82,6 @@ qt_add_qml_module(appshell_qml
         WelcomeDialog.qml
         WindowContent.qml
     RESOURCES
-        FirstLaunchSetup/resources/MuseSounds.png
-        FirstLaunchSetup/resources/VideoTutorials.png
         resources/mu_logo.svg
     IMPORTS
         TARGET muse_ui_qml

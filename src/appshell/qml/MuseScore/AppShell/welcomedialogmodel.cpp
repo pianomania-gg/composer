@@ -29,42 +29,43 @@ using namespace mu::appshell;
 
 static std::vector<QVariantMap> welcomeDialogData()
 {
-    QVariantMap item1;
-    item1.insert("title", muse::qtrc("appshell/welcome", "What’s new in MuseScore Studio"));
-    item1.insert("imageUrl", "qrc:/resources/welcomedialog/WhatsNew.png");
-    item1.insert("description", muse::qtrc("appshell/welcome",
-                                           "Includes essential new engraving tools, major improvements to playback, video export, dive notation for guitar, and features to speed up your workflow."));
-    item1.insert("buttonText", muse::qtrc("appshell/welcome", "Watch video"));
-    item1.insert("destinationUrl", "https://youtu.be/grKX-cBEEmM");
+    QVariantMap welcome;
+    welcome.insert("title", muse::qtrc("appshell/welcome", "Welcome to Pianomania Composer"));
+    welcome.insert("isWelcome", true);
+    welcome.insert("description", muse::qtrc("appshell/welcome",
+        "Follow this quick tutorial or check out the full Composer guide below on our website."));
+    welcome.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    welcome.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
-    QVariantMap item2;
-    item2.insert("title", muse::qtrc("appshell/welcome", "Enjoy free cloud storage"));
-    item2.insert("imageUrl", "qrc:/resources/welcomedialog/MuseScoreCom.png");
-    item2.insert("description", muse::qtrc("appshell/welcome",
-                                           "Save your scores privately on MuseScore.com to revisit past versions and invite others to view and comment – and when you’re ready, share your music with the world."));
-    item2.insert("buttonText", muse::qtrc("appshell/welcome", "View my scores online"));
-    item2.insert("destinationUrl",
-                 "https://musescore.com/my-scores?utm_source=mss-app-welcome-musescore-com&utm_medium=mss-app-welcome-musescore-com&utm_campaign=mss-app-welcome-musescore-com");
+    QVariantMap account;
+    account.insert("title", muse::qtrc("appshell/welcome", "Sign in once"));
+    account.insert("imageUrl", "qrc:/resources/welcomedialog/ComposerScore.png");
+    account.insert("menuAction", muse::qtrc("appshell/welcome", "Sign in to Pianomania"));
+    account.insert("menuHint", muse::qtrc("appshell/welcome", "Use your game account. Composer remembers you."));
+    account.insert("description", muse::qtrc("appshell/welcome",
+        "Open a piano score, then choose File > Sign in to Pianomania. Use the same account as the game. Composer remembers your sign-in. Masterworks is required to export."));
+    account.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    account.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
-    QVariantMap item3;
-    item3.insert("title", muse::qtrc("appshell/welcome", "Install our free MuseSounds libraries"));
-    item3.insert("imageUrl", "qrc:/resources/welcomedialog/MuseSounds.png");
-    item3.insert("description", muse::qtrc("appshell/welcome",
-                                           "Explore our collection of realistic sample libraries, including solo instruments, marching percussion, and full orchestra - available for free on MuseHub."));
-    item3.insert("buttonText", muse::qtrc("appshell/welcome", "Get it on MuseHub"));
-    item3.insert("destinationUrl",
-                 "https://www.musehub.com/free-musesounds?utm_source=mss-app-welcome-free-musesounds&utm_medium=mss-app-welcome-free-musesounds&utm_campaign=mss-app-welcome-free-musesounds&utm_id=mss-app-welcome-free-musesounds");
+    QVariantMap exportSong;
+    exportSong.insert("title", muse::qtrc("appshell/welcome", "Export your song"));
+    exportSong.insert("imageUrl", "qrc:/resources/welcomedialog/ExportSong.png");
+    exportSong.insert("menuAction", muse::qtrc("appshell/welcome", "Export Pianomania file (.pm)"));
+    exportSong.insert("menuHint", muse::qtrc("appshell/welcome", "Find it below your Pianomania account in the File menu."));
+    exportSong.insert("description", muse::qtrc("appshell/welcome",
+        "Choose File > Export Pianomania file (.pm), just below your Pianomania account. Choose a PNG or JPEG cover image, then save your .pm file."));
+    exportSong.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    exportSong.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
-    QVariantMap item4;
-    item4.insert("title", muse::qtrc("appshell/welcome", "Explore our tutorials"));
-    item4.insert("imageUrl", "qrc:/resources/welcomedialog/ExploreTutorials.png");
-    item4.insert("description", muse::qtrc("appshell/welcome",
-                                           "We’ve put together a playlist of tutorials to help both beginners and experienced users get the most out of MuseScore Studio."));
-    item4.insert("buttonText", muse::qtrc("appshell/welcome", "View tutorials"));
-    item4.insert("destinationUrl",
-                 "https://www.youtube.com/playlist?list=PLTYuWi2LmaPECOZrC6bkPHBkYY9_WEexT&utm_source=mss-app-welcome-tutorials&utm_medium=mss-app-welcome-tutorials&utm_campaign=mss-app-welcome-tutorials&utm_id=mss-app-welcome-tutorials");
+    QVariantMap play;
+    play.insert("title", muse::qtrc("appshell/welcome", "Import into Pianomania"));
+    play.insert("imageUrl", "qrc:/resources/welcomedialog/ImportSong.png");
+    play.insert("description", muse::qtrc("appshell/welcome",
+        "Move the .pm file to the device you play on. In Pianomania, open Profile > Composer > Import .pm file. Use the same account, then find your song in Song Select."));
+    play.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    play.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
-    return { item1, item2, item3, item4 };
+    return { welcome, account, exportSong, play };
 }
 
 WelcomeDialogModel::WelcomeDialogModel()
@@ -80,13 +81,7 @@ void WelcomeDialogModel::init()
 
     m_items = welcomeDialogData();
 
-    m_currentIndex = configuration()->welcomeDialogLastShownIndex();
-    nextItem();
-
-    IF_ASSERT_FAILED(m_currentIndex != muse::nidx) {
-        m_currentIndex = 0;
-    }
-    configuration()->setWelcomeDialogLastShownIndex(static_cast<int>(m_currentIndex));
+    m_currentIndex = 0;
 
     emit itemsChanged();
     emit currentItemChanged();
@@ -106,14 +101,10 @@ void WelcomeDialogModel::nextItem()
         return;
     }
 
-    if (hasNext()) {
-        ++m_currentIndex;
-    } else {
-        // Cycle to first...
-        m_currentIndex = 0;
+    if (!hasNext()) {
+        return;
     }
-    configuration()->setWelcomeDialogLastShownIndex(static_cast<int>(m_currentIndex));
-
+    ++m_currentIndex;
     emit currentItemChanged();
 }
 
@@ -123,14 +114,10 @@ void WelcomeDialogModel::prevItem()
         return;
     }
 
-    if (hasPrev()) {
-        --m_currentIndex;
-    } else {
-        // Cycle to last....
-        m_currentIndex = count() - 1;
+    if (!hasPrev()) {
+        return;
     }
-    configuration()->setWelcomeDialogLastShownIndex(static_cast<int>(m_currentIndex));
-
+    --m_currentIndex;
     emit currentItemChanged();
 }
 

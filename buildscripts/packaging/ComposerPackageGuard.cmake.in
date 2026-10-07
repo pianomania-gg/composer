@@ -1,0 +1,4 @@
+# Only the production profile may be distributed as an installer.
+if(NOT "@PIANOMANIA_COMPOSER_PROFILE@" STREQUAL "production")
+    message(FATAL_ERROR "Composer installers require PIANOMANIA_COMPOSER_PROFILE=production. Reconfigure and rebuild before packaging.")
+endif()

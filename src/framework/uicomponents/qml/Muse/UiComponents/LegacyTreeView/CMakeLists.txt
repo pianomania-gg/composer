@@ -26,3 +26,7 @@ qt_add_qml_module(muse_legacytreeview_qml
 )
 
 fixup_qml_module_dependencies(muse_legacytreeview_qml)
+
+# Keep generated plugin includes below Windows compiler path-length limits.
+set_property(TARGET muse_legacytreeview_qmlplugin PROPERTY AUTOGEN_BUILD_DIR
+    "${PROJECT_BINARY_DIR}/autogen/legacytreeview_plugin")

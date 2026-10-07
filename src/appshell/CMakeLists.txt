@@ -65,10 +65,9 @@ qt_add_resources(appshell appshell_resources
         /
     FILES
         resources/LoadingScreen.svg
-        resources/welcomedialog/ExploreTutorials.png
-        resources/welcomedialog/MuseScoreCom.png
-        resources/welcomedialog/MuseSounds.png
-        resources/welcomedialog/WhatsNew.png
+        resources/welcomedialog/ComposerScore.png
+        resources/welcomedialog/ExportSong.png
+        resources/welcomedialog/ImportSong.png
         resources/win_opengl_buglist.json
 )
 

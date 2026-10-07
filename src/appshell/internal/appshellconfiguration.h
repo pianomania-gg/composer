@@ -66,8 +66,6 @@ public:
     std::string welcomeDialogLastShownVersion() const override;
     void setWelcomeDialogLastShownVersion(const std::string& version) override;
 
-    int welcomeDialogLastShownIndex() const override;
-    void setWelcomeDialogLastShownIndex(int index) override;
 
     StartupModeType startupModeType() const override;
     void setStartupModeType(StartupModeType type) override;
