@@ -47,18 +47,21 @@ private slots:
         accountState()->refresh();
         // End the browser wait without a network request; dismiss its resulting
         // cancellation notice. A mistaken account dialog is also dismissed.
-        QTimer::singleShot(50, [] {
+        QTimer dismiss;
+        QObject::connect(&dismiss, &QTimer::timeout, &dismiss, [&dismiss] {
             for (auto widget : QApplication::topLevelWidgets()) {
                 if (auto progress = qobject_cast<QProgressDialog*>(widget)) {
                     if (auto cancel = progress->findChild<QPushButton*>()) cancel->click();
+                    return;
                 }
-                if (auto message = qobject_cast<QMessageBox*>(widget)) message->reject();
+                if (auto message = qobject_cast<QMessageBox*>(widget)) {
+                    dismiss.stop();
+                    message->reject();
+                    return;
+                }
             }
-            QTimer::singleShot(50, [] {
-                for (auto widget : QApplication::topLevelWidgets())
-                    if (auto message = qobject_cast<QMessageBox*>(widget)) message->reject();
-            });
         });
+        dismiss.start(50);
         showAccount(nullptr);
         QCOMPARE(openedUrl.path(), QString("/composer/authorize"));
         QCOMPARE(QUrlQuery(openedUrl).queryItemValue("environment"), QString("account-regression"));
