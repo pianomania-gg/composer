@@ -132,6 +132,9 @@
         </Measure>
       <Measure>
         <eid>U_U</eid>
+        <LayoutBreak>
+          <subtype>page</subtype>
+          </LayoutBreak>
         <voice>
           <Chord>
             <eid>V_V</eid>

@@ -62,6 +62,18 @@ ListItemBlank {
     implicitHeight: 32
 
     hoverHitColor: ui.theme.accentColor
+    property bool accentGroup: root.modelData?.section === "accent"
+    normalColor: accentGroup ? Qt.alpha(ui.theme.accentColor, 0.10) : "transparent"
+
+    Rectangle {
+        visible: root.accentGroup
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 3
+        color: ui.theme.accentColor
+        opacity: root.enabled ? 0.7 : ui.theme.itemOpacityDisabled
+    }
     enabled: (Boolean(modelData) && modelData.enabled !== undefined) ? Boolean(modelData.enabled) : true // default true
 
     isSelected: subMenuShowed || (itemPrv.isSelectable && itemPrv.isSelected) || navigation.highlight

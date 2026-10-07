@@ -37,6 +37,7 @@ static const ActionCode NOTE_INPUT_ACTION_CODE("note-input");
 
 static const ActionCode SHOW_INVISIBLE_CODE("show-invisible");
 static const ActionCode SHOW_UNPRINTABLE_CODE("show-unprintable");
+static const ActionCode SHOW_RUBATO_ZONES_CODE("show-rubato-zones");
 static const ActionCode SHOW_FRAMES_CODE("show-frames");
 static const ActionCode SHOW_PAGEBORDERS_CODE("show-pageborders");
 static const ActionCode SHOW_SOUND_FLAGS("show-soundflags");
@@ -2734,6 +2735,13 @@ const UiActionList NotationUiActions::s_scoreConfigActions = {
              TranslatableString("action", "Show/hide formatting"),
              Checkable::Yes
              ),
+    UiAction(SHOW_RUBATO_ZONES_CODE,
+             mu::context::UiCtxProjectOpened,
+             mu::context::CTX_NOTATION_OPENED,
+             TranslatableString("action", "Show rubato zones"),
+             TranslatableString("action", "Show/hide rubato zone brackets"),
+             Checkable::Yes
+             ),
     UiAction(SHOW_FRAMES_CODE,
              mu::context::UiCtxProjectOpened,
              mu::context::CTX_NOTATION_OPENED,
@@ -2917,6 +2925,7 @@ void NotationUiActions::init()
                 static const std::unordered_map<ScoreConfigType, std::string> configActions {
                     { ScoreConfigType::ShowInvisibleElements, SHOW_INVISIBLE_CODE },
                     { ScoreConfigType::ShowUnprintableElements, SHOW_UNPRINTABLE_CODE },
+                    { ScoreConfigType::ShowRubatoZones, SHOW_RUBATO_ZONES_CODE },
                     { ScoreConfigType::ShowFrames, SHOW_FRAMES_CODE },
                     { ScoreConfigType::ShowPageMargins, SHOW_PAGEBORDERS_CODE },
                     { ScoreConfigType::MarkIrregularMeasures, SHOW_IRREGULAR_CODE },
@@ -3004,6 +3013,9 @@ bool NotationUiActions::isScoreConfigChecked(const ActionCode& code, const Score
     }
     if (SHOW_UNPRINTABLE_CODE == code) {
         return cfg.isShowUnprintableElements;
+    }
+    if (SHOW_RUBATO_ZONES_CODE == code) {
+        return cfg.isShowRubatoZones;
     }
     if (SHOW_FRAMES_CODE == code) {
         return cfg.isShowFrames;

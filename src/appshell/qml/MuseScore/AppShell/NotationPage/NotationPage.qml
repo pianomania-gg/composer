@@ -45,6 +45,13 @@ DockPage {
     required property NavigationSection topToolbarKeyNavSec
 
     property NotationPageModel pageModel: NotationPageModel {}
+    NavigationPanel {
+        id: composerAccountNavigation
+        name: "ComposerAccount"
+        section: root.topToolbarKeyNavSec
+        order: 4
+        accessible.name: qsTrc("appshell", "Pianomania account")
+    }
 
     property NavigationSection noteInputKeyNavSec: NavigationSection {
         name: "NoteInputSection"
@@ -156,6 +163,12 @@ DockPage {
             navigationSection: root.topToolbarKeyNavSec
 
             PlaybackToolBar {
+                accountControl: Component {
+                    ComposerAccountButton {
+                        navigation.panel: composerAccountNavigation
+                        navigation.order: 1
+                    }
+                }
                 navigationPanelSection: playbackToolBar.navigationSection
                 navigationPanelOrder: 3
 
@@ -187,7 +200,7 @@ DockPage {
                 id: extToolBar
 
                 navigationPanel.section: extDockToolBar.navigationSection
-                navigationPanel.order: 4
+                navigationPanel.order: 5
             }
         },
 
@@ -209,7 +222,7 @@ DockPage {
 
             UndoRedoToolBar {
                 navigationPanel.section: undoRedoToolBar.navigationSection
-                navigationPanel.order: 5
+                navigationPanel.order: 6
             }
         }
     ]

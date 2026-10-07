@@ -77,6 +77,18 @@ static PitchWheelSpecs g_wheelSpec;
 static constexpr int LET_RING_MAX_TICKS = Constants::DIVISION * 16;
 static constexpr int DEFAULT_NOTE_OFF_VELOCITY = 64;
 static constexpr int ORNAMENT_NOTE_OFF_VELOCITY = 127;
+// Expert pianists crush a short grace note into roughly 50-90 ms whatever the tempo
+// (Timmers, Ashley, Desain, Honing & Windsor 2002; Windsor et al. 2000). The written
+// note stays on the beat; the grace takes its time from the previous note. When the hand
+// has to travel to reach the next key, the crush widens: measured graces before a large leap
+// ran 115 ms and more, so beyond a fifth each further semitone adds a few milliseconds.
+static constexpr double BEFORE_BEAT_GRACE_MILLISECONDS = 65.0;
+static constexpr int BEFORE_BEAT_GRACE_FREE_LEAP_SEMITONES = 7;
+static constexpr double BEFORE_BEAT_GRACE_MILLISECONDS_PER_LEAP_SEMITONE = 5.0;
+static constexpr double BEFORE_BEAT_GRACE_MAX_MILLISECONDS = 180.0;
+// A single unslashed grace written as an eighth or longer is a long appoggiatura and plays
+// on the beat. A shorter written value is a short grace: the written note stays on the beat.
+static const Fraction LONGEST_BEFORE_BEAT_GRACE_VALUE = Fraction(1, 16);
 // TODO this should be a (configurable?) constant somewhere
 static constexpr Fraction ARTICULATION_CHANGE_TIME_MAX = Fraction(1, 16);
 std::unordered_map<String,
@@ -307,6 +319,28 @@ static std::vector<size_t> playableEventIndexes(const NoteEventList& events)
     return result;
 }
 
+// A rendered trill already satisfies the gameplay contract when it starts and ends on the
+// written note and never strikes the same pitch twice in a row. Its closing turn may use the
+// lower neighbour, which the index-parity repair below must not repitch.
+static bool isGameplayTrillSequence(const NoteEventList& events, const std::vector<size_t>& playableEvents)
+{
+    if (playableEvents.size() < 3) {
+        return false;
+    }
+
+    if (events[playableEvents.front()].pitch() != 0 || events[playableEvents.back()].pitch() != 0) {
+        return false;
+    }
+
+    for (size_t i = 1; i < playableEvents.size(); ++i) {
+        if (events[playableEvents[i]].pitch() == events[playableEvents[i - 1]].pitch()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note, const Ornament* ornament)
 {
     const int upperPitchOffset = trillUpperPitchOffset(note, ornament);
@@ -315,6 +349,9 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
     }
 
     const std::vector<size_t> playableEvents = playableEventIndexes(events);
+    if (isGameplayTrillSequence(events, playableEvents)) {
+        return;
+    }
 
     if (playableEvents.empty()) {
         events.push_back(NoteEvent(0, 0, NoteEvent::NOTE_LENGTH));
@@ -352,10 +389,10 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
         events[playableEvents[i]].setPitch(i % 2 == 0 ? 0 : upperPitchOffset);
     }
 
-    if (playableEvents.size() == 2) {
+    // An even count would end on the upper note. Split the final upper note so the trill returns
+    // to the written note instead of striking it twice in a row.
+    if (playableEvents.size() % 2 == 0) {
         addTrillReturn(events, playableEvents.back());
-    } else if (playableEvents.size() % 2 == 0) {
-        events[playableEvents.back()].setPitch(0);
     }
 }
 
@@ -1485,15 +1522,10 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
 {
     // calculate offset for grace notes here
     const auto& grChords = chord->graceNotesBefore();
-    std::vector<Chord*> graceNotesBeforeBar;
-    std::copy_if(grChords.begin(), grChords.end(), std::back_inserter(graceNotesBeforeBar), [](Chord* ch) {
-        return ch->noteType() == NoteType::ACCIACCATURA;
-    });
+    const bool graceNotesPlayBeforeBeat = graceNotesBeforePlayBeforeBeat(chord);
 
     int graceTickSum = 0;
-    int graceTickOffset = 0;
 
-    size_t acciacaturaGraceSize = graceNotesBeforeBar.size();
     // prevChords is reset when another voice has a later segment and this voice
     // is empty there. Fall back to the nearest previous chord/rest in this track
     // so measure-boundary acciaccaturas do not share a start tick with the
@@ -1505,14 +1537,15 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
         previousGraceChord = toChord(previousGraceChordRest);
     }
 
-    if (acciacaturaGraceSize > 0) {
-        graceTickSum = graceNotesBeforeBar[0]->ticks().ticks();
+    std::vector<int> beforeBeatLeads;
+    if (graceNotesPlayBeforeBeat) {
+        int previousTicks = 0;
         if (previousGraceChordRest) {
-            int previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
-            graceTickSum = std::min(previousTicks / 2, graceTickSum);
+            previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
         }
 
-        graceTickOffset = graceTickSum / static_cast<int>(acciacaturaGraceSize);
+        beforeBeatLeads = beforeBeatGraceLeadTicks(chord, previousTicks);
+        graceTickSum = beforeBeatLeads.empty() ? 0 : beforeBeatLeads.front();
     } else {
         bool hasGraceBend = std::any_of(grChords.begin(), grChords.end(), [](Chord* ch) {
             return std::any_of(ch->notes().begin(), ch->notes().end(), [](Note* n) {
@@ -1544,12 +1577,11 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
                     params.previousChordTicks = previousGraceChordRest->actualTicks().ticks();
                 }
 
-                if (note->noteType() == NoteType::ACCIACCATURA) {
-                    params.graceOffsetOn = graceTickSum - graceTickOffset * currentBeaforeBeatNote;
-                    params.graceOffsetOff = graceTickSum - graceTickOffset * (currentBeaforeBeatNote + 1);
+                if (graceNotesPlayBeforeBeat) {
+                    const size_t leadIndex = static_cast<size_t>(currentBeaforeBeatNote);
+                    params.graceOffsetOn = leadIndex < beforeBeatLeads.size() ? beforeBeatLeads[leadIndex] : 0;
+                    params.graceOffsetOff = leadIndex + 1 < beforeBeatLeads.size() ? beforeBeatLeads[leadIndex + 1] : 0;
 
-                    collectNote(events, note, params, st, pitchWheelRenderer, m_context);
-                } else if (note->noteType() == NoteType::APPOGGIATURA) {
                     collectNote(events, note, params, st, pitchWheelRenderer, m_context);
                 } else if (isGraceBend) {
                     params.graceOffsetOn = graceTickSum;
@@ -2255,6 +2287,81 @@ const
 // can synthesize the ornamental motion from the main chord's articulation events.
 // Written grace notes remain score notes and must be exported through the grace
 // chord paths so Pianomania receives their MIDI note events.
+
+static int nearestPitchDistance(const Chord* from, const Chord* to)
+{
+    int nearest = std::numeric_limits<int>::max();
+    for (const Note* a : from->notes()) {
+        for (const Note* b : to->notes()) {
+            nearest = std::min(nearest, std::abs(a->pitch() - b->pitch()));
+        }
+    }
+
+    return nearest == std::numeric_limits<int>::max() ? 0 : nearest;
+}
+
+bool CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(const Chord* chord)
+{
+    if (!chord) {
+        return false;
+    }
+
+    const std::vector<Chord*>& graces = chord->graceNotesBefore();
+    if (graces.empty()) {
+        return false;
+    }
+    if (graces.size() > 1) {
+        return true;
+    }
+
+    const Chord* grace = graces.front();
+    if (grace->noteType() == NoteType::ACCIACCATURA) {
+        return true;
+    }
+
+    return grace->durationType().fraction() <= LONGEST_BEFORE_BEAT_GRACE_VALUE;
+}
+
+std::vector<int> CompatMidiRendererInternal::beforeBeatGraceLeadTicks(const Chord* chord, int previousTicks)
+{
+    std::vector<int> leads;
+    if (!graceNotesBeforePlayBeforeBeat(chord)) {
+        return leads;
+    }
+
+    const std::vector<Chord*>& graces = chord->graceNotesBefore();
+
+    const double ticksPerSecond = chord->score()->multipliedTempo(chord->tick()).val * Constants::DIVISION;
+    // Each grace lasts until the next attack: the following grace, or the written note.
+    std::vector<double> spanTicks;
+    for (size_t i = 0; i < graces.size(); ++i) {
+        const Chord* next = i + 1 < graces.size() ? graces[i + 1] : chord;
+        const int leap = std::max(0, nearestPitchDistance(graces[i], next) - BEFORE_BEAT_GRACE_FREE_LEAP_SEMITONES);
+        const double milliseconds = std::min(BEFORE_BEAT_GRACE_MAX_MILLISECONDS,
+                                             BEFORE_BEAT_GRACE_MILLISECONDS + leap * BEFORE_BEAT_GRACE_MILLISECONDS_PER_LEAP_SEMITONE);
+        spanTicks.push_back(std::max(1.0, milliseconds * ticksPerSecond / 1000.0));
+    }
+
+    double total = 0.0;
+    for (double span : spanTicks) {
+        total += span;
+    }
+
+    const int graceCount = static_cast<int>(graces.size());
+    double scale = 1.0;
+    if (previousTicks > 0 && total > std::max(graceCount, previousTicks / 2)) {
+        scale = std::max(graceCount, previousTicks / 2) / total;
+    }
+
+    // Cumulative leads counted back from the written note, in written order.
+    double remaining = total * scale;
+    for (double span : spanTicks) {
+        leads.push_back(std::max(1, static_cast<int>(std::lround(remaining))));
+        remaining -= span * scale;
+    }
+
+    return leads;
+}
 
 bool CompatMidiRendererInternal::graceNotesMerged(Chord* chord)
 {

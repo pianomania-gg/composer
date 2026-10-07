@@ -26,6 +26,8 @@
 #include <optional>
 #include <utility>
 #include <array>
+#include <string>
+#include <vector>
 
 #include "engraving/types/types.h"
 
@@ -56,6 +58,7 @@ class RubatoZone;
 class Slur;
 class Score;
 class Spanner;
+class SpannerSegment;
 class Staff;
 class TextBase;
 class TextLineBase;
@@ -448,8 +451,20 @@ private:
   getCenteredInchesFor(const engraving::EngravingItem *item) const;
   void appendCenteredPmPosition(pugi::xml_node node,
                                 const engraving::EngravingItem *item) const;
+  struct TupletDrawnVisibility {
+    bool numberVisible = false;
+    bool bracketVisible = false;
+  };
+  static TupletDrawnVisibility
+  resolveTupletDrawnVisibility(const engraving::Tuplet *tuplet);
+  static void applyDrawnTupletVisibility(libmei::Tuplet &meiTuplet,
+                                         const engraving::Tuplet *tuplet);
   bool appendPmTupletGeometry(pugi::xml_node node,
                               const engraving::Tuplet *tuplet) const;
+  std::vector<const engraving::SpannerSegment *>
+  segmentsOnScorePages(const engraving::Spanner *spanner) const;
+  std::string formatPlacedSegments(
+      const std::vector<const engraving::SpannerSegment *> &segments) const;
   std::optional<std::array<double, 4>>
   getLineEndpointsInches(const engraving::Spanner *spanner) const;
   bool appendPmLineEndpoints(pugi::xml_node node, const engraving::Spanner *spanner,

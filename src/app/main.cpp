@@ -25,7 +25,10 @@
 #include <QApplication>
 #include <QStyleHints>
 #include <QQuickWindow>
+#ifndef Q_OS_WASM
+// Qt for WebAssembly ships no SSL backend, so QSslSocket does not exist there.
 #include <QSslSocket>
+#endif
 
 #include "appfactory.h"
 #include "internal/commandlineparser.h"
@@ -113,16 +116,11 @@ int main(int argc, char** argv)
 
     QGuiApplication::styleHints()->setMousePressAndHoldInterval(250);
 
-// Can't use MUSE_APP_TITLE until next major release, because this "application name" is used to determine
-// where user settings are stored. Changing it would result in all user settings being lost.
-#ifdef MUSE_APP_UNSTABLE
-    QCoreApplication::setApplicationName("MuseScore4Development");
-#else
-    QCoreApplication::setApplicationName("MuseScore4");
-#endif
+    // Product profiles own separate settings, caches, and recent-score lists.
+    QCoreApplication::setApplicationName("PianomaniaComposer-" PIANOMANIA_COMPOSER_PROFILE);
     QGuiApplication::setApplicationDisplayName(QStringLiteral(MUSE_APP_TITLE));
-    QCoreApplication::setOrganizationName("MuseScore");
-    QCoreApplication::setOrganizationDomain("musescore.org");
+    QCoreApplication::setOrganizationName("Pianomania");
+    QCoreApplication::setOrganizationDomain("pianomania.gg");
     QCoreApplication::setApplicationVersion(MUSE_APP_VERSION);
 
 #if !defined(Q_OS_WIN) && !defined(Q_OS_DARWIN) && !defined(Q_OS_WASM)
@@ -203,12 +201,14 @@ int main(int argc, char** argv)
     return 0;
 #endif
 
+#ifndef Q_OS_WASM
     LOGI() << QString("SSL Info: supported: %1, build: %2, runtime: %3, active backend: %4, available backends: %5")
         .arg(QSslSocket::supportsSsl())
         .arg(QSslSocket::sslLibraryBuildVersionString())
         .arg(QSslSocket::sslLibraryVersionString())
         .arg(QSslSocket::activeBackend())
         .arg(QSslSocket::availableBackends().join(", "));
+#endif
 
     // ====================================================
     // Run main loop

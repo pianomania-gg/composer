@@ -60,11 +60,11 @@ private:
                                  Chord* prevChord = nullptr, Chord* nextChord = nullptr);
     static void createGraceNotesPlayEvents(const Score* score, const Fraction& tick, Chord* chord, int& ontime, int& trailtime);
     static std::vector<NoteEventList> renderChord(const CompatMidiRendererInternal::Context& context, Chord* chord, Chord* prevChord,
-                                                  int gateTime, int ontime, int trailtime);
+                                                  int gateTime, int ontime, int trailtime, int graceLeadIn);
     static void renderArpeggio(Chord* chord, std::vector<NoteEventList>& ell, int ontime);
     static void renderTremolo(Chord* chord, std::vector<NoteEventList>& ell, int& ontime, double tremoloPartOfChord = 1.0);
     static void renderChordArticulation(const CompatMidiRendererInternal::Context& context, Chord* chord, std::vector<NoteEventList>& ell,
-                                        int& gateTime, double graceOnBeatProportion, bool tremoloBefore = false);
+                                        int& gateTime, double graceOnBeatProportion, double trailProportion, bool tremoloBefore = false);
     static void updateGateTime(const Instrument* instr, int& gateTime, const String& articulationName,
                                const CompatMidiRendererInternal::Context& context);
     static void renderGlissando(NoteEventList* events, Note* notestart, double graceOnBeatProportion, bool tremoloBefore = false);
@@ -77,15 +77,17 @@ private:
                                        OrnamentStyle ornamentStyle, double graceOnBeatProportion = 0,
                                        const Ornament* ornament = nullptr);
     static bool renderTrillArticulation(NoteEventList* events, Note* note, const Trill* trill,
-                                        double graceOnBeatProportion = 0);
-    static bool renderTrillArticulation(NoteEventList* events, Note* note, OrnamentStyle ornamentStyle,
-                                        const Ornament* ornament = nullptr, double graceOnBeatProportion = 0);
+                                        double graceOnBeatProportion = 0, double trailProportion = 0);
+    static bool renderTrillArticulation(NoteEventList* events, Note* note, const Ornament* ornament = nullptr,
+                                        double graceOnBeatProportion = 0, double trailProportion = 0);
     static void createSlideInNotePlayEvents(Note* note, Chord* prevChord, NoteEventList* el);
     static void createSlideOutNotePlayEvents(Note* note, NoteEventList* el, int onTime, bool hasTremolo);
 
     // Helpers
     static Chord* getChordFromSegment(Segment* segment, track_idx_t track);
     static Trill* findFirstTrill(Chord* chord);
+    static bool chordHasTrill(Chord* chord);
+    static int trillIntervalTicks(const Chord* chord);
     static int adjustTrailtime(int trailtime, Chord* currentChord, Chord* nextChord);
     static bool noteIsGlissandoStart(Note* note);
     static int slideLengthChordDependent(Chord* chord);

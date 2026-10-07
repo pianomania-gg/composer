@@ -36,6 +36,7 @@
 #include "engraving/engravingproject.h"
 #include "engraving/infrastructure/mscreader.h"
 #include "engraving/infrastructure/ifileinfoprovider.h"
+#include "engraving/rw/inoutdata.h"
 #include "engraving/dom/factory.h"
 #include "engraving/dom/masterscore.h"
 #include "engraving/dom/part.h"
@@ -207,6 +208,13 @@ public:
     muse::String displayName() const override { return muse::String(u"in"); }
     muse::DateTime birthTime() const override { return muse::DateTime(); }
     muse::DateTime lastModified() const override { return muse::DateTime(); }
+
+    // Only headers and footers read these, to choose between a real timestamp
+    // and a placeholder, and the Pianomania page style turns both off. The
+    // answers match LocalFileInfoProvider, the other provider that wraps a plain
+    // file rather than an open project.
+    bool saved() const override { return false; }
+    bool isNewlyCreated() const override { return true; }
 };
 
 }
@@ -250,8 +258,10 @@ static emscripten::val pmConvert(const emscripten::val& input)
         return errorResult("Could not open the file (not a valid MuseScore .mscz?).");
     }
 
-    mu::engraving::SettingsCompat settingsCompat;
-    muse::Ret ret = engravingProject->loadMscz(reader, settingsCompat, /*ignoreVersionError*/ false);
+    // loadMscz takes the whole read in/out record now, and SettingsCompat is one
+    // of its members. Nothing here reads the results back, so a local will do.
+    mu::engraving::rw::ReadInOutData readData;
+    muse::Ret ret = engravingProject->loadMscz(reader, &readData, /*ignoreVersionError*/ false);
     reader.close();
     if (!ret) {
         return errorResult("Failed to read score: " + ret.toString());
@@ -267,48 +277,7 @@ static emscripten::val pmConvert(const emscripten::val& input)
         return errorResult("No score found in the file.");
     }
 
-    // 2) Normalize the page + part layout so Composer output matches Pianomania
-    //    catalog geometry in-game. Source-file page settings otherwise leak
-    //    through as portrait pages, tight margins, headers, and oversized staves.
-    {
-        using namespace mu::engraving;
-
-        pm::stripHeaderFramesAndFooters(masterScore);
-        pm::applyPianomaniaStyle(masterScore);
-
-        // Single-staff sources (lead sheets, melodies) get an empty bass staff +
-        // brace so the export is a grand staff like every catalog song. The game
-        // renders grand staves only (MeiParserLib.GetInitialClefs defaults a
-        // missing bottom staff to a bass clef drawn over the single system).
-        if (masterScore->nstaves() == 1) {
-            Staff* top = masterScore->staff(0);
-            Part* part = top->part();
-            KeyList keys = masterScore->keyList();
-
-            Staff* bass = Factory::createStaff(part);
-            bass->setDefaultClefType(ClefTypeList(ClefType::F));
-            masterScore->undoInsertStaff(bass, 1, /*createRests*/ true);
-            masterScore->adjustKeySigs(1, 2, keys);
-
-            top->setBracketType(0, BracketType::BRACE);
-            top->setBracketSpan(0, 2);
-            top->setBarLineSpan(1); // barlines run through both staves
-        } else if (masterScore->nstaves() == 2) {
-            // Bracket-less two-staff sources still get the catalog brace +
-            // through barlines so the export matches catalog piano scores.
-            Staff* top = masterScore->staff(0);
-            if (top->bracketType(0) == BracketType::NO_BRACKET) {
-                top->setBracketType(0, BracketType::BRACE);
-                top->setBracketSpan(0, 2);
-                top->setBarLineSpan(1);
-            }
-        }
-    }
-
-    // 3) Lay out the score so MEI coordinates (pm:xy, beziers, …) are correct.
-    masterScore->setUpTempoMap();
-    masterScore->setPlaylistDirty();
-    mu::engraving::pm::applyPianomaniaAutoLayout(masterScore);
+    mu::project::pianomania::prepareComposerScore(masterScore);
 
     // 4) Coordinated MEI, MIDI variants, and provenance manifest.
     {

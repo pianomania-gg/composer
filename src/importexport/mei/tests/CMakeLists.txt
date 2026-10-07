@@ -48,12 +48,18 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_pianomania_grace_same_pitch_indices:"
     "Mei_Tests.mei_export_laissez_vibrer_keeps_pm_geometry:"
     "Mei_Tests.mei_export_unresolved_pedal_endpoint_omits_pm_geometry:"
-    "Mei_Tests.mei_export_connected_pedal_keeps_pm_geometry:"
+    "Mei_Tests.mei_export_connected_pedal_includes_owned_rendered_segments:"
     "Mei_Tests.mei_export_pianomania_rubato_zone:"
+    "Mei_Tests.mei_rubato_overlay_preserves_layout_and_export_when_hidden:"
+    "Mei_Tests.mei_hidden_tempo_preserves_text_and_playback_with_visibility:"
+    "Mei_Tests.mei_chopin_rubato_overlay_does_not_move_notation:"
     "Mei_Tests.mei_export_pianomania_470_properties_survive_mscx_round_trip:"
     "Mei_Tests.mei_export_pianomania_rubato_zone_resolves_hidden_boundaries_to_one_anchor:"
     "Mei_Tests.mei_export_beam_and_tuplet_boundaries_ignore_omitted_hidden_chord:"
     "Mei_Tests.mei_export_tuplets_include_complete_resolved_geometry:"
+    "Mei_Tests.mei_export_hidden_tuplet_semantic_visibility_matches_drawn_geometry:"
+    "Mei_Tests.mei_export_hairpins_ending_without_onset_bind_end_element:"
+    "Mei_Tests.mei_export_omits_spanner_segments_without_a_score_page:"
     "Mei_Tests.mei_export_spanners_on_hidden_rests_use_visible_same_staff_notes:"
     "Mei_Tests.mei_export_pianomania_rubato_zone_overlap_fails:"
     "Mei_Tests.mei_export_pianomania_pyro_span_free_range:"
@@ -69,6 +75,8 @@ add_test(
 
 # GTest exits 0 when a filter matches nothing, so a gate whose tests were dropped
 # would report success while running zero tests. Require the exact expected count.
+# runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
+# count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\] 19 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*25 tests"
 )

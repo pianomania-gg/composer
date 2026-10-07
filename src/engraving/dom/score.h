@@ -646,6 +646,8 @@ public:
 
     bool isShowInvisible() const { return m_showInvisible; }
     bool showUnprintable() const { return m_showUnprintable; }
+    bool showRubatoZones() const { return m_showRubatoZones; }
+    void setShowRubatoZones(bool v);
     bool showFrames() const { return m_showFrames; }
     bool showPageborders() const { return m_showPageborders; }
     bool showSoundFlags() const { return m_showSoundFlags; }
@@ -1215,6 +1217,7 @@ private:
 
     bool m_showInvisible = true;
     bool m_showUnprintable = true;
+    bool m_showRubatoZones = true;
     bool m_showFrames = true;
     bool m_showPageborders = false;
     bool m_showSoundFlags = true;

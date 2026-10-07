@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<museScore version="4.50">
+  <Score>
+    <Division>480</Division>
+    <Style><spatium>1.74978</spatium></Style>
+    <Part id="1">
+      <Staff id="1"><StaffType group="pitched"><name>stdNormal</name></StaffType></Staff>
+      <Instrument id="piano"><instrumentId>keyboard.piano</instrumentId><Channel/></Instrument>
+    </Part>
+    <Staff id="1">
+      <Measure>
+        <voice>
+          <Clef><concertClefType>F</concertClefType><transposingClefType>F</transposingClefType><isHeader>1</isHeader></Clef>
+          <TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig>
+          <Chord>
+            <durationType>quarter</durationType>
+            <Note><Fingering><text>4</text></Fingering><pitch>55</pitch><tpc>15</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><pitch>59</pitch><tpc>19</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+          <Rest><durationType>half</durationType><dots>1</dots></Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Chord>
+            <durationType>quarter</durationType>
+            <Note><pitch>55</pitch><tpc>15</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+            <Note><Fingering><text>1</text></Fingering><pitch>59</pitch><tpc>19</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+          </Chord>
+          <Rest><durationType>half</durationType><dots>1</dots></Rest>
+        </voice>
+      </Measure>
+    </Staff>
+  </Score>
+</museScore>

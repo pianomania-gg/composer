@@ -104,6 +104,12 @@ const UiActionList ProjectUiActions::m_actions = {
              TranslatableString("action", "Export"),
              IconCode::Code::SHARE_FILE
              ),
+    UiAction("composer-account", mu::context::UiCtxAny, mu::context::CTX_ANY,
+             TranslatableString("action", "Pianomania account…"), TranslatableString("action", "Pianomania account…")),
+    UiAction("file-export-composer", mu::context::UiCtxAny, mu::context::CTX_ANY,
+             TranslatableString("action", "Export Pianomania file (.pm)…"), TranslatableString("action", "Export Pianomania file (.pm)…"),
+             IconCode::Code::SHARE_FILE),
+#ifndef PIANOMANIA_COMPOSER_PRODUCTION
     UiAction("file-export-pianomania",
              mu::context::UiCtxAny,
              mu::context::CTX_ANY,
@@ -111,13 +117,7 @@ const UiActionList ProjectUiActions::m_actions = {
              TranslatableString("action", "Pianomania Export…"),
              IconCode::Code::SHARE_FILE
              ),
-    UiAction("file-export-pianomania-all",
-             mu::context::UiCtxAny,
-             mu::context::CTX_ANY,
-             TranslatableString("action", "Pianomania Export All…"),
-             TranslatableString("action", "Pianomania Export All…"),
-             IconCode::Code::SHARE_FILE
-             ),
+#endif
     UiAction("file-import-pdf",
              mu::context::UiCtxAny,
              mu::context::CTX_ANY,

@@ -6686,6 +6686,7 @@ ScoreConfig NotationInteraction::scoreConfig() const
     ScoreConfig config;
     config.isShowInvisibleElements = score()->isShowInvisible();
     config.isShowUnprintableElements = score()->showUnprintable();
+    config.isShowRubatoZones = score()->showRubatoZones();
     config.isShowFrames = score()->showFrames();
     config.isShowPageMargins = score()->showPageborders();
     config.isShowSoundFlags = score()->showSoundFlags();
@@ -6705,6 +6706,7 @@ void NotationInteraction::setScoreConfig(const ScoreConfig& config)
     startEdit(TranslatableString("undoableAction", "Set score view settings"));
     score()->setShowInvisible(config.isShowInvisibleElements);
     score()->setShowUnprintable(config.isShowUnprintableElements);
+    score()->setShowRubatoZones(config.isShowRubatoZones);
     score()->setShowFrames(config.isShowFrames);
     score()->setShowPageborders(config.isShowPageMargins);
     score()->setShowSoundFlags(config.isShowSoundFlags);

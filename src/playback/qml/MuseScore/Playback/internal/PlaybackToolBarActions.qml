@@ -39,6 +39,7 @@ Item {
     readonly property int navigationOrderEnd: tempoLoader.navigationOrderEnd
 
     property bool floating: false
+    property Component accountControl: null
 
     // Not `+ endSeparator.width`: this way, the separator itself is outside the view,
     // which means that it will be exactly at the position of the KDDockWidgets separator
@@ -49,6 +50,7 @@ Item {
 
     ListView {
         id: buttonsListView
+        enabled: root.playbackModel.isPlayAllowed
 
         anchors.left: parent.left
 
@@ -110,10 +112,20 @@ Item {
         }
     }
 
+    Loader {
+        id: accountLoader
+        anchors.left: buttonsListView.right
+        anchors.leftMargin: active ? 8 : 0
+        anchors.verticalCenter: parent.verticalCenter
+        active: root.accountControl !== null
+        sourceComponent: root.accountControl
+        width: item ? item.implicitWidth : 0
+    }
+
     SeparatorLine {
         id: buttonsSeparator
 
-        anchors.left: buttonsListView.right
+        anchors.left: accountLoader.right
         anchors.leftMargin: 6
         anchors.topMargin: 2
         anchors.bottomMargin: 2
@@ -124,6 +136,7 @@ Item {
 
     TimeInputField {
         id: timeField
+        enabled: root.playbackModel.isPlayAllowed
 
         anchors.left: buttonsSeparator.right
         anchors.leftMargin: 12
@@ -149,6 +162,7 @@ Item {
 
     MeasureAndBeatFields {
         id: measureAndBeatFields
+        enabled: root.playbackModel.isPlayAllowed
 
         anchors.left: timeField.right
         anchors.leftMargin: 6
@@ -176,6 +190,7 @@ Item {
 
     Loader {
         id: tempoLoader
+        enabled: root.playbackModel.isPlayAllowed
 
         anchors.left: measureAndBeatFields.right
         anchors.leftMargin: 6

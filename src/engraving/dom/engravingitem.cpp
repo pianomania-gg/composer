@@ -270,6 +270,11 @@ double EngravingItem::defaultSpatium() const
 
 bool EngravingItem::isInteractionAvailable() const
 {
+    if ((type() == ElementType::RUBATO_ZONE || type() == ElementType::RUBATO_ZONE_SEGMENT)
+        && !score()->showRubatoZones()) {
+        return false;
+    }
+
     if (!getProperty(Pid::VISIBLE).toBool() && (score()->printing() || !score()->isShowInvisible())) {
         return false;
     }
@@ -360,6 +365,10 @@ void EngravingItem::scanElements(std::function<void(EngravingItem*)> func)
 
 bool EngravingItem::collectForDrawing() const
 {
+    if (type() == ElementType::RUBATO_ZONE_SEGMENT && !score()->showRubatoZones()) {
+        return false;
+    }
+
     if (!visible() && !score()->isShowInvisible()) {
         return false;
     }

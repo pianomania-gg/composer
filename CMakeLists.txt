@@ -55,6 +55,7 @@ set(MUSE_FRAMEWORK_SRC_PATH ${CMAKE_CURRENT_LIST_DIR}/src/framework)
 # Setup option and build settings
 ###########################################
 include(GetPaths)
+include(PianomaniaComposer)
 
 set(MUSESCORE_BUILD_CONFIGURATION "app" CACHE STRING "Build configuration")
 # Possible MUSESCORE_BUILD_CONFIGURATION values:
@@ -226,6 +227,14 @@ set(QT_ADD_WEBSOCKET OFF)
 set(QT_QPROCESS_SUPPORTED ON)
 set(QT_CONCURRENT_SUPPORTED ON)
 set(QT_NO_PRIVATE_MODULE_WARNING ON)
+
+# Qt for WebAssembly has no QProcess, so the code behind this flag cannot compile
+# there. SetupConfigure writes muse_framework_config.h, so the value has to be
+# right before that runs, which is well before GetPlatformInfo sets OS_IS_WASM.
+# These are the same toolchain markers GetPlatformInfo itself trusts first.
+if (EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(QT_QPROCESS_SUPPORTED OFF)
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/SetupConfigure.local.cmake")
     include(${CMAKE_CURRENT_LIST_DIR}/SetupConfigure.local.cmake)
