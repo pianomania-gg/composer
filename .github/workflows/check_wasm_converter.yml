@@ -39,6 +39,9 @@ jobs:
     - name: Clone repository
       uses: actions/checkout@v7
 
+    - name: Check build source reporting
+      run: node ./buildscripts/wasm/build-provenance.test.mjs
+
     - name: Restore ccache files
       id: restore-ccache
       uses: actions/cache/restore@v6

@@ -50,6 +50,15 @@ if [ ! -d "$QT_HOST_DIR" ]; then
     exit 1
 fi
 
+# Capture the source before configure/build can create or change files. Staged
+# changes and untracked source files also mean HEAD is not the complete source.
+SOURCE_COMMIT="$(git -C "$MUSESCORE_ROOT" rev-parse --verify HEAD)"
+SOURCE_STATUS="$(git -C "$MUSESCORE_ROOT" status --porcelain --untracked-files=normal)"
+SOURCE_DIRTY=""
+if [ -n "$SOURCE_STATUS" ]; then
+    SOURCE_DIRTY=" (working tree has uncommitted changes)"
+fi
+
 echo "==> Configuring (headless wasm profile)"
 cmake -S "$MUSESCORE_ROOT" -B "$BUILD_DIR" \
     -C "$MUSESCORE_ROOT/buildscripts/wasm/wasm-headless.cmake" \
@@ -107,11 +116,6 @@ fi
 # source it was built from. Print the commit and the tag that has to be
 # published alongside it; see WebApp/wwwroot/wasm/README.md in the monorepo.
 WASM_SHA256="$(shasum -a 256 "$WEBAPP_WASM_DIR/pm-converter.wasm" | cut -d' ' -f1)"
-SOURCE_COMMIT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse HEAD 2>/dev/null || echo unknown)"
-SOURCE_DIRTY=""
-if ! git -C "$(dirname "${BASH_SOURCE[0]}")" diff --quiet 2>/dev/null; then
-    SOURCE_DIRTY=" (working tree has uncommitted changes)"
-fi
 
 echo "==> Done. Artifacts in $WEBAPP_WASM_DIR"
 ls -lh "$WEBAPP_WASM_DIR"
