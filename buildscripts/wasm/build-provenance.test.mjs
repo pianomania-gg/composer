@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const buildScript = readFileSync(new URL('./build.sh', import.meta.url), 'utf8');
+const gitignore = readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8');
 const bash = process.env.WASM_TEST_BASH || 'bash';
 const wasm = 'fixture converter binary\n';
 const hash = createHash('sha256').update(wasm).digest('hex');
@@ -29,11 +30,12 @@ for (const state of ['clean', 'unstaged', 'staged', 'untracked', 'missing-commit
     try {
         put(join(repo, 'buildscripts/wasm/build.sh'), buildScript);
         put(join(repo, 'source.cpp'), 'original\n');
-        put(join(repo, '.gitignore'), '/build.wasm/\n');
+        put(join(repo, '.gitignore'), gitignore);
         git('init');
         let commit;
         if (state !== 'missing-commit') {
             git('add', '.');
+            git('add', '-f', 'buildscripts/wasm/build.sh');
             git('-c', 'user.name=Provenance test', '-c', 'user.email=test@example.invalid',
                 '-c', 'commit.gpgsign=false', 'commit', '-m', 'Fixture source');
             commit = git('rev-parse', 'HEAD');
@@ -43,6 +45,10 @@ for (const state of ['clean', 'unstaged', 'staged', 'untracked', 'missing-commit
             if (state === 'staged') git('add', 'source.cpp');
         } else if (state === 'untracked') {
             put(join(repo, 'new-source.cpp'), 'new\n');
+        }
+        // Previous build outputs and CI tool installations are not source edits.
+        for (const directory of ['build.wasm', '.ccache', 'emsdk-cache', 'qt-host', 'qt-wasm']) {
+            put(join(repo, directory, 'generated.txt'), 'generated\n');
         }
 
         put(join(temp, 'bin/emcmake'), '#!/usr/bin/env bash\nexit 0\n');
