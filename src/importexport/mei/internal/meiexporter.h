@@ -451,6 +451,8 @@ private:
   getCenteredInchesFor(const engraving::EngravingItem *item) const;
   void appendCenteredPmPosition(pugi::xml_node node,
                                 const engraving::EngravingItem *item) const;
+  std::optional<std::pair<double, double>>
+  getFirstGlyphBaselineInchesFor(const engraving::TextBase *text) const;
   struct TupletDrawnVisibility {
     bool numberVisible = false;
     bool bracketVisible = false;

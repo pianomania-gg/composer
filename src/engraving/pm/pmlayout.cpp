@@ -19,10 +19,15 @@
 
 #include "log.h"
 
+#include "../dom/articulation.h"
 #include "../dom/barline.h"
 #include "../dom/bracketItem.h"
+#include "../dom/chord.h"
+#include "../dom/dynamic.h"
 #include "../dom/engravingitem.h"
 #include "../dom/expression.h"
+#include "../dom/factory.h"
+#include "../dom/fermata.h"
 #include "../dom/instrument.h"
 #include "../dom/layoutbreak.h"
 #include "../dom/masterscore.h"
@@ -40,6 +45,8 @@
 #include "../dom/stafftext.h"
 #include "../dom/system.h"
 #include "../dom/tempotext.h"
+#include "../dom/text.h"
+#include "../dom/textlinebase.h"
 #include "../rendering/score/horizontalspacing.h"
 
 using namespace mu::engraving;
@@ -840,6 +847,255 @@ void normalizePianomaniaExpressionText(MasterScore* score)
     }
 }
 
+bool resetPianomaniaPlacementProperty(EngravingItem* item, Pid pid)
+{
+    const PropertyValue defaultValue = item->propertyDefault(pid);
+    if (!defaultValue.isValid()) {
+        return false;
+    }
+    if (item->getProperty(pid) == defaultValue && item->propertyFlags(pid) != PropertyFlags::UNSTYLED) {
+        return false;
+    }
+
+    item->undoResetProperty(pid);
+    return true;
+}
+
+char pianomaniaDynamicGlyphLetter(char32_t glyph)
+{
+    switch (glyph) {
+    case 0xE520: return 'p';
+    case 0xE521: return 'm';
+    case 0xE522: return 'f';
+    case 0xE523: return 'r';
+    case 0xE524: return 's';
+    case 0xE525: return 'z';
+    case 0xE526: return 'n';
+    default: return '\0';
+    }
+}
+
+String pianomaniaDynamicSymText(const std::string& letters)
+{
+    String text;
+    for (char letter : letters) {
+        switch (letter) {
+        case 'p': text += u"<sym>dynamicPiano</sym>";
+            break;
+        case 'm': text += u"<sym>dynamicMezzo</sym>";
+            break;
+        case 'f': text += u"<sym>dynamicForte</sym>";
+            break;
+        case 'r': text += u"<sym>dynamicRinforzando</sym>";
+            break;
+        case 's': text += u"<sym>dynamicSforzando</sym>";
+            break;
+        case 'z': text += u"<sym>dynamicZ</sym>";
+            break;
+        case 'n': text += u"<sym>dynamicNiente</sym>";
+            break;
+        default: return String();
+        }
+    }
+    return text;
+}
+
+// A custom dynamic such as "p religioso" (a dynamic glyph followed by words)
+// carries two things: a standard dynamic and expression text. Split it so the
+// dynamic engraves, aligns and exports as a real dynamic and the words snap
+// after it as expression text. The source velocity is kept, so playback does
+// not change.
+void splitPianomaniaDynamicExpressionText(MasterScore* score)
+{
+    if (!score) {
+        return;
+    }
+
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            const std::vector<EngravingItem*> annotations = segment->annotations();
+            for (EngravingItem* item : annotations) {
+                if (!item || !item->isDynamic() || toDynamic(item)->dynamicType() != DynamicType::OTHER) {
+                    continue;
+                }
+
+                Dynamic* dynamic = toDynamic(item);
+                const std::u32string plain = dynamic->plainText().toStdU32String();
+                std::string letters;
+                size_t index = 0;
+                for (; index < plain.size(); ++index) {
+                    const char letter = pianomaniaDynamicGlyphLetter(plain[index]);
+                    if (letter == '\0') {
+                        break;
+                    }
+                    letters += letter;
+                }
+                if (letters.empty() || index == plain.size() || plain[index] != U' ') {
+                    continue;
+                }
+
+                std::string wordsUtf8;
+                muse::UtfCodec::utf32to8(std::u32string_view(plain).substr(index), wordsUtf8);
+                const String words = String::fromStdString(wordsUtf8).trimmed();
+                if (words.isEmpty()) {
+                    continue;
+                }
+
+                const String symText = pianomaniaDynamicSymText(letters);
+                DynamicType standardType = DynamicType::OTHER;
+                for (const Dyn& dyn : Dynamic::dynamicList()) {
+                    if (dyn.type != DynamicType::OTHER && String::fromAscii(dyn.text) == symText) {
+                        standardType = dyn.type;
+                        break;
+                    }
+                }
+                if (standardType == DynamicType::OTHER) {
+                    continue;
+                }
+
+                const int sourceVelocity = dynamic->velocity();
+                // The custom text's font overrides (often a legacy text font)
+                // would skew the metrics used to center the glyph on its note.
+                // Reset them before replacing the text: a font reset rewrites
+                // the text from its current fragments.
+                resetPianomaniaPlacementProperty(dynamic, Pid::FONT_FACE);
+                resetPianomaniaPlacementProperty(dynamic, Pid::FONT_STYLE);
+                dynamic->undoChangeProperty(Pid::DYNAMIC_TYPE, PropertyValue::fromValue(standardType));
+                dynamic->undoChangeProperty(Pid::TEXT, Dynamic::dynamicText(standardType));
+                if (dynamic->velocity() != sourceVelocity) {
+                    dynamic->undoChangeProperty(Pid::VELOCITY, sourceVelocity);
+                }
+
+                Expression* expression = Factory::createExpression(segment);
+                expression->setTrack(dynamic->track());
+                expression->setParent(segment);
+                expression->setXmlText(words);
+                score->undoAddElement(expression);
+            }
+        }
+    }
+}
+
+// Hand placement saved against the source layout (an offset, autoplace off, a
+// min-distance override) no longer points at anything once Auto Layout re-casts
+// the systems, so autoplace takes those items back. A chosen side (above,
+// below, between the staves) is authored intent and stays. Slurs and
+// fingerings are normalized by Prettify instead.
+void resetPianomaniaItemPlacement(EngravingItem* item)
+{
+    if (!item || item->generated()) {
+        return;
+    }
+
+    bool changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET);
+    changed = resetPianomaniaPlacementProperty(item, Pid::AUTOPLACE) || changed;
+    changed = resetPianomaniaPlacementProperty(item, Pid::MIN_DISTANCE) || changed;
+    if (item->isSpannerSegment()) {
+        changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET2) || changed;
+    }
+    if (changed) {
+        item->setOffsetChanged(false);
+    }
+}
+
+bool isPianomaniaPlacementOwnedSpanner(const Spanner* spanner)
+{
+    return spanner->isHairpin()
+           || spanner->isTextLine()
+           || spanner->isGradualTempoChange()
+           || spanner->isOttava()
+           || spanner->isPedal()
+           || spanner->isVolta()
+           || spanner->isLetRing()
+           || spanner->isTrill()
+           || spanner->isVibrato();
+}
+
+bool isPianomaniaPlacementOwnedAnnotation(const EngravingItem* item)
+{
+    return item->isDynamic()
+           || item->isExpression()
+           || item->isStaffText()
+           || item->isSystemText()
+           || item->isTempoText()
+           || item->isRehearsalMark()
+           || item->isFermata();
+}
+
+bool isBottomStaffOfKeyboardGrandStaff(const Staff* staff)
+{
+    if (!isVisibleKeyboardStaff(staff)) {
+        return false;
+    }
+
+    const Part* part = staff->part();
+    return part->nstaves() > 1 && staff == part->staves().back();
+}
+
+// Fermatas sit outside the system: over the right hand, under the left hand.
+// A lower-staff fermata keeps the voice convention only when another voice of
+// that staff carries its own fermata at the same moment.
+void placePianomaniaKeyboardFermata(Fermata* fermata)
+{
+    const Segment* segment = fermata->segment();
+    if (!segment || !isBottomStaffOfKeyboardGrandStaff(fermata->staff())) {
+        return;
+    }
+
+    for (const EngravingItem* other : segment->annotations()) {
+        if (other != fermata && other->isFermata() && other->staffIdx() == fermata->staffIdx()) {
+            return;
+        }
+    }
+
+    if (fermata->placement() != PlacementV::BELOW) {
+        fermata->undoChangeProperty(Pid::PLACEMENT, PropertyValue::fromValue(PlacementV::BELOW), PropertyFlags::UNSTYLED);
+    }
+}
+
+void resetPianomaniaManualPlacement(MasterScore* score)
+{
+    if (!score) {
+        return;
+    }
+
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            for (EngravingItem* item : segment->annotations()) {
+                if (!item || !isPianomaniaPlacementOwnedAnnotation(item)) {
+                    continue;
+                }
+                resetPianomaniaItemPlacement(item);
+                if (item->isFermata()) {
+                    placePianomaniaKeyboardFermata(toFermata(item));
+                }
+            }
+
+            if (!segment->isChordRestType()) {
+                continue;
+            }
+            for (EngravingItem* item : segment->elist()) {
+                if (!item || !item->isChord()) {
+                    continue;
+                }
+                for (Articulation* articulation : toChord(item)->articulations()) {
+                    resetPianomaniaItemPlacement(articulation);
+                }
+            }
+        }
+    }
+
+    for (const auto& pair : score->spanner()) {
+        Spanner* spanner = pair.second;
+        if (!spanner || !isPianomaniaPlacementOwnedSpanner(spanner)) {
+            continue;
+        }
+        for (SpannerSegment* spannerSegment : spanner->spannerSegments()) {
+            resetPianomaniaItemPlacement(spannerSegment);
+        }
+    }
+}
+
 void ensurePianomaniaGrandStaffBraces(MasterScore* score)
 {
     if (!score) {
@@ -1014,7 +1270,9 @@ void offsetSystemBarlineProfile(System* system, size_t systemIndex, std::vector<
             delta = std::clamp(balancingDelta, -0.04, 0.04);
         }
 
-        measure->setUserStretch(std::clamp(1.0 + delta, 0.96, 1.04));
+        // Relative to the stretch the measure already has, so room made for
+        // line text before a dynamic survives the barline offset.
+        measure->setUserStretch(snapshot.back().userStretch * std::clamp(1.0 + delta, 0.96, 1.04));
     }
 }
 
@@ -1338,6 +1596,106 @@ void verifyOverfullSystems(MasterScore* score, int maxPasses)
     }
 }
 
+// Words carried by a line (e.g. a text-only "dim. e ritenuto." hairpin) must
+// read in full before the next dynamic on their row. Autoplace only stacks
+// items vertically, so a phrase wider than its measures runs straight through
+// that dynamic. Measured on the natural (LINE mode) widths, the measures from
+// the text's start up to the dynamic are widened just enough; justification
+// in page layout only ever adds room.
+double pianomaniaLineTextOverrun(const TextLineBaseSegment* lineSegment, const Score* score,
+                                 Measure*& firstMeasure, Measure*& lastMeasure)
+{
+    const Text* text = lineSegment ? lineSegment->text() : nullptr;
+    if (!text || text->empty() || !lineSegment->visible()) {
+        return 0.0;
+    }
+
+    const Spanner* line = lineSegment->spanner();
+    const RectF textRect = text->pageBoundingRect();
+    const double padding = 0.5 * lineSegment->spatium();
+    double overrun = 0.0;
+    const Segment* blockingSegment = nullptr;
+    for (Measure* measure = score->tick2measure(line->tick()); measure; measure = measure->nextMeasure()) {
+        if (measure->pageBoundingRect().left() > textRect.right() + padding) {
+            break;
+        }
+        for (const Segment* segment = measure->first(); segment; segment = segment->next()) {
+            if (segment->tick() <= line->tick()) {
+                continue;
+            }
+            for (const EngravingItem* item : segment->annotations()) {
+                if (!item || !item->isDynamic() || !item->visible() || item->staffIdx() != line->staffIdx()
+                    || item->placeAbove() != lineSegment->placeAbove()) {
+                    continue;
+                }
+                const double itemOverrun = textRect.right() + padding - item->pageBoundingRect().left();
+                if (itemOverrun > overrun) {
+                    overrun = itemOverrun;
+                    blockingSegment = segment;
+                }
+            }
+        }
+    }
+
+    if (!blockingSegment) {
+        return 0.0;
+    }
+
+    firstMeasure = score->tick2measure(line->tick());
+    lastMeasure = blockingSegment->measure();
+    if (blockingSegment->rtick().isZero() && lastMeasure != firstMeasure) {
+        lastMeasure = lastMeasure->prevMeasure();
+    }
+    return overrun;
+}
+
+void fitPianomaniaLineTextBeforeDynamics(MasterScore* score)
+{
+    static constexpr int maxFitPasses = 4;
+    for (int pass = 0; pass < maxFitPasses; ++pass) {
+        bool widened = false;
+        for (const auto& pair : score->spanner()) {
+            const Spanner* spanner = pair.second;
+            if (!spanner || !spanner->isTextLineBase() || spanner->spannerSegments().empty()) {
+                continue;
+            }
+
+            Measure* firstMeasure = nullptr;
+            Measure* lastMeasure = nullptr;
+            const auto* lineSegment = static_cast<const TextLineBaseSegment*>(spanner->frontSegment());
+            const double overrun = pianomaniaLineTextOverrun(lineSegment, score, firstMeasure, lastMeasure);
+            if (overrun <= 0.0 || !firstMeasure || !lastMeasure) {
+                continue;
+            }
+
+            double spanWidth = 0.0;
+            for (Measure* measure = firstMeasure; measure; measure = measure->nextMeasure()) {
+                spanWidth += measure->width();
+                if (measure == lastMeasure) {
+                    break;
+                }
+            }
+            if (spanWidth <= 0.0) {
+                continue;
+            }
+
+            const double growth = 1.0 + overrun / spanWidth;
+            for (Measure* measure = firstMeasure; measure; measure = measure->nextMeasure()) {
+                measure->undoChangeProperty(Pid::USER_STRETCH, measure->userStretch() * growth);
+                if (measure == lastMeasure) {
+                    break;
+                }
+            }
+            widened = true;
+        }
+
+        if (!widened) {
+            return;
+        }
+        score->doLayout();
+    }
+}
+
 bool removeBreakAfter(Measure* measure)
 {
     if (!measure || (!measure->lineBreak() && !measure->pageBreak())) {
@@ -1423,6 +1781,8 @@ void mu::engraving::pm::applyPianomaniaAutoLayout(MasterScore* score, const PmAu
     stripHeaderFramesAndFooters(score);
     normalizePianomaniaTempoIndicators(score);
     normalizePianomaniaExpressionText(score);
+    splitPianomaniaDynamicExpressionText(score);
+    resetPianomaniaManualPlacement(score);
     ensurePianomaniaGrandStaffBraces(score);
     applyPianomaniaStyle(score);
     resetStructuralLayout(score);
@@ -1430,6 +1790,7 @@ void mu::engraving::pm::applyPianomaniaAutoLayout(MasterScore* score, const PmAu
     const LayoutMode originalMode = score->layoutMode();
     score->setLayoutMode(LayoutMode::LINE);
     score->doLayout();
+    fitPianomaniaLineTextBeforeDynamics(score);
 
     const std::vector<Measure*> measures = collectMeasures(score);
     std::vector<MeasureInfo> measureInfo = collectMeasureInfo(score, measures);

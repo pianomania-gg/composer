@@ -31,12 +31,16 @@
 #include "engraving/dom/bracketItem.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
+#include "engraving/dom/dynamic.h"
+#include "engraving/dom/expression.h"
+#include "engraving/dom/fermata.h"
 #include "engraving/editing/editdata.h"
 #include "engraving/dom/engravingitem.h"
 #include "engraving/dom/beam.h"
 #include "engraving/dom/fingering.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/measure.h"
+#include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
 #include "engraving/dom/page.h"
 #include "engraving/dom/rest.h"
@@ -49,6 +53,9 @@
 #include "engraving/dom/system.h"
 #include "engraving/dom/tempo.h"
 #include "engraving/dom/tempotext.h"
+#include "engraving/dom/text.h"
+#include "engraving/dom/textlinebase.h"
+#include "engraving/dom/articulation.h"
 #include "engraving/dom/tuplet.h"
 #include "engraving/editing/undo.h"
 #include "engraving/pm/pmlayout.h"
@@ -696,6 +703,52 @@ mu::engraving::pm::PmPrettifyResult applyPrettifyCommand(Score* score)
     return result;
 }
 
+template<typename T>
+std::vector<T*> collectAnnotations(Score* score, bool (EngravingObject::*isType)() const)
+{
+    std::vector<T*> items;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            for (EngravingItem* item : segment->annotations()) {
+                if (item && (item->*isType)()) {
+                    items.push_back(static_cast<T*>(item));
+                }
+            }
+        }
+    }
+    return items;
+}
+
+std::vector<Hairpin*> collectHairpins(Score* score)
+{
+    std::vector<Hairpin*> hairpins;
+    for (const auto& pair : score->spanner()) {
+        if (pair.second && pair.second->isHairpin()) {
+            hairpins.push_back(toHairpin(pair.second));
+        }
+    }
+    return hairpins;
+}
+
+Hairpin* hairpinWithBeginText(Score* score)
+{
+    for (Hairpin* hairpin : collectHairpins(score)) {
+        if (!hairpin->beginText().isEmpty()) {
+            return hairpin;
+        }
+    }
+    return nullptr;
+}
+
+Measure* measureAt(Score* score, int index)
+{
+    Measure* measure = score->firstMeasure();
+    for (int i = 0; measure && i < index; ++i) {
+        measure = measure->nextMeasure();
+    }
+    return measure;
+}
+
 } // namespace
 
 class Engraving_PianomaniaPrettifyTests : public ::testing::Test
@@ -1102,6 +1155,225 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurEndpointOffsetUndoRedoClearsStaleE
     relayoutScore(score);
     EXPECT_TRUE(pointNear(segment->ups(Grip::START).off, changedStartOffset, 0.02 * spatium));
     EXPECT_TRUE(pointNear(segment->endPointOff1(), PointF(), 0.02 * spatium));
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutResetsStaleManualPlacement)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    for (Dynamic* dynamic : collectAnnotations<Dynamic>(score, &EngravingObject::isDynamic)) {
+        EXPECT_TRUE(dynamic->autoplace());
+        EXPECT_EQ(dynamic->offset(), dynamic->propertyDefault(Pid::OFFSET).value<PointF>());
+        EXPECT_FALSE(dynamic->placeAbove());
+    }
+
+    // Offsets are layout-relative and reset; an authored side stays.
+    const std::vector<Hairpin*> hairpins = collectHairpins(score);
+    ASSERT_EQ(hairpins.size(), 2);
+    for (Hairpin* hairpin : hairpins) {
+        const bool forcedUp = hairpin->getProperty(Pid::DIRECTION).value<DirectionV>() == DirectionV::UP;
+        EXPECT_EQ(forcedUp, hairpin->beginText().isEmpty());
+        ASSERT_FALSE(hairpin->spannerSegments().empty());
+        for (SpannerSegment* segment : hairpin->spannerSegments()) {
+            EXPECT_TRUE(segment->autoplace());
+            EXPECT_TRUE(segment->offset().isNull() || segment->isStyled(Pid::OFFSET));
+            EXPECT_EQ(segment->placeAbove(), forcedUp);
+        }
+    }
+
+    for (Fermata* fermata : collectAnnotations<Fermata>(score, &EngravingObject::isFermata)) {
+        EXPECT_TRUE(fermata->autoplace());
+        EXPECT_TRUE(fermata->offset().isNull() || fermata->isStyled(Pid::OFFSET));
+    }
+
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(SegmentType::ChordRest); segment; segment = segment->next(SegmentType::ChordRest)) {
+            for (EngravingItem* item : segment->elist()) {
+                if (!item || !item->isChord()) {
+                    continue;
+                }
+                for (Articulation* articulation : toChord(item)->articulations()) {
+                    EXPECT_TRUE(articulation->autoplace());
+                    EXPECT_TRUE(articulation->offset().isNull());
+                }
+            }
+        }
+    }
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutPlacesLowerStaffFermataBelow)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    const std::vector<Fermata*> fermatas = collectAnnotations<Fermata>(score, &EngravingObject::isFermata);
+    ASSERT_EQ(fermatas.size(), 2);
+    for (Fermata* fermata : fermatas) {
+        const System* system = fermata->segment()->system();
+        const double staffTop = system->pagePos().y() + system->staff(fermata->staffIdx())->y();
+        const double staffBottom = staffTop + fermata->staff()->staffHeight(fermata->tick());
+        if (fermata->staffIdx() == 0) {
+            EXPECT_TRUE(fermata->placeAbove());
+            EXPECT_LT(fermata->pageBoundingRect().bottom(), staffTop);
+        } else {
+            EXPECT_FALSE(fermata->placeAbove());
+            EXPECT_GT(fermata->pageBoundingRect().top(), staffBottom);
+        }
+    }
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutSplitsGlyphDynamicIntoDynamicAndExpression)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    Segment* firstBeat = score->firstMeasure()->first(SegmentType::ChordRest);
+    Dynamic* dynamic = nullptr;
+    std::vector<Expression*> expressions;
+    for (EngravingItem* item : firstBeat->annotations()) {
+        if (item->isDynamic()) {
+            dynamic = toDynamic(item);
+        } else if (item->isExpression()) {
+            expressions.push_back(toExpression(item));
+        }
+    }
+    ASSERT_TRUE(dynamic);
+    EXPECT_EQ(dynamic->dynamicType(), DynamicType::P);
+    EXPECT_EQ(dynamic->xmlText(), Dynamic::dynamicText(DynamicType::P));
+    EXPECT_EQ(dynamic->velocity(), 50);
+    ASSERT_EQ(expressions.size(), 1);
+    EXPECT_EQ(expressions.front()->plainText(), u"religioso");
+    EXPECT_EQ(expressions.front()->track(), dynamic->track());
+    EXPECT_LT(dynamic->pageBoundingRect().right(), expressions.front()->pageBoundingRect().left());
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutWidensMeasuresSoLineTextClearsNextDynamic)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+
+    // Natural widths are the tightest the casting can make them; justification only adds room.
+    score->setLayoutMode(LayoutMode::LINE);
+    relayoutScore(score);
+
+    Hairpin* hairpin = hairpinWithBeginText(score);
+    ASSERT_TRUE(hairpin);
+    const auto* segment = static_cast<const TextLineBaseSegment*>(hairpin->frontSegment());
+    ASSERT_TRUE(segment && segment->text());
+    const std::vector<Dynamic*> dynamics = collectAnnotations<Dynamic>(score, &EngravingObject::isDynamic);
+    const auto pp = std::find_if(dynamics.begin(), dynamics.end(), [](const Dynamic* d) {
+        return d->dynamicType() == DynamicType::PP;
+    });
+    ASSERT_NE(pp, dynamics.end());
+
+    EXPECT_GT(measureAt(score, 1)->userStretch(), 1.0);
+    EXPECT_LE(segment->text()->pageBoundingRect().right(), (*pp)->pageBoundingRect().left());
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, restOfLowerVoiceEnteredAsVoiceOneStaysBelowUpperVoice)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    Measure* measure = measureAt(score, 3);
+    ASSERT_TRUE(measure);
+    Segment* firstBeat = measure->first(SegmentType::ChordRest);
+    EngravingItem* restItem = firstBeat->element(0);
+    EngravingItem* upperItem = firstBeat->element(1);
+    ASSERT_TRUE(restItem && restItem->isRest());
+    ASSERT_TRUE(upperItem && upperItem->isChord());
+
+    const Rest* rest = toRest(restItem);
+    const Note* upperNote = toChord(upperItem)->upNote();
+    const double staffTop = measure->system()->pagePos().y() + measure->system()->staff(0)->y();
+    EXPECT_GT(rest->pageBoundingRect().center().y(), upperNote->pageBoundingRect().center().y());
+    EXPECT_GE(rest->pageBoundingRect().top(), staffTop);
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, rightHandFingeringStaysAboveWhenSlurLiftsIt)
+{
+    // The export pipeline keeps the prettify passes on through its final
+    // layout (force-normalize), which is where a detached group could flip.
+    struct ExportPipelineFlags {
+        ExportPipelineFlags()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = true;
+            MScore::pianomaniaForceNormalizeSlursFingerings = true;
+        }
+
+        ~ExportPipelineFlags()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = false;
+            MScore::pianomaniaForceNormalizeSlursFingerings = false;
+        }
+    } exportPipelineFlags;
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-right-hand-stays-above.mscx");
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    applyPrettifyCommand(score);
+
+    for (const String& text : { String(u"1"), String(u"2"), String(u"3"), String(u"4"), String(u"5") }) {
+        for (Fingering* fingering : collectFingeringsByText(score, text)) {
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE) << text.toStdString();
+        }
+    }
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, stemSideAccentClearsSlurTakingOffAtItsStem)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/accent-slur-stem-side.mscx");
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    applyPrettifyCommand(score);
+
+    Chord* accented = nullptr;
+    for (Segment* segment = score->firstMeasure()->first(SegmentType::ChordRest); segment && !accented;
+         segment = segment->next(SegmentType::ChordRest)) {
+        EngravingItem* item = segment->element(0);
+        if (item && item->isChord() && !toChord(item)->articulations().empty()) {
+            accented = toChord(item);
+        }
+    }
+    ASSERT_TRUE(accented);
+    const Articulation* accent = accented->articulations().front();
+    SlurSegment* slurSegment = firstSlurSegment(score);
+    ASSERT_TRUE(slurSegment);
+    ASSERT_EQ(slurSegment->slur()->startCR(), accented);
+
+    const double spatium = accent->spatium();
+    const Shape accentShape = accent->shape().translated(accent->pagePos());
+    const Shape slurShape = slurSegment->shape().translated(slurSegment->pagePos());
+    const double margin = 0.4 * spatium;
+    EXPECT_GE(accentShape.verticalClearance(slurShape, margin), 0.3 * spatium);
 
     delete score;
 }
