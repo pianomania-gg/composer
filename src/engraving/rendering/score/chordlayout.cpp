@@ -1202,8 +1202,22 @@ void ChordLayout::layoutArticulations3(Chord* item, Slur* slur, LayoutContext& c
         if (a->layoutCloseToNote() || !a->autoplace() || !slur->addToSkyline()) {
             continue;
         }
-        Shape aShape
-            = a->shape().translate(a->pos() + item->pos() + s->pos() + m->pos() + item->staffOffset() + itemStaffPos);
+        const PointF articulationOffset = a->pos() + item->pos() + s->pos() + m->pos() + item->staffOffset() + itemStaffPos;
+        Shape aShape(Shape::Type::Composite);
+        aShape.add(a->shape().translated(articulationOffset));
+        const SymId articulationSymId = a->symId();
+        const bool isStaccatissimo = articulationSymId == SymId::articStaccatissimoAbove
+                                     || articulationSymId == SymId::articStaccatissimoBelow
+                                     || articulationSymId == SymId::articStaccatissimoStrokeAbove
+                                     || articulationSymId == SymId::articStaccatissimoStrokeBelow
+                                     || articulationSymId == SymId::articStaccatissimoWedgeAbove
+                                     || articulationSymId == SymId::articStaccatissimoWedgeBelow;
+        // SMuFL articulation cutouts optimize skyline placement, but can omit
+        // the visible pointed ends of endpoint marks. Include the rendered glyph
+        // bound for every family that engraving policy keeps outside a slur.
+        if (a->isAccent() || a->isMarcato() || isStaccatissimo) {
+            aShape.add(a->ldata()->bbox().translated(articulationOffset));
+        }
         Shape sShape = ss->shape().translate(ss->pos() + slurStaffPos);
         sShape.removeTypes({ ElementType::HAMMER_ON_PULL_OFF_TEXT });
         double minDist = ctx.conf().styleMM(Sid::articulationMinDistance);

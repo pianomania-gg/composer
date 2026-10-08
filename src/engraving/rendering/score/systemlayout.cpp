@@ -113,6 +113,8 @@ constexpr double PM_FINGERING_STAFF_CLEARANCE = 0.5;
 constexpr double PM_FINGERING_STAFF_CLEARANCE_MIN = 0.10;
 constexpr double PM_FINGERING_MARK_CLEARANCE = 0.25;
 constexpr double PM_FINGERING_MARK_CLEARANCE_MIN = 0.15;
+constexpr double PM_FINGERING_STRUCTURE_CLEARANCE = 0.5;
+constexpr double PM_FINGERING_STRUCTURE_CLEARANCE_MIN = 0.25;
 // Tucks may nearly touch articulation marks (staccato dots, tenuto bars):
 // a digit centered tightly over dot and notehead beats one dodged sideways.
 constexpr double PM_FINGERING_MARK_CLEARANCE_TUCK = 0.08;
@@ -628,6 +630,18 @@ double requiredVerticalMoveFromMarkObstacles(const RectF& fingeringRect, const s
     return required;
 }
 
+double requiredVerticalMoveFromStructuralObstacles(const RectF& fingeringRect,
+                                                   const std::vector<RectF>& obstacles,
+                                                   bool above, double clearance)
+{
+    double required = 0.0;
+    for (const RectF& obstacle : obstacles) {
+        required = std::max(required,
+                            requiredVerticalMoveFromNotationRect(fingeringRect, obstacle, above, clearance));
+    }
+    return required;
+}
+
 bool tupletObstacleOverlapsFingeringXWindow(const RectF& fingeringRect, const std::vector<FingeringObstacle>& obstacles,
                                             staff_idx_t staffIdx, bool above, double clearance)
 {
@@ -712,13 +726,18 @@ bool beamIsCrossStaff(const Beam* beam)
     return crossBeam;
 }
 
+PointF beamSystemOffset(const Beam* beam, const System* system)
+{
+    return beam ? PointF(0.0, staffYInSystem(system, beam->staffIdx())) : PointF();
+}
+
 void uniteVisibleBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const System* system, double xLeft, double xRight)
 {
     if (!beam || !beam->visible() || !beam->ldata() || beam->ldata()->isSkipDraw()) {
         return;
     }
 
-    const double beamStaffY = staffYInSystem(system, beam->staffIdx());
+    const PointF beamOffset = beamSystemOffset(beam, system);
     for (const BeamSegment* beamSegment : beam->beamSegments()) {
         // BeamSegment::shape() returns a temporary; keep it alive for the loop.
         const Shape beamSegmentShape = beamSegment->shape();
@@ -726,7 +745,7 @@ void uniteVisibleBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const Sy
             if (box.left() > xRight || box.right() < xLeft) {
                 continue;
             }
-            uniteRect(danger, box.translated(0.0, beamStaffY));
+            uniteRect(danger, box.translated(beamOffset));
         }
     }
 }
@@ -768,13 +787,13 @@ void uniteSameStaffBeamDangerForGraceGroup(RectF& danger, const std::vector<Fing
             if (!beam->visible() || !beam->ldata() || beam->ldata()->isSkipDraw()) {
                 continue;
             }
-            // A same-staff beam's segment shapes are already in the digit's
-            // frame (unlike the cross-staff clause, which translates by
-            // staffYInSystem). Unite only the sub-boxes under the digit's own
-            // x-window: a sloped beam's whole bbox overstates the beam by the
+            // Beam geometry is local to its owning staff. Unite only the
+            // system-mapped sub-boxes under the digit's own x-window: a
+            // sloped beam's whole bbox overstates the beam by the
             // slope drop across the group, which would wall off the pocket the
             // neighboring main-chord digits demonstrably occupy.
-            const RectF beamRect = beam->ldata()->bbox();
+            const PointF beamOffset = beamSystemOffset(beam, measure->system());
+            const RectF beamRect = beam->ldata()->bbox().translated(beamOffset);
             if (beamRect.left() > digitRect.right() || beamRect.right() < digitRect.left()) {
                 continue;
             }
@@ -783,8 +802,9 @@ void uniteSameStaffBeamDangerForGraceGroup(RectF& danger, const std::vector<Fing
                 // BeamSegment::shape() returns a temporary; keep it alive for the loop.
                 const Shape beamSegmentShape = beamSegment->shape();
                 for (const ShapeElement& box : beamSegmentShape.elements()) {
-                    if (box.left() <= digitRect.right() && box.right() >= digitRect.left()) {
-                        uniteRect(danger, box);
+                    const RectF beamBox = box.translated(beamOffset);
+                    if (beamBox.left() <= digitRect.right() && beamBox.right() >= digitRect.left()) {
+                        uniteRect(danger, beamBox);
                         united = true;
                     }
                 }
@@ -812,15 +832,14 @@ bool beamContainsGraceChord(const Beam* beam)
     return false;
 }
 
-void uniteSameStaffBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const RectF& digitRect)
+void uniteSameStaffBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const System* system, const RectF& digitRect)
 {
     if (!beam || !beam->visible() || !beam->ldata() || beam->ldata()->isSkipDraw() || digitRect.isNull()) {
         return;
     }
 
-    // A same-staff beam's ldata bbox and segment shape boxes are already in
-    // the digit/system frame. Do not translate them by staffYInSystem here.
-    const RectF beamRect = beam->ldata()->bbox();
+    const PointF beamOffset = beamSystemOffset(beam, system);
+    const RectF beamRect = beam->ldata()->bbox().translated(beamOffset);
     if (beamRect.left() > digitRect.right() || beamRect.right() < digitRect.left()) {
         return;
     }
@@ -830,8 +849,9 @@ void uniteSameStaffBeamBoxesOverlappingX(RectF& danger, const Beam* beam, const 
         // BeamSegment::shape() returns a temporary; keep it alive for the loop.
         const Shape beamSegmentShape = beamSegment->shape();
         for (const ShapeElement& box : beamSegmentShape.elements()) {
-            if (box.left() <= digitRect.right() && box.right() >= digitRect.left()) {
-                uniteRect(danger, box);
+            const RectF beamBox = box.translated(beamOffset);
+            if (beamBox.left() <= digitRect.right() && beamBox.right() >= digitRect.left()) {
+                uniteRect(danger, beamBox);
                 united = true;
             }
         }
@@ -881,10 +901,99 @@ void uniteNeighborGraceBeamDanger(RectF& danger, const std::vector<Fingering*>& 
             if (beamIsCrossStaff(beam)) {
                 uniteVisibleBeamBoxesOverlappingX(danger, beam, system, digitRect.left(), digitRect.right());
             } else {
-                uniteSameStaffBeamBoxesOverlappingX(danger, beam, digitRect);
+                uniteSameStaffBeamBoxesOverlappingX(danger, beam, system, digitRect);
             }
         }
     }
+}
+
+// Collects the rendered stem, beam, and flag geometry near one fingering
+// group. These shapes need their own clearance model: the staff skyline can
+// keep a digit from overlapping them, but it does not guarantee the minimum
+// white space required around a fingering after the local prettify pass.
+std::vector<RectF> collectFingeringGroupStructuralObstacles(const std::vector<Fingering*>& fingerings,
+                                                           const System* system)
+{
+    std::vector<RectF> obstacles;
+    if (fingerings.empty() || !system) {
+        return obstacles;
+    }
+
+    const Note* note = fingerings.front()->note();
+    const Chord* ownerChord = note ? note->chord() : nullptr;
+    const RectF groupRect = fingeringGroupSystemRect(fingerings);
+    if (!ownerChord || groupRect.isNull()) {
+        return obstacles;
+    }
+
+    const staff_idx_t staffIdx = ownerChord->vStaffIdx();
+    const double spatium = fingerings.front()->spatium();
+    // Horizontal candidates are bounded to 3sp. Keep another 0.75sp so every
+    // candidate can be tested with the preferred 0.5sp structural clearance.
+    const double xLeft = groupRect.left() - 3.75 * spatium;
+    const double xRight = groupRect.right() + 3.75 * spatium;
+    auto addIfLocal = [&](const RectF& rect) {
+        if (!rect.isNull() && rect.right() >= xLeft && rect.left() <= xRight) {
+            obstacles.push_back(rect);
+        }
+    };
+
+    std::set<const Beam*> seenBeams;
+    for (const MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        const Measure* measure = toMeasure(mb);
+        for (const Segment& segment : measure->segments()) {
+            if (!segment.isChordRestType()) {
+                continue;
+            }
+            for (const EngravingItem* item : segment.elist()) {
+                if (!item || !item->isChord() || item->vStaffIdx() != staffIdx) {
+                    continue;
+                }
+
+                const Chord* chord = toChord(item);
+                const PointF chordOrigin = PointF(0.0, staffYInSystem(system, staffIdx))
+                                           + chord->pos() + segment.pos() + measure->pos();
+                const Stem* stem = chord->stem();
+                if (stem && stem->visible() && stem->ldata() && !stem->ldata()->isSkipDraw()) {
+                    addIfLocal(stem->ldata()->bbox().translated(chordOrigin + stem->pos() + stem->staffOffset()));
+                }
+
+                const Hook* hook = chord->hook();
+                if (hook && hook->visible() && hook->ldata() && !hook->ldata()->isSkipDraw()) {
+                    addIfLocal(hook->ldata()->bbox().translated(chordOrigin + hook->pos() + hook->staffOffset()));
+                }
+
+                const Beam* beam = chord->beam();
+                if (!beam || !beam->visible() || !beam->ldata() || beam->ldata()->isSkipDraw()
+                    || !seenBeams.insert(beam).second) {
+                    continue;
+                }
+
+                const PointF beamOffset = beamSystemOffset(beam, system);
+                bool addedSegment = false;
+                for (const BeamSegment* beamSegment : beam->beamSegments()) {
+                    // BeamSegment::shape() returns a temporary; keep it alive
+                    // while its element storage is inspected.
+                    const Shape beamSegmentShape = beamSegment->shape();
+                    for (const ShapeElement& box : beamSegmentShape.elements()) {
+                        const RectF rect = box.translated(beamOffset);
+                        if (!rect.isNull() && rect.right() >= xLeft && rect.left() <= xRight) {
+                            obstacles.push_back(rect);
+                            addedSegment = true;
+                        }
+                    }
+                }
+                if (!addedSegment) {
+                    addIfLocal(beam->ldata()->bbox().translated(beamOffset));
+                }
+            }
+        }
+    }
+
+    return obstacles;
 }
 
 RectF fingeringGroupNotationDangerRect(const std::vector<Fingering*>& fingerings, double xPad, bool includeSameStaffBeamsForGrace = false)
@@ -1134,6 +1243,7 @@ double requiredVerticalMoveFromStaff(const RectF& fingeringRect, double staffTop
 struct FingeringGroupContext {
     const std::vector<FingeringObstacle>* obstacles = nullptr;
     const System* system = nullptr;
+    std::vector<RectF> structuralObstacles;
     RectF noteDangerRect;
     RectF noteheadRect;
     Shape groupShape;
@@ -1222,6 +1332,8 @@ bool fingeringPlacementClearsOppositeSide(const RectF& groupRect, const GroupPla
     const RectF finalRect = groupRect.translated(placement.dx, ctx.above ? -placement.moveAway : placement.moveAway);
     return requiredVerticalMoveFromNotationRect(finalRect, ctx.noteDangerRect, ctx.above,
                                                 PM_FINGERING_NOTE_CLEARANCE_MIN * sp) <= 0.0
+           && requiredVerticalMoveFromStructuralObstacles(finalRect, ctx.structuralObstacles, ctx.above,
+                                                          PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0
            && requiredVerticalMoveFromMarkObstacles(finalRect, *ctx.obstacles, ctx.staffIdx, ctx.above,
                                                     PM_FINGERING_MARK_CLEARANCE_MIN * sp) <= 0.0
            && !slurAvoidanceForRect(finalRect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
@@ -1278,6 +1390,12 @@ bool manualFingeringGroupOverlapsNotation(const std::vector<Fingering*>& fingeri
 
     const RectF danger = fingeringGroupNotationDangerRect(fingerings, 0.2 * spatium, graceGroup);
     if (!danger.isNull() && rectsOverlap(rect, danger)) {
+        return true;
+    }
+    const std::vector<RectF> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
+    if (requiredVerticalMoveFromStructuralObstacles(rect, structuralObstacles,
+                                                    first->placement() == PlacementV::ABOVE,
+                                                    PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0) {
         return true;
     }
 
@@ -1392,6 +1510,8 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
         requiredVerticalMoveFromNotationRect(rect, ctx.noteDangerRect, ctx.above, PM_FINGERING_NOTE_CLEARANCE * sp),
         requiredVerticalMoveFromStaff(rect, ctx.staffTop, ctx.staffBottom, ctx.above, PM_FINGERING_STAFF_CLEARANCE * sp),
         requiredVerticalMoveFromMarkObstacles(rect, *ctx.obstacles, ctx.staffIdx, ctx.above, PM_FINGERING_MARK_CLEARANCE * sp),
+        requiredVerticalMoveFromStructuralObstacles(rect, ctx.structuralObstacles, ctx.above,
+                                                    PM_FINGERING_STRUCTURE_CLEARANCE * sp),
     });
 
     GroupPlacement placement;
@@ -1413,6 +1533,8 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
                                                     PM_FINGERING_STAFF_CLEARANCE * sp) <= 0.0
                    && requiredVerticalMoveFromMarkObstacles(candidate, *ctx.obstacles, ctx.staffIdx, ctx.above,
                                                             PM_FINGERING_MARK_CLEARANCE * sp) <= 0.0
+                   && requiredVerticalMoveFromStructuralObstacles(candidate, ctx.structuralObstacles, ctx.above,
+                                                                  PM_FINGERING_STRUCTURE_CLEARANCE * sp) <= 0.0
                    && !slurAvoidanceForRect(candidate, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).conflict;
         };
         if (fitsAt(0.0)) {
@@ -1463,13 +1585,15 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
                                                                     PM_FINGERING_STAFF_CLEARANCE_MIN * sp) <= 0.0;
             const bool clearOfMarks = requiredVerticalMoveFromMarkObstacles(tucked, *ctx.obstacles, ctx.staffIdx, ctx.above,
                                                                             PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0;
+            const bool clearOfStructure = requiredVerticalMoveFromStructuralObstacles(
+                tucked, ctx.structuralObstacles, ctx.above, PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0;
             const bool clearOfSlurs = !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
                                                             PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict;
             // Neighbor-assisted tucks may cross a one-way skyline descent
             // barrier, but the final rect still must not land on skyline
             // obstacles in this group's own x-window.
             const bool clearOfSkyline = fingeringGroupFinalTuckClearsSkyline(groupRect, tucked, ctx);
-            if (clearOfNotes && clearOfStaff && clearOfMarks && clearOfSlurs && clearOfSkyline) {
+            if (clearOfNotes && clearOfStaff && clearOfMarks && clearOfStructure && clearOfSlurs && clearOfSkyline) {
                 placement.moveAway = total - tuckMove;
                 placement.tucked = true;
                 placement.tuckAllowanceUsed = std::max(0.0, tuckMove - total);
@@ -1895,6 +2019,7 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
     FingeringGroupContext ctx;
     ctx.obstacles = &obstacles;
     ctx.system = system;
+    ctx.structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
     ctx.noteDangerRect = fingeringGroupNotationDangerRect(fingerings, 0.2 * spatium, chord->isGrace());
     ctx.noteheadRect = fingeringGroupNoteSystemRect(fingerings);
     ctx.groupShape = fingeringGroupSystemShape(fingerings);
@@ -2014,6 +2139,8 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
     const bool notationStillCollides
         = requiredVerticalMoveFromMarkObstacles(finalRect, obstacles, ctx.staffIdx, ctx.above,
                                                 PM_FINGERING_MARK_CLEARANCE_TUCK * spatium) > 0.0
+          || requiredVerticalMoveFromStructuralObstacles(finalRect, ctx.structuralObstacles, ctx.above,
+                                                         PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0
           || slurAvoidanceForRect(finalRect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, spatium,
                                   PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict;
     const bool noteStillCollides = requiredVerticalMoveFromNotationRect(finalRect, ctx.noteDangerRect, ctx.above,
@@ -2084,9 +2211,12 @@ bool rectClearsGraceFingeringAlignment(const RectF& baseRect, const RectF& rect,
                                        const System* system, double staffTop, bool above, double spatium)
 {
     const RectF danger = fingeringGroupNotationDangerRect(fingerings, 0.2 * spatium, false);
+    const std::vector<RectF> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
     if (requiredVerticalMoveFromNotationRect(rect, danger, above, PM_FINGERING_NOTE_CLEARANCE_MIN * spatium) > 0.0
         || requiredVerticalMoveFromMarkObstacles(rect, obstacles, staffIdx, above,
                                                  PM_FINGERING_MARK_CLEARANCE_MIN * spatium) > 0.0
+        || requiredVerticalMoveFromStructuralObstacles(rect, structuralObstacles, above,
+                                                       PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0
         || slurAvoidanceForRect(rect, obstacles, staffIdx, staffTop, above, spatium,
                                 PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict) {
         return false;
@@ -2572,12 +2702,12 @@ bool noteSideFingeringClearsNotation(const RectF& rect, const Fingering* fingeri
                 if (!visibleObstacleItem(beam) || !seenBeams.insert(beam).second) {
                     continue;
                 }
-                const double beamY = beamIsCrossStaff(beam) ? staffYInSystem(system, beam->staffIdx()) : 0.0;
+                const PointF beamOffset = beamSystemOffset(beam, system);
                 for (const BeamSegment* beamSegment : beam->beamSegments()) {
                     // BeamSegment::shape() returns a temporary; keep it alive for the loop.
                     const Shape beamSegmentShape = beamSegment->shape();
                     for (const ShapeElement& box : beamSegmentShape.elements()) {
-                        if (rectsOverlap(padded, box.translated(0.0, beamY))) {
+                        if (rectsOverlap(padded, box.translated(beamOffset))) {
                             return false;
                         }
                     }
