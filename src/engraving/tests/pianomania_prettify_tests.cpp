@@ -25,6 +25,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <vector>
 
@@ -701,6 +702,69 @@ mu::engraving::pm::PmPrettifyResult applyPrettifyCommand(Score* score)
 class Engraving_PianomaniaPrettifyTests : public ::testing::Test
 {
 };
+
+// Test value: Detects a slur crossing the upper accidental of an authored turn
+// when that accidental is stored as staff text on a time-tick segment.
+TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    applyPrettifyCommand(score);
+
+    StaffText* accidental = nullptr;
+    for (StaffText* text : collectStaffTexts(score)) {
+        if (text->plainText() == u"\u266d") {
+            accidental = text;
+            break;
+        }
+    }
+    ASSERT_TRUE(accidental);
+    const Segment* anchor = toSegment(accidental->parentItem());
+    const Measure* measure = anchor->measure();
+    const System* system = measure->system();
+    const RectF accidentalRect = accidental->ldata()->bbox().translated(
+        accidental->pos() + anchor->pos() + measure->pos()
+        + PointF(0.0, system->staff(accidental->vStaffIdx())->y()));
+    ASSERT_FALSE(accidentalRect.isNull());
+
+    SlurSegment* phrase = nullptr;
+    for (const auto& pair : score->spanner()) {
+        Spanner* spanner = pair.second;
+        if (!spanner || !spanner->isSlur()) {
+            continue;
+        }
+        Slur* slur = toSlur(spanner);
+        if (slur->up() && slur->staffIdx() == accidental->staffIdx()
+            && slur->tick() < accidental->tick() && slur->tick2() > accidental->tick()) {
+            for (SpannerSegment* segment : slur->spannerSegments()) {
+                if (segment->system() == system) {
+                    phrase = toSlurSegment(segment);
+                    break;
+                }
+            }
+        }
+    }
+    ASSERT_TRUE(phrase);
+    std::array<PointF, 4> points;
+    for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+        points[i] = phrase->ups(PRETTIFY_GRIPS[i]).pos() + phrase->pos()
+                    + PointF(0.0, system->staff(phrase->vStaffIdx())->y());
+    }
+    double minimumClearance = std::numeric_limits<double>::infinity();
+    for (int i = 0; i <= 2000; ++i) {
+        const double t = static_cast<double>(i) / 2000.0;
+        const double u = 1.0 - t;
+        const PointF point = points[0] * (u * u * u) + points[1] * (3.0 * u * u * t)
+                             + points[2] * (3.0 * u * t * t) + points[3] * (t * t * t);
+        if (point.x() >= accidentalRect.left() && point.x() <= accidentalRect.right()) {
+            minimumClearance = std::min(minimumClearance, accidentalRect.top() - point.y());
+        }
+    }
+    ASSERT_TRUE(std::isfinite(minimumClearance));
+    EXPECT_GE(minimumClearance, 0.1 * accidental->spatium());
+    delete score;
+}
 
 TEST_F(Engraving_PianomaniaPrettifyTests, prettifyIsIdempotentAndUndoable)
 {

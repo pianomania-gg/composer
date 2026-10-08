@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "systemlayout.h"
+#include "accidentaltext.h"
 
 #include "realfn.h"
 
@@ -4210,6 +4211,14 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
 
     collectSpannersToLayout(elementsToLayout, ctx);
 
+    // Single accidental glyphs are notation obstacles. Lay them out before
+    // slurs and keep their placement stable after the slur solver clears them.
+    for (StaffText* text : elementsToLayout.staffText) {
+        if (isAccidentalStaffText(text)) {
+            TLayout::layoutItem(text, ctx);
+        }
+    }
+
     processLines(system, ctx, elementsToLayout.slurs);
 
     for (Spanner* sp : elementsToLayout.slurs) {
@@ -4286,7 +4295,9 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
     }
 
     for (StaffText* st : elementsToLayout.staffText) {
-        TLayout::layoutItem(st, ctx);
+        if (!isAccidentalStaffText(st)) {
+            TLayout::layoutItem(st, ctx);
+        }
     }
 
     for (InstrumentChange* ic : elementsToLayout.instrChanges) {

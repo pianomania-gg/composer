@@ -46,6 +46,7 @@
 #include "editing/editchord.h"
 
 #include "tlayout.h"
+#include "accidentaltext.h"
 #include "chordlayout.h"
 #include "stemlayout.h"
 #include "tremololayout.h"
@@ -1789,14 +1790,17 @@ Shape SlurTieLayout::getSegmentShapes(SlurSegment* slurSeg, ChordRest* startCR, 
         return segShapes;
     }
 
-    for (Segment* seg = startSeg; seg && (seg->isBefore(endSeg) || seg == endSeg); seg = seg->next1enabled()) {
-        // next1enabled() walks across the system break; the next system's
+    for (Segment* seg = startSeg; seg && (seg->isBefore(endSeg) || seg == endSeg); seg = seg->next1()) {
+        // Segment traversal walks across the system break; the next system's
         // header segments share the boundary tick but their positions are in
         // the next system's frame, so they must not become obstacles here.
         if (seg->measure()->system() && seg->measure()->system() != slurSeg->system()) {
             break;
         }
-        if (seg->isType(SegmentType::BarLineType) || seg->isBreathType() || seg->hasTimeSigAboveStaves() || seg->isTimeTickType()) {
+        if (!seg->enabled() && !seg->isTimeTickType()) {
+            continue;
+        }
+        if (seg->isType(SegmentType::BarLineType) || seg->isBreathType() || seg->hasTimeSigAboveStaves()) {
             continue;
         }
         segShapes.add(getSegmentShape(slurSeg, seg, startCR, endCR, localSingleSystemCrossStaff));
@@ -1812,6 +1816,16 @@ Shape SlurTieLayout::getSegmentShape(SlurSegment* slurSeg, Segment* seg, ChordRe
     staff_idx_t startStaffIdx = startCR->staffIdx();
     staff_idx_t endStaffIdx = endCR->staffIdx();
     Shape segShape = seg->staffShape(startStaffIdx).translated(seg->pos() + seg->measure()->pos());
+
+    // Ornament accidentals can be authored as separate staff-text annotations,
+    // including on a time-tick segment. Text is absent from the staff shape.
+    for (const EngravingItem* annotation : seg->annotations()) {
+        if (!isAccidentalStaffText(annotation) || !annotation->visible()
+            || !annotation->addToSkyline() || annotation->vStaffIdx() != startStaffIdx) {
+            continue;
+        }
+        segShape.add(annotation->ldata()->bbox().translated(annotation->pos() + seg->pos() + seg->measure()->pos()), annotation);
+    }
 
     bool crossStaffSlur = slur->isCrossStaff() && (localSingleSystemCrossStaff || seg != startCR->segment());
 
@@ -1896,6 +1910,11 @@ Shape SlurTieLayout::getSegmentShape(SlurSegment* slurSeg, Segment* seg, ChordRe
             return false;
         }
 
+        // Single accidental annotations are notation obstacles, including the
+        // upper/lower accidentals authored around an ornament as staff text.
+        if (isAccidentalStaffText(item)) {
+            return false;
+        }
         // Its own start/end CR or items belonging to them, text/fingering, ledger lines, articulation on endCR
         if (item == startCR || parent == startCR || item == endCR || parent == endCR || item->isTextBase()
             || item->isFingering() || item->isLedgerLine() || (item->isArticulationFamily() && parent == endCR) || item->isBend()
