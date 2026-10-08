@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<museScore version="4.70">
+  <Score>
+    <Division>480</Division>
+    <Style><spatium>1.74978</spatium><fingeringMinDistance>0.0</fingeringMinDistance></Style>
+    <Part id="1">
+      <Staff id="1">
+        <StaffType group="pitched"><name>stdNormal</name></StaffType>
+        <bracket type="1" span="2" col="0" visible="1"/>
+        <barLineSpan>1</barLineSpan>
+      </Staff>
+      <Staff id="2"><StaffType group="pitched"><name>stdNormal</name></StaffType></Staff>
+      <Instrument id="piano"><instrumentId>keyboard.piano</instrumentId><Channel/></Instrument>
+    </Part>
+    <Staff id="1">
+      <Measure>
+        <voice>
+          <Clef><concertClefType>G</concertClefType><transposingClefType>G</transposingClefType><isHeader>1</isHeader></Clef>
+          <TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig>
+          <Rest><durationType>measure</durationType><duration>4/4</duration></Rest>
+        </voice>
+      </Measure>
+    </Staff>
+    <Staff id="2">
+      <Measure>
+        <voice>
+          <Clef><concertClefType>F</concertClefType><transposingClefType>F</transposingClefType><isHeader>1</isHeader></Clef>
+          <TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig>
+          <Beam><StemDirection>down</StemDirection></Beam>
+          <Chord>
+            <durationType>16th</durationType><StemDirection>down</StemDirection>
+            <Note>
+              <Fingering><text>5</text><placement>above</placement></Fingering>
+              <pitch>48</pitch><tpc>14</tpc><pianomaniaHand>2</pianomaniaHand>
+            </Note>
+          </Chord>
+          <Chord>
+            <durationType>16th</durationType><StemDirection>down</StemDirection>
+            <Note>
+              <Fingering><text>4</text><placement>above</placement></Fingering>
+              <pitch>50</pitch><tpc>16</tpc><pianomaniaHand>2</pianomaniaHand>
+            </Note>
+          </Chord>
+          <Chord>
+            <durationType>16th</durationType><StemDirection>down</StemDirection>
+            <Note>
+              <Fingering><text>3</text><placement>above</placement></Fingering>
+              <pitch>52</pitch><tpc>18</tpc><pianomaniaHand>2</pianomaniaHand>
+            </Note>
+          </Chord>
+          <Chord>
+            <durationType>16th</durationType><StemDirection>down</StemDirection>
+            <Note>
+              <Fingering><text>2</text><placement>above</placement></Fingering>
+              <pitch>53</pitch><tpc>13</tpc><pianomaniaHand>2</pianomaniaHand>
+            </Note>
+          </Chord>
+          <Rest><durationType>half</durationType><dots>1</dots></Rest>
+        </voice>
+      </Measure>
+    </Staff>
+  </Score>
+</museScore>
