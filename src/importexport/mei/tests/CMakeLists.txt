@@ -46,7 +46,7 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_omits_invisible_note_and_idx:"
     "Mei_Tests.mei_export_rehearsal_mark_on_hidden_rest:"
     "Mei_Tests.mei_pianomania_grace_same_pitch_indices:"
-    "Mei_Tests.pianomania_text_directive_anchors_first_glyph_baseline:"
+    "Mei_Tests.pianomania_text_directive_exports_text_box_centre:"
     "Mei_Tests.mei_export_laissez_vibrer_keeps_pm_geometry:"
     "Mei_Tests.mei_export_final_barline_pedal_keeps_rendered_geometry_without_endid:"
     "Mei_Tests.mei_export_connected_pedal_includes_owned_rendered_segments:"
