@@ -54,6 +54,7 @@
 #include "engraving/dom/pedal.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/segment.h"
+#include "engraving/dom/slur.h"
 #include "engraving/dom/spanner.h"
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stafftext.h"
@@ -975,6 +976,17 @@ size_t countSegments(const std::string& segments)
 {
     return segments.empty() ? 0u : static_cast<size_t>(std::count(segments.begin(), segments.end(), ';')) + 1u;
 }
+
+std::vector<double> parseCoordinates(const std::string& value)
+{
+    std::vector<double> coordinates;
+    std::stringstream stream(value);
+    std::string coordinate;
+    while (std::getline(stream, coordinate, ',')) {
+        coordinates.push_back(std::strtod(coordinate.c_str(), nullptr));
+    }
+    return coordinates;
+}
 } // namespace
 
 TEST_F(Mei_Tests, mei_export_omits_spanner_segments_without_a_score_page) {
@@ -1050,6 +1062,165 @@ TEST_F(Mei_Tests, mei_export_omits_spanner_segments_without_a_score_page) {
                   lastSegment.substr(lastSegment.find(',', lastSegment.find(',') + 1))) << tags[0];
         delete score;
     }
+}
+
+TEST_F(Mei_Tests, mei_export_slur_uses_only_owned_endpoint_system_segments) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"slur-01.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Slur* slur = nullptr;
+    std::vector<Spanner*> otherSlurs;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isSlur()) {
+            continue;
+        }
+        Slur* candidateSlur = toSlur(candidate);
+        const ChordRest* start = candidateSlur->startCR();
+        const ChordRest* end = candidateSlur->endCR();
+        const System* startSystem = start && start->measure() ? start->measure()->system() : nullptr;
+        const System* endSystem = end && end->measure() ? end->measure()->system() : nullptr;
+        if (!slur && startSystem && startSystem == endSystem && candidateSlur->nsegments() == 1) {
+            slur = candidateSlur;
+        } else {
+            otherSlurs.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(slur);
+    for (Spanner* other : otherSlurs) {
+        score->removeSpanner(other);
+    }
+
+    const ChordRest* endAnchor = slur->endCR();
+    ASSERT_TRUE(endAnchor);
+    System* endpointSystem = endAnchor->measure()->system();
+    ASSERT_TRUE(endpointSystem);
+    Page* endpointPage = endpointSystem->page();
+    ASSERT_TRUE(endpointPage);
+    const size_t legitimateSegmentCount = slur->nsegments();
+
+    // A recycled System can retain a real Page pointer after Page::systems()
+    // has stopped owning it.
+    System* recycledSystem = Factory::createSystem(endpointPage);
+    recycledSystem->moveToPage(endpointPage);
+    ASSERT_EQ(recycledSystem->page(), endpointPage);
+    ASSERT_EQ(std::find(endpointPage->systems().cbegin(), endpointPage->systems().cend(), recycledSystem),
+              endpointPage->systems().cend());
+    SlurSegment* recycledSegment = new SlurSegment(recycledSystem);
+    recycledSegment->setSystem(recycledSystem);
+    recycledSegment->setPos(PointF(500.0, 500.0));
+    slur->add(recycledSegment);
+
+    // This initialized System is genuinely page-owned, but follows both
+    // musical endpoints and therefore cannot own part of this slur.
+    System* outsideSystem = Factory::createSystem(endpointPage);
+    outsideSystem->adjustStavesNumber(score->nstaves());
+    endpointPage->appendSystem(outsideSystem);
+    ASSERT_EQ(outsideSystem->page(), endpointPage);
+    SlurSegment* outsideSegment = new SlurSegment(outsideSystem);
+    outsideSegment->setSystem(outsideSystem);
+    outsideSegment->setPos(PointF(600.0, 600.0));
+    slur->add(outsideSegment);
+    ASSERT_EQ(slur->nsegments(), legitimateSegmentCount + 2u);
+
+    const String outputName = u"pianomania-slur-owned-endpoint-systems.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const std::vector<std::string> tags =
+        collectStartTags(readTestTextFile(outputName), "slur");
+    ASSERT_EQ(tags.size(), 1u);
+    const std::optional<std::string> bezier = xmlAttributeValue(tags.front(), "pm:bezier");
+    const std::optional<std::string> extent = xmlAttributeValue(tags.front(), "pm:x1y1x2y2");
+    ASSERT_TRUE(bezier.has_value()) << tags.front();
+    ASSERT_TRUE(extent.has_value()) << tags.front();
+    EXPECT_EQ(countSegments(*bezier), legitimateSegmentCount) << tags.front();
+
+    const size_t lastSeparator = bezier->rfind(';');
+    const std::string firstCurve = bezier->substr(0, bezier->find(';'));
+    const std::string lastCurve =
+        lastSeparator == std::string::npos ? *bezier : bezier->substr(lastSeparator + 1);
+    const std::vector<double> firstCoordinates = parseCoordinates(firstCurve);
+    const std::vector<double> lastCoordinates = parseCoordinates(lastCurve);
+    const std::vector<double> extentCoordinates = parseCoordinates(*extent);
+    ASSERT_EQ(firstCoordinates.size(), 8u);
+    ASSERT_EQ(lastCoordinates.size(), 8u);
+    ASSERT_EQ(extentCoordinates.size(), 4u);
+    EXPECT_NEAR(extentCoordinates[0], firstCoordinates[0], 0.001);
+    EXPECT_NEAR(extentCoordinates[1], firstCoordinates[1], 0.001);
+    EXPECT_NEAR(extentCoordinates[2], lastCoordinates[6], 0.001);
+    EXPECT_NEAR(extentCoordinates[3], lastCoordinates[7], 0.001);
+    delete recycledSystem;
+    delete score;
+}
+
+TEST_F(Mei_Tests, mei_export_keeps_legitimate_multi_system_slur_segments) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"slur-02.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Slur* slur = nullptr;
+    std::vector<Spanner*> otherSlurs;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isSlur()) {
+            continue;
+        }
+        Slur* candidateSlur = toSlur(candidate);
+        const ChordRest* start = candidateSlur->startCR();
+        const ChordRest* end = candidateSlur->endCR();
+        const System* startSystem = start && start->measure() ? start->measure()->system() : nullptr;
+        const System* endSystem = end && end->measure() ? end->measure()->system() : nullptr;
+        if (!slur && startSystem && endSystem && startSystem != endSystem
+            && candidateSlur->nsegments() >= 2) {
+            slur = candidateSlur;
+        } else {
+            otherSlurs.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(slur);
+    for (Spanner* other : otherSlurs) {
+        score->removeSpanner(other);
+    }
+    const size_t segmentCount = slur->nsegments();
+
+    const String outputName = u"pianomania-legitimate-multi-system-slur.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const std::vector<std::string> tags =
+        collectStartTags(readTestTextFile(outputName), "slur");
+    ASSERT_EQ(tags.size(), 1u);
+    const std::optional<std::string> bezier = xmlAttributeValue(tags.front(), "pm:bezier");
+    const std::optional<std::string> extent = xmlAttributeValue(tags.front(), "pm:x1y1x2y2");
+    ASSERT_TRUE(bezier.has_value()) << tags.front();
+    ASSERT_TRUE(extent.has_value()) << tags.front();
+    EXPECT_EQ(countSegments(*bezier), segmentCount) << tags.front();
+
+    const size_t lastSeparator = bezier->rfind(';');
+    const std::string firstCurve = bezier->substr(0, bezier->find(';'));
+    const std::string lastCurve =
+        lastSeparator == std::string::npos ? *bezier : bezier->substr(lastSeparator + 1);
+    const std::vector<double> firstCoordinates = parseCoordinates(firstCurve);
+    const std::vector<double> lastCoordinates = parseCoordinates(lastCurve);
+    const std::vector<double> extentCoordinates = parseCoordinates(*extent);
+    ASSERT_EQ(firstCoordinates.size(), 8u);
+    ASSERT_EQ(lastCoordinates.size(), 8u);
+    ASSERT_EQ(extentCoordinates.size(), 4u);
+    EXPECT_NEAR(extentCoordinates[0], firstCoordinates[0], 0.001);
+    EXPECT_NEAR(extentCoordinates[1], firstCoordinates[1], 0.001);
+    EXPECT_NEAR(extentCoordinates[2], lastCoordinates[6], 0.001);
+    EXPECT_NEAR(extentCoordinates[3], lastCoordinates[7], 0.001);
+    delete score;
 }
 
 TEST_F(Mei_Tests, mei_export_hairpins_ending_without_onset_bind_end_element) {

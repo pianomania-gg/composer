@@ -5024,6 +5024,89 @@ MeiExporter::collectTieContextNotes(const Tie *tie) const {
  * Write a slur.
  */
 
+struct PlacedSlurSegment {
+  const SlurSegment *segment = nullptr;
+  size_t systemIndex = 0;
+};
+
+static std::optional<size_t> placedScoreSystemIndex(const Score *score,
+                                                    const System *system) {
+  if (!score || !system) {
+    return std::nullopt;
+  }
+
+  size_t systemIndex = 0;
+  for (const Page *page : score->pages()) {
+    for (const System *pageSystem : page->systems()) {
+      if (pageSystem == system) {
+        // Page::systems is the ownership source. A stale parent Page pointer
+        // cannot make coordinates from a recycled System valid.
+        return system->page() == page ? std::optional<size_t>(systemIndex)
+                                     : std::nullopt;
+      }
+      ++systemIndex;
+    }
+  }
+  return std::nullopt;
+}
+
+static std::vector<const SlurSegment *>
+placedSlurSegmentsInEndpointRange(const Score *score, const Slur *slur) {
+  if (!score || !slur) {
+    return {};
+  }
+
+  Spanner *mutableSlur = const_cast<Slur *>(slur);
+  const ChordRest *startAnchor =
+      findExportedSpannerEndpointAnchor(mutableSlur, true);
+  const ChordRest *endAnchor =
+      findExportedSpannerEndpointAnchor(mutableSlur, false);
+  const System *startSystem =
+      startAnchor && startAnchor->measure() ? startAnchor->measure()->system()
+                                            : nullptr;
+  const System *endSystem =
+      endAnchor && endAnchor->measure() ? endAnchor->measure()->system()
+                                        : nullptr;
+  const std::optional<size_t> startIndex =
+      placedScoreSystemIndex(score, startSystem);
+  const std::optional<size_t> endIndex =
+      placedScoreSystemIndex(score, endSystem);
+  if (!startIndex.has_value() || !endIndex.has_value() ||
+      *startIndex > *endIndex) {
+    LOGE() << "MeiExporter::writeSlur cannot resolve the slur endpoint system range";
+    return {};
+  }
+
+  std::vector<PlacedSlurSegment> accepted;
+  for (size_t i = 0; i < slur->nsegments(); ++i) {
+    const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
+    const std::optional<size_t> segmentIndex =
+        placedScoreSystemIndex(score, segment ? segment->system() : nullptr);
+    if (!segmentIndex.has_value()) {
+      LOGW() << "MeiExporter::writeSlur excludes a slur segment without an owning score system";
+      continue;
+    }
+    if (*segmentIndex < *startIndex || *segmentIndex > *endIndex) {
+      LOGW() << "MeiExporter::writeSlur excludes a slur segment outside its endpoint system range";
+      continue;
+    }
+    accepted.push_back({segment, *segmentIndex});
+  }
+
+  std::stable_sort(accepted.begin(), accepted.end(),
+                   [](const PlacedSlurSegment &left,
+                      const PlacedSlurSegment &right) {
+                     return left.systemIndex < right.systemIndex;
+                   });
+
+  std::vector<const SlurSegment *> segments;
+  segments.reserve(accepted.size());
+  for (const PlacedSlurSegment &entry : accepted) {
+    segments.push_back(entry.segment);
+  }
+  return segments;
+}
+
 bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
   IF_ASSERT_FAILED(slur) { return false; }
 
@@ -5050,41 +5133,10 @@ bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
 
   std::vector<const SlurSegment *> exportSegments;
   if (!slur->segmentsEmpty()) {
-    const ChordRest *startCR = dynamic_cast<const ChordRest *>(slur->startElement());
-    const ChordRest *endCR = dynamic_cast<const ChordRest *>(slur->endElement());
-    const Page *startPage = startCR && startCR->measure() && startCR->measure()->system()
-                                ? startCR->measure()->system()->page()
-                                : nullptr;
-    const Page *endPage = endCR && endCR->measure() && endCR->measure()->system()
-                              ? endCR->measure()->system()->page()
-                              : nullptr;
-    const std::vector<Page *> &scorePages = m_score->pages();
-    auto startPageIt = std::find(scorePages.cbegin(), scorePages.cend(), startPage);
-    auto endPageIt = std::find(scorePages.cbegin(), scorePages.cend(), endPage);
-    if (!startPage || !endPage || startPageIt == scorePages.cend()
-        || endPageIt == scorePages.cend() || startPageIt > endPageIt) {
-      LOGE() << "MeiExporter::writeSlur cannot resolve the slur endpoint page range";
-      return false;
-    }
-
-    for (size_t i = 0; i < slur->nsegments(); ++i) {
-      const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
-      const System *segmentSystem = segment ? segment->system() : nullptr;
-      const Page *segmentPage = segmentSystem ? segmentSystem->page() : nullptr;
-      auto segmentPageIt = std::find(scorePages.cbegin(), scorePages.cend(), segmentPage);
-      if (!segmentPage || segmentPageIt == scorePages.cend()) {
-        LOGW() << "MeiExporter::writeSlur excludes a slur segment without an owning score page";
-        continue;
-      }
-      if (segmentPageIt < startPageIt || segmentPageIt > endPageIt) {
-        LOGW() << "MeiExporter::writeSlur excludes a slur segment outside its endpoint page range";
-        continue;
-      }
-      exportSegments.push_back(segment);
-    }
+    exportSegments = placedSlurSegmentsInEndpointRange(m_score, slur);
 
     if (exportSegments.empty()) {
-      LOGE() << "MeiExporter::writeSlur found no segments inside the slur endpoint page range";
+      LOGE() << "MeiExporter::writeSlur found no segments inside the slur endpoint system range";
       return false;
     }
   }
