@@ -1207,12 +1207,17 @@ void ChordLayout::layoutArticulations3(Chord* item, Slur* slur, LayoutContext& c
         Shape sShape = ss->shape().translate(ss->pos() + slurStaffPos);
         sShape.removeTypes({ ElementType::HAMMER_ON_PULL_OFF_TEXT });
         double minDist = ctx.conf().styleMM(Sid::articulationMinDistance);
+        // A stem-side slur takes off at the stem tip, right where the tip of a
+        // notehead-centered accent ends: count shapes that come within the
+        // minimum distance sideways too, or the two touch end to end.
+        const double horizontalMargin = minDist;
         bool slurBelowArticulation = a->up() && !(ss->vStaffIdx() < item->vStaffIdx());
-        double vertClearance = slurBelowArticulation ? aShape.verticalClearance(sShape) : sShape.verticalClearance(aShape);
+        double vertClearance = slurBelowArticulation ? aShape.verticalClearance(sShape, horizontalMargin)
+                               : sShape.verticalClearance(aShape, horizontalMargin);
         if (vertClearance < minDist) {
             minDist += slur->up()
-                       ? std::max(aShape.minVerticalDistance(sShape), 0.0)
-                       : std::max(sShape.minVerticalDistance(aShape), 0.0);
+                       ? std::max(aShape.minVerticalDistance(sShape, horizontalMargin), 0.0)
+                       : std::max(sShape.minVerticalDistance(aShape, horizontalMargin), 0.0);
             minDist *= slur->up() ? -1 : 1;
             for (auto iter2 = iter; iter2 != item->articulations().end(); ++iter2) {
                 Articulation* aa = *iter2;

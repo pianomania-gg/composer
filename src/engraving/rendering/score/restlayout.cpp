@@ -22,6 +22,10 @@
 
 #include "restlayout.h"
 
+#include <algorithm>
+#include <array>
+#include <optional>
+
 #include "beamlayout.h"
 #include "chordlayout.h"
 #include "tlayout.h"
@@ -33,6 +37,54 @@ using namespace muse;
 using namespace mu::engraving;
 
 namespace mu::engraving::rendering::score {
+// A rest stacks with its own voice. With exactly two voices in the staff, the
+// stem direction every chord of the rest's voice is drawn with says whether it
+// is the upper or the lower part, even if the voice index disagrees (e.g. the
+// lower part entered in voice 1 with stems forced down). Without such evidence
+// (more voices, no chords, mixed stems) the voice index decides, as before.
+static std::optional<bool> restVoiceDrawnUp(const Rest* rest)
+{
+    const Measure* measure = rest->measure();
+    if (!measure || rest->staffMove() != 0) {
+        return std::nullopt;
+    }
+
+    const track_idx_t firstTrack = staff2track(rest->staffIdx());
+    std::array<bool, VOICES> voiceHasContent {};
+    for (const Segment* segment = measure->first(SegmentType::ChordRest); segment;
+         segment = segment->next(SegmentType::ChordRest)) {
+        for (voice_idx_t voice = 0; voice < VOICES; ++voice) {
+            const EngravingItem* item = segment->element(firstTrack + voice);
+            if (item && item->visible() && !(item->isRest() && toRest(item)->isGap())) {
+                voiceHasContent[voice] = true;
+            }
+        }
+    }
+    if (std::count(voiceHasContent.begin(), voiceHasContent.end(), true) != 2) {
+        return std::nullopt;
+    }
+
+    bool sawUp = false;
+    bool sawDown = false;
+    for (const Segment* segment = measure->first(SegmentType::ChordRest); segment;
+         segment = segment->next(SegmentType::ChordRest)) {
+        const EngravingItem* item = segment->element(rest->track());
+        if (!item || !item->isChord() || toChord(item)->staffMove() != 0) {
+            continue;
+        }
+        if (toChord(item)->up()) {
+            sawUp = true;
+        } else {
+            sawDown = true;
+        }
+    }
+
+    if (sawUp == sawDown) {
+        return std::nullopt;
+    }
+    return sawUp;
+}
+
 void RestLayout::layoutRest(const Rest* item, Rest::LayoutData* ldata, const LayoutContext& ctx)
 {
     if (item->isGap()) {
@@ -217,7 +269,9 @@ void RestLayout::resolveRestVSChord(std::vector<Rest*>& rests, std::vector<Chord
                 continue;
             }
 
-            bool restAbove = rest->voice() < chord->voice() || (chord->slash() && !(rest->voice() % 2));
+            const std::optional<bool> restUp = restVoiceDrawnUp(rest);
+            bool restAbove = restUp && *restUp != chord->up() ? *restUp : rest->voice() < chord->voice();
+            restAbove = restAbove || (chord->slash() && !(rest->voice() % 2));
             int upSign = restAbove ? -1 : 1;
             double restYOffset = rest->offset().y();
             bool ignoreYOffset = (restAbove && restYOffset > 0) || (!restAbove && restYOffset < 0);
@@ -314,7 +368,9 @@ void RestLayout::resolveRestVSRest(std::vector<Rest*>& rests, const Staff* staff
         RestVerticalClearance& rest2Clearance = rest2->verticalClearance();
 
         double clearance;
-        bool firstAbove = rest1->voice() < rest2->voice();
+        const std::optional<bool> rest1Up = restVoiceDrawnUp(rest1);
+        const std::optional<bool> rest2Up = restVoiceDrawnUp(rest2);
+        bool firstAbove = rest1Up && rest2Up && *rest1Up != *rest2Up ? *rest1Up : rest1->voice() < rest2->voice();
         if (firstAbove) {
             clearance = shape1.verticalClearance(shape2);
         } else {
@@ -422,7 +478,7 @@ void RestLayout::alignRests(const System* system, LayoutContext& ctx)
         }
 
         Rest* firstRest = group.front();
-        const bool alignUpwards = firstRest->voice() == 0;
+        const bool alignUpwards = restVoiceDrawnUp(firstRest).value_or(firstRest->voice() == 0);
         const double lineDist = firstRest->staff()->lineDistance(firstRest->tick()) * firstRest->spatium();
 
         double yOuterRest = alignUpwards ? DBL_MAX : -DBL_MAX;
@@ -634,7 +690,7 @@ void RestLayout::checkFullMeasureRestCollisions(const System* system, LayoutCont
             const double minHorizontalDistance = 4 * spatium;
             const double minVertClearance = 0.75 * spatium;
 
-            bool alignAbove = fullMeasureRest->voice() == 0;
+            bool alignAbove = restVoiceDrawnUp(fullMeasureRest).value_or(fullMeasureRest->voice() == 0);
             double verticalClearance = alignAbove ? restShape.verticalClearance(measureShape, minHorizontalDistance)
                                        : measureShape.verticalClearance(restShape, minHorizontalDistance);
 
@@ -756,7 +812,7 @@ int RestLayout::computeVoiceOffset(const Rest* item, Rest::LayoutData* ldata)
         return 0;
     }
 
-    bool up = item->voice() == 0 || item->voice() == 2;
+    bool up = restVoiceDrawnUp(item).value_or(item->voice() == 0 || item->voice() == 2);
     int upSign = up ? -1 : 1;
     int voiceLineOffset = item->style().styleB(Sid::multiVoiceRestTwoSpaceOffset) ? 2 : 1;
 

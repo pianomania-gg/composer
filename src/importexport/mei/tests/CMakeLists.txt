@@ -46,8 +46,9 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_omits_invisible_note_and_idx:"
     "Mei_Tests.mei_export_rehearsal_mark_on_hidden_rest:"
     "Mei_Tests.mei_pianomania_grace_same_pitch_indices:"
+    "Mei_Tests.pianomania_text_directive_exports_text_box_centre:"
     "Mei_Tests.mei_export_laissez_vibrer_keeps_pm_geometry:"
-    "Mei_Tests.mei_export_unresolved_pedal_endpoint_omits_pm_geometry:"
+    "Mei_Tests.mei_export_final_barline_pedal_keeps_rendered_geometry_without_endid:"
     "Mei_Tests.mei_export_connected_pedal_includes_owned_rendered_segments:"
     "Mei_Tests.mei_export_pianomania_rubato_zone:"
     "Mei_Tests.mei_rubato_overlay_preserves_layout_and_export_when_hidden:"
@@ -78,5 +79,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*25 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*26 tests"
 )
