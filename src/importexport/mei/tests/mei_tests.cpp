@@ -1941,7 +1941,10 @@ TEST_F(Mei_Tests, mei_pedal_01) {
     meiReadTest("pedal-01");
 }
 
-TEST_F(Mei_Tests, mei_export_unresolved_pedal_endpoint_omits_pm_geometry) {
+TEST_F(Mei_Tests, mei_export_final_barline_pedal_keeps_rendered_geometry_without_endid) {
+    // The last pedal runs to the final barline, so it has no end ChordRest.
+    // It must not invent an endid, but its page-owned rendered segments are
+    // real and must reach Practice.
     auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
         MeiWriter meiWriter;
         return meiWriter.writeScore(score, path);
@@ -1960,22 +1963,17 @@ TEST_F(Mei_Tests, mei_export_unresolved_pedal_endpoint_omits_pm_geometry) {
 
     ASSERT_GT(pedalTags.size(), 0u);
 
-    size_t unresolvedTagCount = 0;
-    size_t geometryTagCount = 0;
+    size_t openEndedTagCount = 0;
     for (const std::string& tag : pedalTags) {
-        if (xmlAttributeValue(tag, "pm:x1y1x2y2").has_value()) {
-            geometryTagCount++;
-            continue;
-        }
-
-        unresolvedTagCount++;
         EXPECT_TRUE(xmlAttributeValue(tag, "startid").has_value());
-        EXPECT_FALSE(xmlAttributeValue(tag, "endid").has_value());
-        EXPECT_FALSE(xmlAttributeValue(tag, "pm:pedal-lines").has_value());
+        EXPECT_TRUE(xmlAttributeValue(tag, "pm:x1y1x2y2").has_value());
+        EXPECT_TRUE(xmlAttributeValue(tag, "pm:pedal-lines").has_value());
+        if (!xmlAttributeValue(tag, "endid").has_value()) {
+            openEndedTagCount++;
+        }
     }
 
-    EXPECT_GT(unresolvedTagCount, 0u);
-    EXPECT_GT(geometryTagCount, 0u);
+    EXPECT_GT(openEndedTagCount, 0u);
 }
 
 TEST_F(Mei_Tests, mei_export_connected_pedal_includes_owned_rendered_segments) {
@@ -2075,6 +2073,46 @@ TEST_F(Mei_Tests, mei_export_connected_pedal_includes_owned_rendered_segments) {
         }
         EXPECT_TRUE(found);
     }
+}
+
+TEST_F(Mei_Tests, pianomania_text_directive_anchors_first_glyph_baseline) {
+    // Practice draws a plain text directive with its first glyph's
+    // baseline-left at pm:xy, so the export must write that point, not the
+    // centre of the text's box.
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"pianomania-grace-same-pitch-index.mscx", false);
+    ASSERT_TRUE(score);
+
+    std::string meiText;
+    ASSERT_TRUE(pmWriteMeiToString(score, true, meiText));
+
+    const TextBase* dolce = nullptr;
+    for (Segment* segment = score->firstMeasure()->first(); segment && !dolce; segment = segment->next()) {
+        for (EngravingItem* item : segment->annotations()) {
+            if (item->isTextBase() && toTextBase(item)->plainText() == u"dolce") {
+                dolce = toTextBase(item);
+            }
+        }
+    }
+    ASSERT_TRUE(dolce);
+
+    const size_t textPos = meiText.find(">dolce</dir>");
+    ASSERT_NE(textPos, std::string::npos);
+    const size_t tagPos = meiText.rfind("<dir ", textPos);
+    ASSERT_NE(tagPos, std::string::npos);
+    const std::optional<std::string> xy = xmlAttributeValue(meiText.substr(tagPos, textPos + 1 - tagPos), "pm:xy");
+    ASSERT_TRUE(xy.has_value());
+    const size_t comma = xy->find(',');
+    ASSERT_NE(comma, std::string::npos);
+    const double xPx = std::stod(xy->substr(0, comma)) * DPI;
+    const double yPx = (score->style().styleD(Sid::pageHeight) - std::stod(xy->substr(comma + 1))) * DPI;
+
+    const RectF box = dolce->pageBoundingRect();
+    const double tolerance = 0.25 * dolce->spatium();
+    EXPECT_NEAR(xPx, box.left(), tolerance);
+    EXPECT_NEAR(yPx, box.bottom(), tolerance);
+    EXPECT_GT(yPx, box.center().y());
+
+    delete score;
 }
 
 TEST_F(Mei_Tests, pianomania_graces_do_not_duplicate_parent_segment_controls) {

@@ -33,6 +33,37 @@ using namespace muse;
 using namespace mu::engraving;
 
 namespace mu::engraving::rendering::score {
+// A rest stacks with its own voice. When every chord of that voice in the
+// measure is drawn with the same stem direction, that direction says whether
+// the voice is the upper or the lower one, even if the voice index disagrees
+// (e.g. the lower part entered in voice 1 with stems forced down). Otherwise
+// the voice index decides, as before.
+static bool restBelongsToUpVoice(const Rest* rest)
+{
+    const bool upByVoiceIndex = rest->voice() == 0 || rest->voice() == 2;
+    const Measure* measure = rest->measure();
+    if (!measure || rest->staffMove() != 0) {
+        return upByVoiceIndex;
+    }
+
+    bool sawUp = false;
+    bool sawDown = false;
+    for (const Segment* segment = measure->first(SegmentType::ChordRest); segment;
+         segment = segment->next(SegmentType::ChordRest)) {
+        const EngravingItem* item = segment->element(rest->track());
+        if (!item || !item->isChord() || toChord(item)->staffMove() != 0) {
+            continue;
+        }
+        if (toChord(item)->up()) {
+            sawUp = true;
+        } else {
+            sawDown = true;
+        }
+    }
+
+    return sawUp != sawDown ? sawUp : upByVoiceIndex;
+}
+
 void RestLayout::layoutRest(const Rest* item, Rest::LayoutData* ldata, const LayoutContext& ctx)
 {
     if (item->isGap()) {
@@ -217,7 +248,9 @@ void RestLayout::resolveRestVSChord(std::vector<Rest*>& rests, std::vector<Chord
                 continue;
             }
 
-            bool restAbove = rest->voice() < chord->voice() || (chord->slash() && !(rest->voice() % 2));
+            const bool restUp = restBelongsToUpVoice(rest);
+            bool restAbove = restUp != chord->up() ? restUp : rest->voice() < chord->voice();
+            restAbove = restAbove || (chord->slash() && !(rest->voice() % 2));
             int upSign = restAbove ? -1 : 1;
             double restYOffset = rest->offset().y();
             bool ignoreYOffset = (restAbove && restYOffset > 0) || (!restAbove && restYOffset < 0);
@@ -314,7 +347,8 @@ void RestLayout::resolveRestVSRest(std::vector<Rest*>& rests, const Staff* staff
         RestVerticalClearance& rest2Clearance = rest2->verticalClearance();
 
         double clearance;
-        bool firstAbove = rest1->voice() < rest2->voice();
+        const bool rest1Up = restBelongsToUpVoice(rest1);
+        bool firstAbove = rest1Up != restBelongsToUpVoice(rest2) ? rest1Up : rest1->voice() < rest2->voice();
         if (firstAbove) {
             clearance = shape1.verticalClearance(shape2);
         } else {
@@ -422,7 +456,7 @@ void RestLayout::alignRests(const System* system, LayoutContext& ctx)
         }
 
         Rest* firstRest = group.front();
-        const bool alignUpwards = firstRest->voice() == 0;
+        const bool alignUpwards = firstRest->voice() < 2 ? restBelongsToUpVoice(firstRest) : firstRest->voice() == 0;
         const double lineDist = firstRest->staff()->lineDistance(firstRest->tick()) * firstRest->spatium();
 
         double yOuterRest = alignUpwards ? DBL_MAX : -DBL_MAX;
@@ -634,7 +668,7 @@ void RestLayout::checkFullMeasureRestCollisions(const System* system, LayoutCont
             const double minHorizontalDistance = 4 * spatium;
             const double minVertClearance = 0.75 * spatium;
 
-            bool alignAbove = fullMeasureRest->voice() == 0;
+            bool alignAbove = fullMeasureRest->voice() < 2 ? restBelongsToUpVoice(fullMeasureRest) : fullMeasureRest->voice() == 0;
             double verticalClearance = alignAbove ? restShape.verticalClearance(measureShape, minHorizontalDistance)
                                        : measureShape.verticalClearance(restShape, minHorizontalDistance);
 
@@ -756,7 +790,7 @@ int RestLayout::computeVoiceOffset(const Rest* item, Rest::LayoutData* ldata)
         return 0;
     }
 
-    bool up = item->voice() == 0 || item->voice() == 2;
+    bool up = restBelongsToUpVoice(item);
     int upSign = up ? -1 : 1;
     int voiceLineOffset = item->style().styleB(Sid::multiVoiceRestTwoSpaceOffset) ? 2 : 1;
 
