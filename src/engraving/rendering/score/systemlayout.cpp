@@ -1707,10 +1707,10 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
                 if (!visibleObstacleItem(annotation)) {
                     continue;
                 }
-                if (annotation->isFermata()) {
-                    addRectObstacle(obstacles, FingeringObstacleKind::Mark, segmentAnnotationSystemRect(annotation),
-                                    annotation->vStaffIdx(), annotation->placeAbove());
-                } else if (annotation->isTremoloBar()) {
+                // Fermatas are not obstacles: they lay out after this pass and
+                // autoplace outside the published digit rects, so a fermata
+                // always sits outermost, beyond the fingering.
+                if (annotation->isTremoloBar()) {
                     RectF rect = segmentAnnotationSystemRect(annotation);
                     addRectObstacle(obstacles, FingeringObstacleKind::Mark, rect, annotation->vStaffIdx(),
                                     rectIsAboveStaff(rect, annotation));
@@ -1973,7 +1973,11 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
                                       && fingeringPlacementClearsOppositeSide(flipRect, alternative, flipCtx);
         const bool acceptGeneralFlip = belowSideNeedsGeneralFlip && !ctx.above && alternative.slurResolved
                                        && alternative.moveAway + PM_FINGERING_FLIP_ADVANTAGE * spatium < chosen.moveAway;
-        const bool acceptDetachedFlip = preferredSideExceedsNoteheadCap
+        // Only a below-side group may escape its detachment by flipping up:
+        // digits above the notes (right hand, upper voice) stay there even
+        // when a stem or slur lifts them, because below the staff they would
+        // read as the other hand's or the other voice's fingering.
+        const bool acceptDetachedFlip = preferredSideExceedsNoteheadCap && !ctx.above
                                         && fingeringPlacementClearsOppositeSide(flipRect, alternative, flipCtx)
                                         && fingeringPlacementDistanceFromNoteheads(flipRect, alternative, flipCtx)
                                         <= PM_FINGERING_NOTEHEAD_DETACHMENT_CAP * spatium;

@@ -4358,9 +4358,11 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
       LOGW() << "MeiExporter::writePedal excludes a pedal segment without an owning page system";
       continue;
     }
-    if (startAnchorPage.has_value() && endAnchorPage.has_value()
-        && (pageIndex.value() < std::min(startAnchorPage.value(), endAnchorPage.value())
-            || pageIndex.value() > std::max(startAnchorPage.value(), endAnchorPage.value()))) {
+    const bool beforeStartAnchorPage
+        = startAnchorPage.has_value() && pageIndex.value() < startAnchorPage.value();
+    const bool afterEndAnchorPage
+        = endAnchorPage.has_value() && pageIndex.value() > endAnchorPage.value();
+    if (beforeStartAnchorPage || afterEndAnchorPage) {
       LOGW() << "MeiExporter::writePedal excludes a pedal segment outside its anchor page range";
       continue;
     }
@@ -4372,9 +4374,12 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
   }
 
   // Pianomania: retain the collision-aware laid-out pedal span rather than
-  // exporting its note anchors.
-  const bool hasResolvedEndpoints = pedal->startElement() && pedal->endElement();
-  if (hasResolvedEndpoints && !ownedSegments.empty()) {
+  // exporting its note anchors. A valid pedal can end at the score's final
+  // barline without an end ChordRest, so page-owned rendered segments require
+  // only a resolved start anchor.
+  const bool hasResolvedStartAnchor
+      = pedal->startElement() && startAnchorPage.has_value();
+  if (hasResolvedStartAnchor && !ownedSegments.empty()) {
     const PointF start = ownedSegments.front().segment->pagePos();
     const PedalSegment *lastSegment = ownedSegments.back().segment;
     const PointF end = lastSegment->pagePos() + lastSegment->pos2();
@@ -4389,7 +4394,7 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
               "unresolved pedal spanner or pedal without rendered segments";
   }
 
-  if (hasResolvedEndpoints) {
+  if (hasResolvedStartAnchor) {
     std::string pedalLineData;
     for (const OwnedPedalSegment &owner : ownedSegments) {
       const PointF start = owner.segment->pagePos();
