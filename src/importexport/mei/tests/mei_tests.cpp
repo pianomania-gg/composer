@@ -2076,10 +2076,10 @@ TEST_F(Mei_Tests, mei_export_connected_pedal_includes_owned_rendered_segments) {
     }
 }
 
-TEST_F(Mei_Tests, pianomania_text_directive_anchors_first_glyph_baseline) {
-    // Practice draws a plain text directive with its first glyph's
-    // baseline-left at pm:xy, so the export must write that point, not the
-    // centre of the text's box.
+TEST_F(Mei_Tests, pianomania_text_directive_exports_text_box_centre) {
+    // Practice centres a plain text directive's rendered text on pm:xy
+    // (directives with an extender use their line start instead), so the
+    // export must write the centre of the text's box.
     MasterScore* score = ScoreRW::readScore(MEI_DIR + u"pianomania-grace-same-pitch-index.mscx", false);
     ASSERT_TRUE(score);
 
@@ -2108,10 +2108,9 @@ TEST_F(Mei_Tests, pianomania_text_directive_anchors_first_glyph_baseline) {
     const double yPx = (score->style().styleD(Sid::pageHeight) - std::stod(xy->substr(comma + 1))) * DPI;
 
     const RectF box = dolce->pageBoundingRect();
-    const double tolerance = 0.25 * dolce->spatium();
-    EXPECT_NEAR(xPx, box.left(), tolerance);
-    EXPECT_NEAR(yPx, box.bottom(), tolerance);
-    EXPECT_GT(yPx, box.center().y());
+    const double tolerance = 0.05 * dolce->spatium();
+    EXPECT_NEAR(xPx, box.center().x(), tolerance);
+    EXPECT_NEAR(yPx, box.center().y(), tolerance);
 
     delete score;
 }

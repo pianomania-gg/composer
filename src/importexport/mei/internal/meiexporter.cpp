@@ -560,39 +560,6 @@ void MeiExporter::appendCenteredPmPosition(pugi::xml_node node,
   node.append_attribute("pm:xy") = xyStr.c_str();
 }
 
-/**
- * The baseline-left origin of the first visible glyph, in bottom-left page
- * inches. Practice draws a plain text directive from this point, the same
- * anchor line-text directives export as their start.
- */
-std::optional<std::pair<double, double>>
-MeiExporter::getFirstGlyphBaselineInchesFor(const TextBase *text) const {
-  if (!text) {
-    return std::nullopt;
-  }
-
-  for (const TextBlock &block : text->ldata()->blocks) {
-    for (const TextFragment &fragment : block.fragments()) {
-      size_t firstVisible = 0;
-      while (firstVisible < fragment.text.size() &&
-             fragment.text.at(firstVisible).isSpace()) {
-        ++firstVisible;
-      }
-      if (firstVisible == fragment.text.size()) {
-        continue;
-      }
-
-      const muse::draw::FontMetrics metrics(fragment.font(text));
-      const double x =
-          fragment.pos.x() + metrics.width(fragment.text.left(firstVisible));
-      const PointF origin = text->pagePos() + PointF(x, block.y());
-      return std::make_pair(origin.x() / DPI, toBottomLeftInches(origin.y()));
-    }
-  }
-
-  return std::nullopt;
-}
-
 MeiExporter::TupletDrawnVisibility
 MeiExporter::resolveTupletDrawnVisibility(const Tuplet *tuplet) {
   const bool drawVisible = tuplet->visible() && !tuplet->ldata()->isSkipDraw();
@@ -3780,12 +3747,7 @@ bool MeiExporter::writeDir(const TextBase *dir, const std::string &startid) {
     return false;
   }
 
-  const auto baselineLeft = getFirstGlyphBaselineInchesFor(dir);
-  if (baselineLeft.has_value()) {
-    const std::string xyStr = formatDecimalStr(baselineLeft->first, 3) + "," +
-                              formatDecimalStr(baselineLeft->second, 3);
-    dirNode.append_attribute("pm:xy") = xyStr.c_str();
-  }
+  appendCenteredPmPosition(dirNode, dir);
 
   this->writeLines(dirNode, meiLines);
 
