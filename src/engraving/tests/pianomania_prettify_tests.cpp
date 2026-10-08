@@ -25,6 +25,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <vector>
 
@@ -754,6 +755,129 @@ Measure* measureAt(Score* score, int index)
 class Engraving_PianomaniaPrettifyTests : public ::testing::Test
 {
 };
+
+// Test value: Detects a slur crossing the upper accidental of an authored turn
+// when that accidental is stored as staff text on a time-tick segment.
+TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
+{
+    for (const String& symbol : { String(u"\u266d"), String(u"\u266e"), String(u"\u266f") }) {
+        SCOPED_TRACE(symbol.toStdString());
+        MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+        ASSERT_TRUE(score);
+        StaffText* accidental = nullptr;
+        for (StaffText* text : collectStaffTexts(score)) {
+            if (text->plainText() == u"\u266d") {
+                accidental = text;
+                break;
+            }
+        }
+        ASSERT_TRUE(accidental);
+        accidental->setXmlText(symbol);
+        const StructuralAssignment originalStructure = captureStructuralAssignment(score);
+        mu::engraving::pm::applyPianomaniaAutoLayout(score);
+        applyPrettifyCommand(score);
+        const Segment* anchor = toSegment(accidental->parentItem());
+        const Measure* measure = anchor->measure();
+        const System* system = measure->system();
+        const RectF accidentalRect = accidental->ldata()->bbox().translated(
+            accidental->pos() + anchor->pos() + measure->pos()
+            + PointF(0.0, system->staff(accidental->vStaffIdx())->y()));
+        ASSERT_FALSE(accidentalRect.isNull());
+
+        SlurSegment* phrase = nullptr;
+        for (const auto& pair : score->spanner()) {
+            Spanner* spanner = pair.second;
+            if (!spanner || !spanner->isSlur()) {
+                continue;
+            }
+            Slur* slur = toSlur(spanner);
+            if (slur->up() && slur->staffIdx() == accidental->staffIdx()
+                && slur->tick() < accidental->tick() && slur->tick2() > accidental->tick()) {
+                for (SpannerSegment* segment : slur->spannerSegments()) {
+                    if (segment->system() == system) {
+                        phrase = toSlurSegment(segment);
+                        break;
+                    }
+                }
+            }
+        }
+        ASSERT_TRUE(phrase);
+        std::array<PointF, 4> points;
+        for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+            points[i] = phrase->ups(PRETTIFY_GRIPS[i]).pos() + phrase->pos()
+                        + PointF(0.0, system->staff(phrase->vStaffIdx())->y());
+        }
+        double minimumClearance = std::numeric_limits<double>::infinity();
+        for (int i = 0; i <= 2000; ++i) {
+            const double t = static_cast<double>(i) / 2000.0;
+            const double u = 1.0 - t;
+            const PointF point = points[0] * (u * u * u) + points[1] * (3.0 * u * u * t)
+                                 + points[2] * (3.0 * u * t * t) + points[3] * (t * t * t);
+            if (point.x() >= accidentalRect.left() && point.x() <= accidentalRect.right()) {
+                minimumClearance = std::min(minimumClearance, accidentalRect.top() - point.y());
+            }
+        }
+        ASSERT_TRUE(std::isfinite(minimumClearance));
+        EXPECT_GE(minimumClearance, 0.1 * accidental->spatium());
+        const PrettifySnapshot first = capturePrettifySnapshot(score);
+        EXPECT_FALSE(applyPrettifyCommand(score).changed);
+        EXPECT_TRUE(snapshotsEquivalent(first, capturePrettifySnapshot(score)));
+        EXPECT_EQ(originalStructure, captureStructuralAssignment(score));
+        delete score;
+    }
+}
+
+// Test value: Keeps expression words, mixed text and hidden accidental glyphs
+// out of the notation obstacle path without relying on the glyph classifier.
+TEST_F(Engraving_PianomaniaPrettifyTests, ignoredStaffTextDoesNotShapePhraseSlur)
+{
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        SCOPED_TRACE(scenario);
+        std::array<std::vector<PointF>, 2> curves;
+        for (int variant = 0; variant < 2; ++variant) {
+            MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+            ASSERT_TRUE(score);
+            StaffText* accidental = nullptr;
+            for (StaffText* text : collectStaffTexts(score)) {
+                if (text->plainText() == u"\u266d") {
+                    accidental = text;
+                    break;
+                }
+            }
+            ASSERT_TRUE(accidental);
+            if (variant == 0) {
+                if (scenario == 0) {
+                    accidental->setXmlText(u"dolce");
+                } else if (scenario == 1) {
+                    accidental->setXmlText(u"dolce \u266d");
+                } else {
+                    accidental->setVisible(false);
+                }
+            } else {
+                score->removeElement(accidental);
+                delete accidental;
+            }
+            mu::engraving::pm::applyPianomaniaAutoLayout(score);
+            applyPrettifyCommand(score);
+            for (const auto& pair : score->spanner()) {
+                if (!pair.second || !pair.second->isSlur()) {
+                    continue;
+                }
+                for (SpannerSegment* segment : toSlur(pair.second)->spannerSegments()) {
+                    for (Grip grip : PRETTIFY_GRIPS) {
+                        curves[variant].push_back(toSlurSegment(segment)->ups(grip).pos());
+                    }
+                }
+            }
+            delete score;
+        }
+        ASSERT_EQ(curves[0].size(), curves[1].size());
+        ASSERT_FALSE(curves[0].empty());
+        for (size_t i = 0; i < curves[0].size(); ++i) {
+            EXPECT_TRUE(pointNear(curves[0][i], curves[1][i], 0.01));
+        }
+    }
+}
 
 TEST_F(Engraving_PianomaniaPrettifyTests, prettifyIsIdempotentAndUndoable)
 {
