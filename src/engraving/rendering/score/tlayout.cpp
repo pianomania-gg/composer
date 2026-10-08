@@ -2889,6 +2889,54 @@ void TLayout::fillGuitarBendSegmentShape(const GuitarBendSegment* item, GuitarBe
     ldata->setShape(shape);
 }
 
+static void ensureGraphicalHairpinEndBarlineClearance(HairpinSegment* item)
+{
+    Hairpin* hairpin = item->hairpin();
+    if (hairpin->isLineType() || !item->isSingleEndType()) {
+        return;
+    }
+
+    Segment* endAnchor = hairpin->endSegment();
+    if (!endAnchor) {
+        return;
+    }
+
+    Segment* endBarlineSegment = nullptr;
+    Segment* previousBarline = endAnchor->prev1(SegmentType::EndBarLine);
+    if (previousBarline && previousBarline->tick() == endAnchor->tick()) {
+        endBarlineSegment = previousBarline;
+    } else if (endAnchor->measure()) {
+        endBarlineSegment = endAnchor->measure()->findSegment(SegmentType::EndBarLine, endAnchor->measure()->endTick());
+    }
+
+    if (!endBarlineSegment || endBarlineSegment->measure()->system() != item->system()) {
+        return;
+    }
+
+    EngravingItem* endBarlineItem = endBarlineSegment->element(staff2track(item->staffIdx()));
+    if (!endBarlineItem || !endBarlineItem->isBarLine()) {
+        return;
+    }
+    BarLine* endBarline = toBarLine(endBarlineItem);
+    if (endBarline->ldata()->isSkipDraw()) {
+        return;
+    }
+
+    const double spatium = item->spatium();
+    const double minimumClearance = 0.5 * spatium;
+    const double barlineLeft = endBarline->pageX() - item->system()->pageX() + endBarline->ldata()->bbox().left();
+    const double barlineRight = endBarline->pageX() - item->system()->pageX() + endBarline->ldata()->bbox().right();
+    const double currentEnd = item->pos().x() + item->pos2().x();
+    const double maximumEnd = barlineLeft - minimumClearance;
+    if (currentEnd <= maximumEnd || currentEnd >= barlineRight + minimumClearance) {
+        return;
+    }
+
+    const double minimumEnd = item->pos().x() + spatium;
+    const double correctedEnd = std::max(maximumEnd, minimumEnd);
+    item->rxpos2() += correctedEnd - currentEnd;
+}
+
 void TLayout::layoutHairpinSegment(HairpinSegment* item, LayoutContext& ctx)
 {
     LAYOUT_CALL_ITEM(item);
@@ -2907,6 +2955,7 @@ void TLayout::layoutHairpinSegment(HairpinSegment* item, LayoutContext& ctx)
     ldata->disconnectSnappedItems();
 
     manageHairpinSnapping(item, ctx);
+    ensureGraphicalHairpinEndBarlineClearance(item);
 
     HairpinType type = item->hairpin()->hairpinType();
     if (item->hairpin()->isLineType()) {

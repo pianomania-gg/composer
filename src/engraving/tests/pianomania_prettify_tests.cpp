@@ -29,6 +29,7 @@
 #include <set>
 #include <vector>
 
+#include "engraving/dom/articulation.h"
 #include "engraving/dom/bracketItem.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
@@ -40,6 +41,7 @@
 #include "engraving/dom/beam.h"
 #include "engraving/dom/fingering.h"
 #include "engraving/dom/hairpin.h"
+#include "engraving/dom/hook.h"
 #include "engraving/dom/measure.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
@@ -391,6 +393,95 @@ std::vector<RectF> collectChordAndFingeringRects(Score* score, staff_idx_t staff
     }
 
     return rects;
+}
+
+std::vector<RectF> fingeringOwnerStructuralRects(const Fingering* fingering)
+{
+    std::vector<RectF> rects;
+    const Note* note = fingering ? fingering->note() : nullptr;
+    const Chord* chord = note ? note->chord() : nullptr;
+    const Segment* segment = chord ? chord->segment() : nullptr;
+    const Measure* measure = segment ? segment->measure() : nullptr;
+    const System* system = measure ? measure->system() : nullptr;
+    if (!chord || !segment || !measure || !system) {
+        return rects;
+    }
+
+    const PointF chordOrigin = PointF(0.0, staffYInSystem(system, chord->vStaffIdx()))
+                               + chord->pos() + segment->pos() + measure->pos();
+    const Stem* stem = chord->stem();
+    if (stem && stem->visible() && stem->ldata() && !stem->ldata()->isSkipDraw()) {
+        rects.push_back(stem->ldata()->bbox().translated(chordOrigin + stem->pos() + stem->staffOffset()));
+    }
+
+    const Hook* hook = chord->hook();
+    if (hook && hook->visible() && hook->ldata() && !hook->ldata()->isSkipDraw()) {
+        rects.push_back(hook->ldata()->bbox().translated(chordOrigin + hook->pos() + hook->staffOffset()));
+    }
+
+    const Beam* beam = chord->beam();
+    if (beam && beam->visible() && beam->ldata() && !beam->ldata()->isSkipDraw()) {
+        const PointF beamOrigin = beam->pagePos() - system->pagePos();
+        for (const BeamSegment* beamSegment : beam->beamSegments()) {
+            const Shape beamSegmentShape = beamSegment->shape();
+            for (const ShapeElement& box : beamSegmentShape.elements()) {
+                rects.push_back(box.translated(beamOrigin));
+            }
+        }
+    }
+
+    return rects;
+}
+
+double minimumShapeDistance(const Shape& first, const Shape& second)
+{
+    double minimum = std::numeric_limits<double>::max();
+    for (const RectF& a : first.toRects()) {
+        for (const RectF& b : second.toRects()) {
+            const double horizontal = std::max({ a.left() - b.right(), b.left() - a.right(), 0.0 });
+            const double vertical = std::max({ a.top() - b.bottom(), b.top() - a.bottom(), 0.0 });
+            minimum = std::min(minimum, std::hypot(horizontal, vertical));
+        }
+    }
+    return minimum;
+}
+
+Shape sampledPathShape(const PainterPath& path, const PointF& offset)
+{
+    Shape shape(Shape::Type::Composite);
+    PointF current;
+    for (size_t i = 0; i < path.elementCount(); ++i) {
+        const PainterPath::Element element = path.elementAt(i);
+        if (element.isMoveTo()) {
+            current = PointF(element.x, element.y) + offset;
+            continue;
+        }
+        if (!element.isCurveTo() || i + 2 >= path.elementCount()) {
+            continue;
+        }
+
+        const PointF p0 = current;
+        const PointF p1 = PointF(element.x, element.y) + offset;
+        const PainterPath::Element control2 = path.elementAt(i + 1);
+        const PainterPath::Element end = path.elementAt(i + 2);
+        const PointF p2 = PointF(control2.x, control2.y) + offset;
+        const PointF p3 = PointF(end.x, end.y) + offset;
+        PointF previous = p0;
+        for (int step = 1; step <= 64; ++step) {
+            const double t = double(step) / 64.0;
+            const double u = 1.0 - t;
+            const PointF point = p0 * (u * u * u) + p1 * (3.0 * u * u * t)
+                                 + p2 * (3.0 * u * t * t) + p3 * (t * t * t);
+            RectF bounds(previous, point);
+            bounds = bounds.normalized();
+            bounds.adjust(-1e-6, -1e-6, 1e-6, 1e-6);
+            shape.add(bounds);
+            previous = point;
+        }
+        current = p3;
+        i += 2;
+    }
+    return shape;
 }
 
 RectF tupletNumberSystemRect(const Tuplet* tuplet)
@@ -1038,6 +1129,136 @@ TEST_F(Engraving_PianomaniaPrettifyTests, sparseChordFingeringsKeepOwnershipOnEi
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, fingeringClearsRenderedStemsBeamsAndFlags)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-structural-clearance.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    const PrettifySnapshot original = capturePrettifySnapshot(score);
+    ASSERT_FALSE(original.fingerings.empty());
+    std::vector<const Note*> owners;
+    owners.reserve(original.fingerings.size());
+    for (const FingeringSnapshotEntry& entry : original.fingerings) {
+        owners.push_back(entry.fingering->note());
+    }
+
+    const mu::engraving::pm::PmPrettifyResult result = applyPrettifyCommand(score);
+    EXPECT_TRUE(result.changed);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+
+    bool sawBeam = false;
+    bool sawFlag = false;
+    bool sawChordOwner = false;
+    bool sawSecondVoice = false;
+    bool sawDigitLeftOfStem = false;
+    bool sawDigitRightOfStem = false;
+    for (size_t i = 0; i < original.fingerings.size(); ++i) {
+        const Fingering* fingering = original.fingerings[i].fingering;
+        ASSERT_EQ(fingering->note(), owners[i]);
+        const Note* owner = fingering->note();
+        const Chord* chord = owner ? owner->chord() : nullptr;
+        ASSERT_TRUE(chord);
+        sawChordOwner = sawChordOwner || chord->notes().size() > 1;
+        sawSecondVoice = sawSecondVoice || chord->voice() > 0;
+        sawBeam = sawBeam || chord->beam();
+        sawFlag = sawFlag || chord->hook();
+
+        const RectF digitRect = fingeringSystemRect(fingering);
+        const double clearance = 0.25 * fingering->spatium() - 1e-4;
+        const RectF paddedDigit = digitRect.adjusted(-clearance, -clearance, clearance, clearance);
+        for (const RectF& structuralRect : fingeringOwnerStructuralRects(fingering)) {
+            EXPECT_FALSE(rectsOverlap(paddedDigit, structuralRect)) << fingering->plainText().toStdString();
+        }
+
+        const Stem* stem = chord->stem();
+        if (stem && stem->visible() && stem->ldata() && !stem->ldata()->isSkipDraw()) {
+            const Segment* segment = chord->segment();
+            const Measure* measure = segment ? segment->measure() : nullptr;
+            ASSERT_TRUE(measure);
+            const RectF stemRect = stem->ldata()->bbox().translated(
+                PointF(0.0, staffYInSystem(measure->system(), chord->vStaffIdx()))
+                + stem->pos() + chord->pos() + segment->pos() + measure->pos() + stem->staffOffset());
+            sawDigitLeftOfStem = sawDigitLeftOfStem || digitRect.center().x() < stemRect.center().x();
+            sawDigitRightOfStem = sawDigitRightOfStem || digitRect.center().x() > stemRect.center().x();
+        }
+    }
+
+    EXPECT_TRUE(sawBeam);
+    EXPECT_TRUE(sawFlag);
+    EXPECT_TRUE(sawChordOwner);
+    EXPECT_TRUE(sawSecondVoice);
+    EXPECT_TRUE(sawDigitLeftOfStem);
+    EXPECT_TRUE(sawDigitRightOfStem);
+
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, lowerStaffFingeringsClearSameStaffBeamInSystemFrame)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-lower-staff-beam-clearance.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    const StructuralAssignment structure = captureStructuralAssignment(score);
+    const PrettifySnapshot original = capturePrettifySnapshot(score);
+    ASSERT_EQ(original.fingerings.size(), 4);
+    std::vector<const Note*> owners;
+    for (const FingeringSnapshotEntry& entry : original.fingerings) {
+        owners.push_back(entry.fingering->note());
+    }
+
+    auto assertAcceptedPlacement = [&]() {
+        EXPECT_EQ(structure, captureStructuralAssignment(score));
+        for (size_t i = 0; i < original.fingerings.size(); ++i) {
+            const Fingering* fingering = original.fingerings[i].fingering;
+            ASSERT_EQ(fingering->note(), owners[i]);
+            ASSERT_TRUE(fingering->note());
+            const Chord* chord = fingering->note()->chord();
+            ASSERT_TRUE(chord);
+            ASSERT_EQ(chord->vStaffIdx(), staff_idx_t(1));
+            const Beam* beam = chord->beam();
+            ASSERT_TRUE(beam);
+            ASSERT_TRUE(beam->visible());
+            ASSERT_FALSE(beam->cross());
+            ASSERT_FALSE(beam->fullCross());
+            ASSERT_FALSE(beam->beamSegments().empty());
+            for (const ChordRest* element : beam->elements()) {
+                ASSERT_TRUE(element);
+                EXPECT_EQ(element->staffMove(), 0);
+            }
+            const Measure* measure = chord->measure();
+            ASSERT_TRUE(measure);
+            const System* system = measure->system();
+            ASSERT_TRUE(system);
+            const PointF renderedBeamOrigin = beam->pagePos() - system->pagePos();
+            EXPECT_GT(renderedBeamOrigin.y(), 0.0);
+            EXPECT_NEAR(renderedBeamOrigin.y(), staffYInSystem(system, beam->staffIdx()), 1e-4);
+
+            const RectF digitRect = fingeringSystemRect(fingering);
+            const RectF ownerRect = noteSystemRect(fingering->note());
+            EXPECT_LT(digitRect.center().y(), ownerRect.center().y());
+            const double clearance = 0.25 * fingering->spatium() - 1e-4;
+            const RectF paddedDigit = digitRect.adjusted(-clearance, -clearance, clearance, clearance);
+            const std::vector<RectF> structuralRects = fingeringOwnerStructuralRects(fingering);
+            ASSERT_FALSE(structuralRects.empty());
+            for (const RectF& structuralRect : structuralRects) {
+                EXPECT_FALSE(rectsOverlap(paddedDigit, structuralRect)) << fingering->plainText().toStdString();
+            }
+        }
+    };
+
+    const auto result = applyPrettifyCommand(score);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+    assertAcceptedPlacement();
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_FALSE(repeated.structuralAssignmentChanged);
+    assertAcceptedPlacement();
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, tupletBlockedFingeringFlipsToClearNoteheadSide)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-tuplet-obstacle.mscx");
@@ -1479,25 +1700,65 @@ TEST_F(Engraving_PianomaniaPrettifyTests, stemSideAccentClearsSlurTakingOffAtIts
     mu::engraving::pm::applyPianomaniaAutoLayout(score);
     applyPrettifyCommand(score);
 
-    Chord* accented = nullptr;
-    for (Segment* segment = score->firstMeasure()->first(SegmentType::ChordRest); segment && !accented;
-         segment = segment->next(SegmentType::ChordRest)) {
-        EngravingItem* item = segment->element(0);
-        if (item && item->isChord() && !toChord(item)->articulations().empty()) {
-            accented = toChord(item);
+    std::vector<Chord*> accentedChords;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(SegmentType::ChordRest); segment;
+             segment = segment->next(SegmentType::ChordRest)) {
+            for (EngravingItem* item : segment->elist()) {
+                if (item && item->isChord() && !toChord(item)->articulations().empty()) {
+                    accentedChords.push_back(toChord(item));
+                }
+            }
         }
     }
-    ASSERT_TRUE(accented);
-    const Articulation* accent = accented->articulations().front();
-    SlurSegment* slurSegment = firstSlurSegment(score);
-    ASSERT_TRUE(slurSegment);
-    ASSERT_EQ(slurSegment->slur()->startCR(), accented);
+    ASSERT_EQ(accentedChords.size(), 5);
 
-    const double spatium = accent->spatium();
-    const Shape accentShape = accent->shape().translated(accent->pagePos());
-    const Shape slurShape = slurSegment->shape().translated(slurSegment->pagePos());
-    const double margin = 0.4 * spatium;
-    EXPECT_GE(accentShape.verticalClearance(slurShape, margin), 0.3 * spatium);
+    bool sawAbove = false;
+    bool sawBelow = false;
+    bool sawMarcato = false;
+    bool sawStaccatissimo = false;
+    for (const Chord* accented : accentedChords) {
+        const Articulation* accent = accented->articulations().front();
+        SlurSegment* slurSegment = nullptr;
+        for (const auto& pair : score->spanner()) {
+            Spanner* spanner = pair.second;
+            if (spanner && spanner->isSlur() && toSlur(spanner)->startCR() == accented) {
+                slurSegment = toSlur(spanner)->segmentAt(0);
+                break;
+            }
+        }
+        ASSERT_TRUE(slurSegment);
+
+        const Segment* segment = accented->segment();
+        const Measure* measure = accented->measure();
+        ASSERT_TRUE(segment);
+        ASSERT_TRUE(measure);
+        ASSERT_TRUE(measure->system());
+        const double accentStaffY = measure->system()->staff(accented->vStaffIdx())->y();
+        const double slurStaffY = measure->system()->staff(slurSegment->vStaffIdx())->y();
+        const double spatium = accent->spatium();
+        const PointF accentOffset = accent->pos() + accented->pos() + segment->pos() + measure->pos()
+                                    + accented->staffOffset() + PointF(0.0, accentStaffY);
+        Shape accentShape(Shape::Type::Composite);
+        accentShape.add(accent->shape().translated(accentOffset));
+        accentShape.add(accent->ldata()->bbox().translated(accentOffset));
+        const PointF slurOffset = slurSegment->pos() + PointF(0.0, slurStaffY);
+        Shape slurShape = slurSegment->shape().translated(slurOffset);
+        slurShape.add(sampledPathShape(slurSegment->ldata()->path(), slurOffset));
+        const double margin = 0.4 * spatium;
+        const double clearance = accent->up() ? accentShape.verticalClearance(slurShape, margin)
+                                 : slurShape.verticalClearance(accentShape, margin);
+        EXPECT_GE(clearance, 0.3 * spatium);
+        EXPECT_GE(minimumShapeDistance(accentShape, slurShape), margin - 1e-4);
+        sawAbove = sawAbove || accent->up();
+        sawBelow = sawBelow || !accent->up();
+        sawMarcato = sawMarcato || accent->isMarcato();
+        sawStaccatissimo = sawStaccatissimo || accent->symId() == SymId::articStaccatissimoWedgeAbove;
+    }
+    EXPECT_TRUE(sawAbove);
+    EXPECT_TRUE(sawBelow);
+    EXPECT_TRUE(sawMarcato);
+    EXPECT_TRUE(sawStaccatissimo);
 
     delete score;
 }
