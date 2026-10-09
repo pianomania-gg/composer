@@ -32,6 +32,7 @@
 
 #include <QFontDatabase>
 
+#include "engraving/dom/accidental.h"
 #include "engraving/dom/articulation.h"
 #include "engraving/dom/barline.h"
 #include "engraving/dom/bracketItem.h"
@@ -50,6 +51,7 @@
 #include "engraving/dom/measure.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/ottava.h"
 #include "engraving/dom/page.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/rest.h"
@@ -3378,6 +3380,21 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
         }
     };
 
+    // The reported pair was 0.3sp apart only because the source's dragged end
+    // grips survived Auto Layout. Auto Layout now resets them, so recreate the
+    // tight mouths with an automatic end offset to give Prettify a pair to
+    // separate.
+    constexpr double reportedGapSp = 0.30;
+    auto tightenReportedPair = [&](MasterScore* score, std::array<HairpinSegment*, 2>& pair) {
+        for (HairpinSegment* segment : pair) {
+            EXPECT_TRUE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+        }
+        const double naturalGapSp = gapSp(pair);
+        EXPECT_GE(naturalGapSp, 0.60 - 0.001);
+        pair[0]->setProperty(Pid::OFFSET2, PointF((naturalGapSp - reportedGapSp) * pair[0]->spatium(), 0.0));
+        relayoutScore(score);
+    };
+
     const String reportedFixture = u"pianomania_prettify_data/grieg-op12-no1-facing-hairpins.mscz";
     MasterScore* score = ScoreRW::readScore(reportedFixture);
     ASSERT_TRUE(score);
@@ -3392,7 +3409,9 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     ASSERT_EQ(hairpins[0]->tick2(), hairpins[1]->tick());
     std::array<HairpinSegment*, 2> pair = segments(hairpins);
     ASSERT_TRUE(pair[0] && pair[1]);
-    EXPECT_NEAR(gapSp(pair), 0.30, 0.001);
+    tightenReportedPair(score, pair);
+    pair = segments(reportedGriegPair(score));
+    EXPECT_NEAR(gapSp(pair), reportedGapSp, 0.001);
     const double ordinaryFarEndX = graphicalHairpinRight(pair[1]);
     delete score;
 
@@ -3402,6 +3421,9 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     MScore::pianomaniaForceNormalizeSlursFingerings = true;
     mu::engraving::pm::applyPianomaniaAutoLayout(score);
     relayoutScore(score);
+    pair = segments(reportedGriegPair(score));
+    ASSERT_TRUE(pair[0] && pair[1]);
+    tightenReportedPair(score, pair);
     mu::engraving::pm::PmPrettifyOptions reportedOptions;
     reportedOptions.forceNormalizeManual = true;
     applyPrettifyCommand(score, reportedOptions);
@@ -3524,4 +3546,67 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
         delete excluded;
     }
     MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+}
+
+namespace {
+std::vector<Chord*> collectChords(Score* score)
+{
+    std::vector<Chord*> chords;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(SegmentType::ChordRest); segment; segment = segment->next(SegmentType::ChordRest)) {
+            for (EngravingItem* item : segment->elist()) {
+                if (item && item->isChord()) {
+                    chords.push_back(toChord(item));
+                }
+            }
+        }
+    }
+    return chords;
+}}
+
+// Test value: Auto Layout returns a hairpin end grip dragged before the last
+// note of its span, and a dragged ottava hook, to their automatic placement.
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutResetsDraggedLineEndsAndOttavaHooks)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/line-end-and-ottava-hook-normalization.mscx");
+    ASSERT_TRUE(score);
+    std::vector<Hairpin*> hairpins = collectHairpins(score);
+    ASSERT_EQ(hairpins.size(), 1u);
+    Hairpin* hairpin = hairpins.front();
+    Ottava* ottava = nullptr;
+    for (const auto& pair : score->spanner()) {
+        if (pair.second && pair.second->isOttava()) {
+            ottava = toOttava(pair.second);
+        }
+    }
+    ASSERT_TRUE(ottava);
+    ASSERT_FALSE(hairpin->spannerSegments().empty());
+    EXPECT_FALSE(hairpin->frontSegment()->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+    EXPECT_EQ(ottava->propertyFlags(Pid::END_HOOK_HEIGHT), PropertyFlags::UNSTYLED);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    HairpinSegment* segment = toHairpinSegment(hairpin->frontSegment());
+    ASSERT_TRUE(segment);
+    EXPECT_TRUE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+    const Measure* first = score->firstMeasure();
+    double lastNoteRight = -std::numeric_limits<double>::max();
+    for (Chord* chord : collectChords(score)) {
+        if (chord->measure() == first && chord->staffIdx() == 0) {
+            for (Note* note : chord->notes()) {
+                lastNoteRight = std::max(lastNoteRight, note->pageBoundingRect().right());
+            }
+        }
+    }
+    const Segment* endBarline = first->findSegment(SegmentType::EndBarLine, first->endTick());
+    ASSERT_TRUE(endBarline);
+    EXPECT_GT(graphicalHairpinRight(segment), lastNoteRight);
+    EXPECT_LT(graphicalHairpinRight(segment), endBarline->pageX());
+
+    EXPECT_TRUE(ottava->isStyled(Pid::END_HOOK_HEIGHT));
+    EXPECT_EQ(ottava->getProperty(Pid::END_HOOK_HEIGHT), ottava->propertyDefault(Pid::END_HOOK_HEIGHT));
+    EXPECT_EQ(ottava->getProperty(Pid::BEGIN_HOOK_HEIGHT), ottava->propertyDefault(Pid::BEGIN_HOOK_HEIGHT));
+
+    delete score;
 }
