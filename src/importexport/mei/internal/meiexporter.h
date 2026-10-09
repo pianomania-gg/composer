@@ -438,6 +438,8 @@ private:
   getFingeringOffsets(const engraving::Fingering *fing,
                       const std::string &startid) const;
   double getOrnamentYOffset(const engraving::Ornament *ornament) const;
+  double getOrnamentYOffsetFor(const engraving::ChordRest *anchor,
+                               double glyphCenterPageY) const;
   double getHairpinYOffset(const engraving::Hairpin *hairpin,
                            const engraving::HairpinSegment *firstSegment = nullptr);
   double getOctaveYOffset(const engraving::Ottava *ottava);
@@ -452,6 +454,9 @@ private:
   getCenteredInchesFor(const engraving::EngravingItem *item) const;
   void appendCenteredPmPosition(pugi::xml_node node,
                                 const engraving::EngravingItem *item) const;
+  std::string formatKeySigSymbols(const engraving::KeySig *keySig) const;
+  void appendKeySigSymbols(pugi::xml_node node, const char *attributeName,
+                           const engraving::KeySig *keySig) const;
   struct TupletDrawnVisibility {
     bool numberVisible = false;
     bool bracketVisible = false;
