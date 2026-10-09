@@ -1082,7 +1082,16 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
             << " pageBounds=" << pageBounds.left() << "," << pageBounds.top()
             << "," << pageBounds.right() << "," << pageBounds.bottom()
             << " curveBounds=" << curveBounds.left() << "," << curveBounds.top()
-            << "," << curveBounds.right() << "," << curveBounds.bottom();
+            << "," << curveBounds.right() << "," << curveBounds.bottom()
+            << " curvePoints=" << points[0].x() << "," << points[0].y()
+            << ";" << points[1].x() << "," << points[1].y()
+            << ";" << points[2].x() << "," << points[2].y()
+            << ";" << points[3].x() << "," << points[3].y()
+            << " phrasePos=" << phrase->pos().x() << "," << phrase->pos().y()
+            << " pagePos=" << page->pos().x() << "," << page->pos().y()
+            << " staffY=" << system->staff(accidental->vStaffIdx())->y()
+            << " font=" << accidental->font().family().id().toStdString()
+            << " spatium=" << accidental->spatium();
         const PrettifySnapshot first = capturePrettifySnapshot(score);
         EXPECT_FALSE(applyPrettifyCommand(score).changed);
         EXPECT_TRUE(snapshotsEquivalent(first, capturePrettifySnapshot(score)));
@@ -1166,25 +1175,29 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
             StageFlagsScope() { MScore::pianomaniaPrettifySlursFingerings = true; }
             ~StageFlagsScope() { MScore::pianomaniaPrettifySlursFingerings = previous; }
         } stageFlagsScope;
-        const muse::draw::Transform stageTransform;
-        PointF control1 = stagePoints[1];
-        PointF control2 = stagePoints[2];
         const PointF startPoint = stagePoints[0];
-        const PointF endPoint = stagePoints[3];
+        muse::draw::Transform stageTransform;
+        stageTransform.translate(startPoint.x(), startPoint.y());
+        const muse::draw::Transform fromStageCoordinates = stageTransform.inverted();
+        PointF control1 = fromStageCoordinates.map(stagePoints[1]);
+        PointF control2 = fromStageCoordinates.map(stagePoints[2]);
+        const PointF endPoint = fromStageCoordinates.map(stagePoints[3]);
         ASSERT_TRUE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
             control1, control2, stageTransform, 0.50 * stageSpatium));
-        const std::array<PointF, 4> stageCorrected = { startPoint, control1, control2, endPoint };
+        const std::array<PointF, 4> stageCorrected = {
+            startPoint, stageTransform.map(control1), stageTransform.map(control2), stageTransform.map(endPoint)
+        };
         EXPECT_GE(stageClearance(stageCorrected, syntheticAccidental), 0.10 * stageSpatium);
         EXPECT_GE(stageClearance(stageCorrected, higherNotation), 0.40 * stageSpatium);
         EXPECT_EQ(stageCorrected.front(), stagePoints.front());
         EXPECT_EQ(stageCorrected.back(), stagePoints.back());
-        EXPECT_EQ(control1.x(), stagePoints[1].x());
-        EXPECT_EQ(control2.x(), stagePoints[2].x());
-        const double stageLift = stagePoints[1].y() - control1.y();
+        EXPECT_EQ(stageCorrected[1].x(), stagePoints[1].x());
+        EXPECT_EQ(stageCorrected[2].x(), stagePoints[2].x());
+        const double stageLift = stagePoints[1].y() - stageCorrected[1].y();
         EXPECT_GT(stageLift, 0.0);
         EXPECT_LE(stageLift, 12.0 * stageSpatium);
-        EXPECT_NEAR(stageLift, stagePoints[2].y() - control2.y(), 0.001);
+        EXPECT_NEAR(stageLift, stagePoints[2].y() - stageCorrected[2].y(), 0.001);
         RecordProperty("residual_stage_clearance_and_lift_sp",
                        std::to_string(stageClearance(stageCorrected, syntheticAccidental) / stageSpatium) + ","
                        + std::to_string(stageClearance(stageCorrected, higherNotation) / stageSpatium) + ","
@@ -1192,24 +1205,24 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
         EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
             control1, control2, stageTransform, 0.50 * stageSpatium));
-        EXPECT_EQ(control1, stageCorrected[1]);
-        EXPECT_EQ(control2, stageCorrected[2]);
+        EXPECT_EQ(stageTransform.map(control1), stageCorrected[1]);
+        EXPECT_EQ(stageTransform.map(control2), stageCorrected[2]);
 
         Shape unreachableShapes;
         unreachableShapes.add(syntheticAccidental.translated(PointF(0.0, -20.0 * stageSpatium)), collidingAccidental);
-        control1 = stagePoints[1];
-        control2 = stagePoints[2];
+        control1 = fromStageCoordinates.map(stagePoints[1]);
+        control2 = fromStageCoordinates.map(stagePoints[2]);
         EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             collidingPhrase, unreachableShapes, true, stageSpatium, startPoint, endPoint,
             control1, control2, stageTransform, 0.50 * stageSpatium));
-        EXPECT_EQ(control1, stagePoints[1]);
-        EXPECT_EQ(control2, stagePoints[2]);
+        EXPECT_EQ(stageTransform.map(control1), stagePoints[1]);
+        EXPECT_EQ(stageTransform.map(control2), stagePoints[2]);
         collidingPhrase->ups(Grip::BEZIER1).off = PointF(0.0, 0.10 * stageSpatium);
         EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
             control1, control2, stageTransform, 0.50 * stageSpatium));
-        EXPECT_EQ(control1, stagePoints[1]);
-        EXPECT_EQ(control2, stagePoints[2]);
+        EXPECT_EQ(stageTransform.map(control1), stagePoints[1]);
+        EXPECT_EQ(stageTransform.map(control2), stagePoints[2]);
         delete collidingScore;
     }
 
