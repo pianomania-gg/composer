@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<museScore version="4.10">
+  <Score>
+    <Division>480</Division>
+    <Part>
+      <Staff id="1">
+        <StaffType group="pitched">
+          <name>stdNormal</name>
+          </StaffType>
+        </Staff>
+      <trackName>Piano</trackName>
+      <Instrument>
+        <longName>Piano</longName>
+        <shortName>Pno.</shortName>
+        <trackName>Piano</trackName>
+        <instrumentId>keyboard.piano</instrumentId>
+        <Channel>
+          <program value="0"/>
+          </Channel>
+        </Instrument>
+      </Part>
+    <Staff id="1">
+      <Measure>
+        <voice>
+          <TimeSig>
+            <sigN>4</sigN>
+            <sigD>4</sigD>
+            </TimeSig>
+          <Chord>
+            <durationType>quarter</durationType>
+            <Ornament>
+              <subtype>ornamentTrill</subtype>
+              </Ornament>
+            <Note>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <Events>
+                <Event>
+                  <len>250</len>
+                  </Event>
+                <Event>
+                  <pitch>2</pitch>
+                  <ontime>250</ontime>
+                  <len>250</len>
+                  </Event>
+                <Event>
+                  <ontime>500</ontime>
+                  <len>250</len>
+                  </Event>
+                <Event>
+                  <ontime>750</ontime>
+                  <len>250</len>
+                  </Event>
+                </Events>
+              </Note>
+            </Chord>
+          <Rest>
+            <durationType>half</durationType>
+            </Rest>
+          <Rest>
+            <durationType>quarter</durationType>
+            </Rest>
+          </voice>
+        </Measure>
+      </Staff>
+    </Score>
+  </museScore>

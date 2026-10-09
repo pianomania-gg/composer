@@ -66,7 +66,11 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_pianomania_rubato_zone_overlap_fails:"
     "Mei_Tests.mei_export_pianomania_pyro_span_free_range:"
     "Mei_Tests.mei_export_pianomania_laser_span_coexists_with_rubato_zone:"
-    "Mei_Tests.mei_export_pianomania_pyro_span_overlap_fails"
+    "Mei_Tests.mei_export_pianomania_pyro_span_overlap_fails:"
+    "Mei_Tests.mei_export_articulation_centres_match_native_rendered_bounds:"
+    "Mei_Tests.mei_export_articulation_centres_preserve_native_notehead_anchors:"
+    "Mei_Tests.mei_export_wedge_keeps_only_owned_endpoint_system_geometry:"
+    "Mei_Tests.pianomania_staff_centered_dynamic_clears_ledger_accidental"
 )
 
 add_test(
@@ -80,5 +84,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*26 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*31 tests"
 )
