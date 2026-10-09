@@ -780,11 +780,6 @@ void neutralizePianomaniaPrettifyProperties(Score* score, const PmPrettifyOption
                     segment->undoChangeProperty(Pid::OFFSET, hairpin->propertyDefault(Pid::OFFSET), PropertyFlags::STYLED);
                     segment->setOffsetChanged(false);
                 }
-                const PointF offset2 = segment->getProperty(Pid::OFFSET2).value<PointF>();
-                if (!offset2.isNull() || segment->propertyFlags(Pid::OFFSET2) != PropertyFlags::STYLED) {
-                    segment->undoChangeProperty(Pid::OFFSET2, PointF(), PropertyFlags::STYLED);
-                    segment->setOffsetChanged(false);
-                }
             }
         }
     }

@@ -30,6 +30,8 @@
 #include <set>
 #include <vector>
 
+#include <QFontDatabase>
+
 #include "engraving/dom/articulation.h"
 #include "engraving/dom/barline.h"
 #include "engraving/dom/bracketItem.h"
@@ -84,6 +86,27 @@ constexpr std::array<Grip, 4> PRETTIFY_GRIPS = {
 
 constexpr std::array<Pid, 4> PRETTIFY_SLUR_PROPERTIES = {
     Pid::SLUR_UOFF1, Pid::SLUR_UOFF2, Pid::SLUR_UOFF3, Pid::SLUR_UOFF4
+};
+
+class ApplicationFontRegistration
+{
+public:
+    explicit ApplicationFontRegistration(const String& path)
+        : m_id(QFontDatabase::addApplicationFont(QString::fromStdString(path.toStdString())))
+    {
+    }
+
+    ~ApplicationFontRegistration()
+    {
+        if (m_id >= 0) {
+            QFontDatabase::removeApplicationFont(m_id);
+        }
+    }
+
+    bool valid() const { return m_id >= 0; }
+
+private:
+    int m_id = -1;
 };
 
 struct SlurSnapshotEntry
@@ -899,6 +922,10 @@ class Engraving_PianomaniaPrettifyTests : public ::testing::Test
 // when that accidental is stored as staff text on a time-tick segment.
 TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
 {
+    const String freeSansPath = ScoreRW::rootPath() + u"/../../../fonts/FreeSans.ttf";
+    const ApplicationFontRegistration freeSans(freeSansPath);
+    ASSERT_TRUE(freeSans.valid()) << freeSansPath.toStdString();
+
     for (const String& symbol : { String(u"\u266d"), String(u"\u266e"), String(u"\u266f") }) {
         SCOPED_TRACE(symbol.toStdString());
         MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
@@ -914,15 +941,10 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
         accidental->setXmlText(symbol);
         const StructuralAssignment originalStructure = captureStructuralAssignment(score);
         mu::engraving::pm::applyPianomaniaAutoLayout(score);
-        applyPrettifyCommand(score);
         const Segment* anchor = toSegment(accidental->parentItem());
         const Measure* measure = anchor->measure();
         const System* system = measure->system();
-        const RectF accidentalRect = accidental->ldata()->bbox().translated(
-            accidental->pos() + anchor->pos() + measure->pos()
-            + PointF(0.0, system->staff(accidental->vStaffIdx())->y()));
-        ASSERT_FALSE(accidentalRect.isNull());
-
+        ASSERT_TRUE(system);
         SlurSegment* phrase = nullptr;
         for (const auto& pair : score->spanner()) {
             Spanner* spanner = pair.second;
@@ -941,29 +963,229 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
             }
         }
         ASSERT_TRUE(phrase);
-        std::array<PointF, 4> points;
+        Slur* phraseSlur = phrase->slur();
+        const auto curvePoints = [](const System* curveSystem, const SlurSegment* curveSegment) {
+            std::array<PointF, 4> points;
+            for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+                points[i] = curveSegment->ups(PRETTIFY_GRIPS[i]).pos() + curveSegment->pos()
+                            + PointF(0.0, curveSystem->staff(curveSegment->vStaffIdx())->y());
+            }
+            return points;
+        };
+        const auto minimumClearanceFor = [](const std::array<PointF, 4>& points, const RectF& rect) {
+            double minimum = std::numeric_limits<double>::infinity();
+            for (int i = 0; i <= 2000; ++i) {
+                const double t = static_cast<double>(i) / 2000.0;
+                const double u = 1.0 - t;
+                const PointF point = points[0] * (u * u * u) + points[1] * (3.0 * u * u * t)
+                                     + points[2] * (3.0 * u * t * t) + points[3] * (t * t * t);
+                if (point.x() >= rect.left() && point.x() <= rect.right()) {
+                    minimum = std::min(minimum, rect.top() - point.y());
+                }
+            }
+            return minimum;
+        };
+        const RectF initialAccidentalRect = accidental->ldata()->bbox().translated(
+            accidental->pos() + anchor->pos() + measure->pos()
+            + PointF(0.0, system->staff(accidental->vStaffIdx())->y()));
+        const std::array<PointF, 4> initialCurvePoints = curvePoints(system, phrase);
+        const double initialMinimumClearance = minimumClearanceFor(initialCurvePoints, initialAccidentalRect);
+        std::array<PointF, 4> originalGripPositions;
         for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
-            points[i] = phrase->ups(PRETTIFY_GRIPS[i]).pos() + phrase->pos()
-                        + PointF(0.0, system->staff(phrase->vStaffIdx())->y());
+            originalGripPositions[i] = phrase->ups(PRETTIFY_GRIPS[i]).pos();
         }
-        double minimumClearance = std::numeric_limits<double>::infinity();
-        for (int i = 0; i <= 2000; ++i) {
-            const double t = static_cast<double>(i) / 2000.0;
-            const double u = 1.0 - t;
-            const PointF point = points[0] * (u * u * u) + points[1] * (3.0 * u * u * t)
-                                 + points[2] * (3.0 * u * t * t) + points[3] * (t * t * t);
-            if (point.x() >= accidentalRect.left() && point.x() <= accidentalRect.right()) {
-                minimumClearance = std::min(minimumClearance, accidentalRect.top() - point.y());
+        EngravingItem* const originalStartElement = phraseSlur->startElement();
+        EngravingItem* const originalEndElement = phraseSlur->endElement();
+        const Fraction originalStartTick = phraseSlur->tick();
+        const Fraction originalEndTick = phraseSlur->tick2();
+
+        applyPrettifyCommand(score);
+        anchor = toSegment(accidental->parentItem());
+        measure = anchor->measure();
+        system = measure->system();
+        ASSERT_TRUE(system);
+        phrase = nullptr;
+        for (const auto& pair : score->spanner()) {
+            Spanner* spanner = pair.second;
+            if (!spanner || !spanner->isSlur()) {
+                continue;
+            }
+            Slur* slur = toSlur(spanner);
+            if (slur->up() && slur->staffIdx() == accidental->staffIdx()
+                && slur->tick() < accidental->tick() && slur->tick2() > accidental->tick()) {
+                for (SpannerSegment* segment : slur->spannerSegments()) {
+                    if (segment->system() == system) {
+                        phrase = toSlurSegment(segment);
+                        break;
+                    }
+                }
             }
         }
+        ASSERT_TRUE(phrase);
+        const RectF accidentalRect = accidental->ldata()->bbox().translated(
+            accidental->pos() + anchor->pos() + measure->pos()
+            + PointF(0.0, system->staff(accidental->vStaffIdx())->y()));
+        ASSERT_FALSE(accidentalRect.isNull());
+        const std::array<PointF, 4> points = curvePoints(system, phrase);
+        EXPECT_EQ(phraseSlur->startElement(), originalStartElement);
+        EXPECT_EQ(phraseSlur->endElement(), originalEndElement);
+        EXPECT_EQ(phraseSlur->tick(), originalStartTick);
+        EXPECT_EQ(phraseSlur->tick2(), originalEndTick);
+        const double forceResetControlMove = std::max(
+            std::hypot(phrase->ups(Grip::BEZIER1).pos().x() - originalGripPositions[1].x(),
+                       phrase->ups(Grip::BEZIER1).pos().y() - originalGripPositions[1].y()),
+            std::hypot(phrase->ups(Grip::BEZIER2).pos().x() - originalGripPositions[2].x(),
+                       phrase->ups(Grip::BEZIER2).pos().y() - originalGripPositions[2].y()));
+        const Page* page = system->page();
+        ASSERT_TRUE(page && page->ldata());
+        const RectF pageBounds = page->ldata()->bbox();
+        const RectF curveBounds = phrase->pageBoundingRect();
+        const double pagePadding = 0.1 * phrase->spatium();
+        EXPECT_GE(curveBounds.left(), pageBounds.left() + pagePadding);
+        EXPECT_LE(curveBounds.right(), pageBounds.right() - pagePadding);
+        EXPECT_GE(curveBounds.top(), pageBounds.top() + pagePadding);
+        EXPECT_LE(curveBounds.bottom(), pageBounds.bottom() - pagePadding);
+        const staff_idx_t staffIdx = phrase->effectiveStaffIdx();
+        ASSERT_NE(staffIdx, muse::nidx);
+        const Skyline& skyline = system->staff(staffIdx)->skyline();
+        RectF skylineSlurBounds;
+        auto includeSlurBounds = [phrase, &skylineSlurBounds](const SkylineLine& line) {
+            for (const ShapeElement& element : line.elements()) {
+                if (element.item() == phrase) {
+                    skylineSlurBounds = skylineSlurBounds.isNull()
+                                        ? RectF(element) : skylineSlurBounds.united(RectF(element));
+                }
+            }
+        };
+        includeSlurBounds(skyline.north());
+        includeSlurBounds(skyline.south());
+        const RectF finalSlurShapeBounds = phrase->shape().bbox().translated(phrase->pos());
+        ASSERT_FALSE(skylineSlurBounds.isNull());
+        EXPECT_LE(skylineSlurBounds.left(), finalSlurShapeBounds.left() + 0.001);
+        EXPECT_GE(skylineSlurBounds.right(), finalSlurShapeBounds.right() - 0.001);
+        EXPECT_LE(skylineSlurBounds.top(), finalSlurShapeBounds.top() + 0.001);
+        EXPECT_GE(skylineSlurBounds.bottom(), finalSlurShapeBounds.bottom() - 0.001);
+        const double minimumClearance = minimumClearanceFor(points, accidentalRect);
+        const char* glyphName = symbol == u"\u266d" ? "flat" : symbol == u"\u266e" ? "natural" : "sharp";
+        RecordProperty(std::string("accidental_slur_") + glyphName,
+                       std::to_string(initialMinimumClearance) + "," + std::to_string(minimumClearance)
+                       + "," + std::to_string(forceResetControlMove));
         ASSERT_TRUE(std::isfinite(minimumClearance));
-        EXPECT_GE(minimumClearance, 0.1 * accidental->spatium());
+        EXPECT_GE(minimumClearance, 0.1 * accidental->spatium())
+            << "initialClearance=" << initialMinimumClearance << " finalClearance=" << minimumClearance
+            << " forceResetControlMove=" << forceResetControlMove
+            << " accidentalRect=" << accidentalRect.left() << "," << accidentalRect.top()
+            << "," << accidentalRect.right() << "," << accidentalRect.bottom()
+            << " pageBounds=" << pageBounds.left() << "," << pageBounds.top()
+            << "," << pageBounds.right() << "," << pageBounds.bottom()
+            << " curveBounds=" << curveBounds.left() << "," << curveBounds.top()
+            << "," << curveBounds.right() << "," << curveBounds.bottom();
         const PrettifySnapshot first = capturePrettifySnapshot(score);
         EXPECT_FALSE(applyPrettifyCommand(score).changed);
         EXPECT_TRUE(snapshotsEquivalent(first, capturePrettifySnapshot(score)));
         EXPECT_EQ(originalStructure, captureStructuralAssignment(score));
         delete score;
     }
+
+    MasterScore* authoredScore = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+    ASSERT_TRUE(authoredScore);
+    StaffText* authoredAccidental = nullptr;
+    for (StaffText* text : collectStaffTexts(authoredScore)) {
+        if (text->plainText() == u"\u266d") {
+            authoredAccidental = text;
+            break;
+        }
+    }
+    ASSERT_TRUE(authoredAccidental);
+    mu::engraving::pm::applyPianomaniaAutoLayout(authoredScore);
+    Slur* authoredSlur = nullptr;
+    SlurSegment* authoredPhrase = nullptr;
+    for (const auto& pair : authoredScore->spanner()) {
+        Spanner* spanner = pair.second;
+        if (!spanner || !spanner->isSlur()) {
+            continue;
+        }
+        Slur* slur = toSlur(spanner);
+        if (slur->up() && slur->staffIdx() == authoredAccidental->staffIdx()
+            && slur->tick() < authoredAccidental->tick() && slur->tick2() > authoredAccidental->tick()) {
+            authoredSlur = slur;
+            authoredPhrase = toSlurSegment(slur->frontSegment());
+            break;
+        }
+    }
+    ASSERT_TRUE(authoredSlur && authoredPhrase);
+    std::array<PointF, 4> authoredOffsets;
+    std::array<PropertyFlags, 4> authoredOffsetFlags;
+    bool hasAuthoredGrip = false;
+    for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+        authoredOffsets[i] = authoredPhrase->ups(PRETTIFY_GRIPS[i]).off;
+        authoredOffsetFlags[i] = authoredPhrase->propertyFlags(PRETTIFY_SLUR_PROPERTIES[i]);
+        hasAuthoredGrip = hasAuthoredGrip || !authoredOffsets[i].isNull();
+    }
+    ASSERT_TRUE(hasAuthoredGrip);
+    const bool authoredAutoplace = authoredPhrase->autoplace();
+    const PropertyFlags authoredAutoplaceFlags = authoredPhrase->propertyFlags(Pid::AUTOPLACE);
+    const EngravingItem* authoredStartElement = authoredSlur->startElement();
+    const EngravingItem* authoredEndElement = authoredSlur->endElement();
+    mu::engraving::pm::PmPrettifyOptions preserveAuthoredOptions;
+    preserveAuthoredOptions.forceNormalizeManual = false;
+    applyPrettifyCommand(authoredScore, preserveAuthoredOptions);
+    authoredPhrase = toSlurSegment(authoredSlur->frontSegment());
+    ASSERT_TRUE(authoredPhrase);
+    EXPECT_EQ(authoredSlur->startElement(), authoredStartElement);
+    EXPECT_EQ(authoredSlur->endElement(), authoredEndElement);
+    EXPECT_EQ(authoredPhrase->autoplace(), authoredAutoplace);
+    EXPECT_EQ(authoredPhrase->propertyFlags(Pid::AUTOPLACE), authoredAutoplaceFlags);
+    for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+        EXPECT_EQ(authoredPhrase->ups(PRETTIFY_GRIPS[i]).off, authoredOffsets[i]);
+        EXPECT_EQ(authoredPhrase->propertyFlags(PRETTIFY_SLUR_PROPERTIES[i]), authoredOffsetFlags[i]);
+    }
+    delete authoredScore;
+
+    MasterScore* manualScore = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+    ASSERT_TRUE(manualScore);
+    StaffText* manualAccidental = nullptr;
+    for (StaffText* text : collectStaffTexts(manualScore)) {
+        if (text->plainText() == u"\u266d") {
+            manualAccidental = text;
+            break;
+        }
+    }
+    ASSERT_TRUE(manualAccidental);
+    mu::engraving::pm::applyPianomaniaAutoLayout(manualScore);
+    SlurSegment* manualPhrase = nullptr;
+    for (const auto& pair : manualScore->spanner()) {
+        Spanner* spanner = pair.second;
+        if (!spanner || !spanner->isSlur()) {
+            continue;
+        }
+        Slur* slur = toSlur(spanner);
+        if (slur->up() && slur->staffIdx() == manualAccidental->staffIdx()
+            && slur->tick() < manualAccidental->tick() && slur->tick2() > manualAccidental->tick()) {
+            manualPhrase = toSlurSegment(slur->frontSegment());
+            break;
+        }
+    }
+    ASSERT_TRUE(manualPhrase);
+    manualPhrase->setAutoplace(false);
+    Slur* manualSlur = manualPhrase->slur();
+    std::array<PointF, 4> manualOffsets;
+    std::array<PropertyFlags, 4> manualOffsetFlags;
+    for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+        manualOffsets[i] = manualPhrase->ups(PRETTIFY_GRIPS[i]).off;
+        manualOffsetFlags[i] = manualPhrase->propertyFlags(PRETTIFY_SLUR_PROPERTIES[i]);
+    }
+    mu::engraving::pm::PmPrettifyOptions preserveManualOptions;
+    preserveManualOptions.forceNormalizeManual = false;
+    applyPrettifyCommand(manualScore, preserveManualOptions);
+    manualPhrase = toSlurSegment(manualSlur->frontSegment());
+    ASSERT_TRUE(manualPhrase);
+    EXPECT_FALSE(manualPhrase->autoplace());
+    for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+        EXPECT_EQ(manualPhrase->ups(PRETTIFY_GRIPS[i]).off, manualOffsets[i]);
+        EXPECT_EQ(manualPhrase->propertyFlags(PRETTIFY_SLUR_PROPERTIES[i]), manualOffsetFlags[i]);
+    }
+    delete manualScore;
 }
 
 // Test value: Keeps expression words, mixed text and hidden accidental glyphs
@@ -2862,6 +3084,9 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     MScore::pianomaniaForceNormalizeSlursFingerings = true;
     mu::engraving::pm::applyPianomaniaAutoLayout(score);
     relayoutScore(score);
+    mu::engraving::pm::PmPrettifyOptions reportedOptions;
+    reportedOptions.forceNormalizeManual = true;
+    applyPrettifyCommand(score, reportedOptions);
     hairpins = reportedGriegPair(score);
     pair = segments(hairpins);
     ASSERT_TRUE(pair[0] && pair[1]);
@@ -2872,15 +3097,12 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     for (HairpinSegment* segment : pair) {
         EXPECT_TRUE(segment->visible());
         EXPECT_TRUE(segment->autoplace());
-        EXPECT_TRUE(segment->isStyled(Pid::OFFSET));
-        EXPECT_FALSE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
-        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET2), PropertyFlags::NOSTYLE);
     }
     EXPECT_GE(gapSp(pair), 0.60 - 0.001);
     EXPECT_NEAR(graphicalHairpinRight(pair[1]), ordinaryFarEndX, 0.01);
     const HairpinLineSnapshot flagsOnCrescendo = captureHairpinLine(pair[0]);
     const HairpinLineSnapshot flagsOnDiminuendo = captureHairpinLine(pair[1]);
-    relayoutScore(score);
+    applyPrettifyCommand(score, reportedOptions);
     pair = segments(reportedGriegPair(score));
     expectHairpinLineEqual(flagsOnCrescendo, captureHairpinLine(pair[0]));
     expectHairpinLineEqual(flagsOnDiminuendo, captureHairpinLine(pair[1]));
