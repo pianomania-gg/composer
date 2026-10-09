@@ -1313,6 +1313,140 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringPlacementStaysWithinNoteheadC
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, prettifyButtonPersistsFingeringsAndTempoClearance)
+{
+    struct PrettifyFlagsOff {
+        bool previousPrettify = false;
+        bool previousForceNormalize = false;
+
+        PrettifyFlagsOff()
+        {
+            previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+            previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+            MScore::pianomaniaPrettifySlursFingerings = false;
+            MScore::pianomaniaForceNormalizeSlursFingerings = false;
+        }
+
+        ~PrettifyFlagsOff()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+            MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+        }
+    } prettifyFlagsOff;
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-tempo-slur-pocket.mscx");
+    ASSERT_TRUE(score);
+    const std::vector<TempoSnapshotEntry> originalTempo = captureTempoSnapshot(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    const std::vector<TempoText*> tempos = collectTempoTexts(score);
+    ASSERT_EQ(tempos.size(), 1);
+    TempoText* tempo = tempos.front();
+    const PointF originalTempoOffset = tempo->offset();
+    const PropertyFlags originalTempoOffsetFlags = tempo->propertyFlags(Pid::OFFSET);
+    const OffsetChange originalTempoOffsetChanged = tempo->ldata()->offsetChanged();
+    const PointF originalTempoChangedPos = tempo->ldata()->autoplace.changedPos;
+    const mu::engraving::pm::PmPrettifyResult result = applyPrettifyCommand(score);
+    EXPECT_TRUE(result.changed);
+
+    std::vector<Fingering*> rightHand;
+    for (const FingeringSnapshotEntry& entry : capturePrettifySnapshot(score).fingerings) {
+        const Note* note = entry.fingering ? entry.fingering->note() : nullptr;
+        const Chord* chord = note ? note->chord() : nullptr;
+        if (chord && chord->vStaffIdx() == 0) {
+            rightHand.push_back(entry.fingering);
+        }
+    }
+    std::sort(rightHand.begin(), rightHand.end(), [](const Fingering* left, const Fingering* right) {
+        return left->tick() < right->tick();
+    });
+    ASSERT_GE(rightHand.size(), 6);
+
+    constexpr std::array<int, 6> expectedPitches = { 62, 67, 69, 70, 72, 74 };
+    // The slur and staff edge make the strict 3sp preference unreachable for
+    // some of these notes. The repair must still bring the opening run into a
+    // bounded, staff-adjacent pocket instead of leaving it near the page top.
+    constexpr double maximumSafeDetachmentSp = 4.5;
+    for (size_t i = 0; i < expectedPitches.size(); ++i) {
+        ASSERT_TRUE(rightHand[i]->note());
+        EXPECT_EQ(rightHand[i]->note()->pitch(), expectedPitches[i]);
+        EXPECT_EQ(rightHand[i]->placement(), PlacementV::ABOVE);
+        if (i < 4) {
+            EXPECT_LE(fingeringNoteheadDistance(rightHand[i]),
+                      maximumSafeDetachmentSp * std::max(1.0, rightHand[i]->spatium()) + 0.05) << i;
+        }
+    }
+
+    ASSERT_TRUE(tempo->visible());
+    const RectF tempoRect = tempo->pageBoundingRect();
+    const double clearance = 0.25 * std::max(1.0, rightHand.front()->spatium());
+    for (size_t i = 0; i < 4; ++i) {
+        const RectF fingeringRect = rightHand[i]->pageBoundingRect();
+        if (fingeringRect.right() > tempoRect.left() && fingeringRect.left() < tempoRect.right()
+            && fingeringRect.center().y() > tempoRect.center().y()) {
+            EXPECT_GE(fingeringRect.top() - tempoRect.bottom(), clearance - 0.05) << i;
+        }
+    }
+    EXPECT_TRUE(tempoSnapshotsEquivalent(captureTempoSnapshot(score), originalTempo));
+
+    const PointF acceptedOne = rightHand[4]->pagePos();
+    const PointF acceptedTwo = rightHand[5]->pagePos();
+    const PointF repairedTempoOffset = tempo->offset();
+    const PropertyFlags repairedTempoOffsetFlags = tempo->propertyFlags(Pid::OFFSET);
+    const OffsetChange repairedTempoOffsetChanged = tempo->ldata()->offsetChanged();
+    const PointF repairedTempoChangedPos = tempo->ldata()->autoplace.changedPos;
+    const PointF tempoPosition = tempo->pagePos();
+    relayoutScore(score);
+    EXPECT_TRUE(pointNear(tempo->pagePos(), tempoPosition, 0.02 * tempo->spatium()));
+    EXPECT_TRUE(pointNear(rightHand[4]->pagePos(), acceptedOne, 0.02 * rightHand[4]->spatium()));
+    EXPECT_TRUE(pointNear(rightHand[5]->pagePos(), acceptedTwo, 0.02 * rightHand[5]->spatium()));
+    const RectF retainedTempoRect = tempo->pageBoundingRect();
+    for (size_t i = 0; i < 4; ++i) {
+        const RectF fingeringRect = rightHand[i]->pageBoundingRect();
+        if (fingeringRect.right() > retainedTempoRect.left() && fingeringRect.left() < retainedTempoRect.right()
+            && fingeringRect.center().y() > retainedTempoRect.center().y()) {
+            EXPECT_GE(fingeringRect.top() - retainedTempoRect.bottom(), clearance - 0.05) << i;
+        }
+    }
+    EditData undoEditData;
+    score->undoStack()->undo(&undoEditData);
+    relayoutScore(score);
+    EXPECT_EQ(tempo->offset(), originalTempoOffset);
+    EXPECT_EQ(tempo->propertyFlags(Pid::OFFSET), originalTempoOffsetFlags);
+    EXPECT_EQ(tempo->ldata()->offsetChanged(), originalTempoOffsetChanged);
+    EXPECT_EQ(tempo->ldata()->autoplace.changedPos, originalTempoChangedPos);
+    EXPECT_TRUE(tempoSnapshotsEquivalent(captureTempoSnapshot(score), originalTempo));
+
+    EditData redoEditData;
+    score->undoStack()->redo(&redoEditData);
+    relayoutScore(score);
+    EXPECT_EQ(tempo->offset(), repairedTempoOffset);
+    EXPECT_EQ(tempo->propertyFlags(Pid::OFFSET), repairedTempoOffsetFlags);
+    EXPECT_EQ(tempo->ldata()->offsetChanged(), repairedTempoOffsetChanged);
+    EXPECT_EQ(tempo->ldata()->autoplace.changedPos, repairedTempoChangedPos);
+    EXPECT_TRUE(pointNear(tempo->pagePos(), tempoPosition, 0.02 * tempo->spatium()));
+    EXPECT_TRUE(pointNear(rightHand[4]->pagePos(), acceptedOne, 0.02 * rightHand[4]->spatium()));
+    EXPECT_TRUE(pointNear(rightHand[5]->pagePos(), acceptedTwo, 0.02 * rightHand[5]->spatium()));
+
+    std::array<PointF, 4> openingPositions;
+    for (size_t i = 0; i < openingPositions.size(); ++i) {
+        openingPositions[i] = rightHand[i]->pagePos();
+    }
+    applyPrettifyCommand(score);
+    EXPECT_EQ(tempo->offset(), repairedTempoOffset);
+    EXPECT_EQ(tempo->propertyFlags(Pid::OFFSET), repairedTempoOffsetFlags);
+    EXPECT_EQ(tempo->ldata()->offsetChanged(), repairedTempoOffsetChanged);
+    EXPECT_EQ(tempo->ldata()->autoplace.changedPos, repairedTempoChangedPos);
+    EXPECT_TRUE(pointNear(tempo->pagePos(), tempoPosition, 0.02 * tempo->spatium()));
+    for (size_t i = 0; i < openingPositions.size(); ++i) {
+        EXPECT_TRUE(pointNear(rightHand[i]->pagePos(), openingPositions[i], 0.02 * rightHand[i]->spatium())) << i;
+    }
+    EXPECT_TRUE(pointNear(rightHand[4]->pagePos(), acceptedOne, 0.02 * rightHand[4]->spatium()));
+    EXPECT_TRUE(pointNear(rightHand[5]->pagePos(), acceptedTwo, 0.02 * rightHand[5]->spatium()));
+    EXPECT_TRUE(tempoSnapshotsEquivalent(captureTempoSnapshot(score), originalTempo));
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, textHairpinClearsNotationAndFingerings)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/text-hairpin-notation-collision.mscx");

@@ -24,6 +24,7 @@
 #include <cfloat>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 #include "systemlayout.h"
@@ -57,6 +58,7 @@
 #include "dom/mscore.h"
 #include "dom/note.h"
 #include "dom/ornament.h"
+#include "dom/page.h"
 #include "dom/part.h"
 #include "dom/parenthesis.h"
 #include "dom/pedal.h"
@@ -152,6 +154,7 @@ struct GroupPlacement {
     double moveAway = 0.0; // in the away-from-staff direction; negative = tucked toward the notes
     bool slurResolved = true;
     bool tucked = false;
+    bool needsTempoClearance = false;
     // How far past the vanilla position this placement actually tucked, and
     // how much local clearance proof is available to neighboring groups in
     // the same slur run.
@@ -1275,6 +1278,120 @@ bool fingeringTuckSkylineFilterOut(const ShapeElement& element)
            && (element.item()->isFingering() || element.item()->isSlurSegment() || element.item()->isStaffLines());
 }
 
+bool fingeringPocketSkylineFilterOut(const ShapeElement& element)
+{
+    return fingeringTuckSkylineFilterOut(element) || (element.item() && element.item()->isTempoText());
+}
+
+bool clearTempoTextFromFingeringPocket(const RectF& candidateRect, const FingeringGroupContext& ctx, bool apply)
+{
+    if (!ctx.above || !ctx.system) {
+        return true;
+    }
+
+    struct TempoMove {
+        EngravingItem* item = nullptr;
+        Page* page = nullptr;
+        double moveUp = 0.0;
+        RectF destinationOnPage;
+    };
+
+    const double clearance = PM_FINGERING_STRUCTURE_CLEARANCE_MIN * ctx.spatium;
+    std::vector<TempoMove> moves;
+    for (MeasureBase* mb : ctx.system->measures()) {
+        if (!mb || !mb->isMeasure()) {
+            continue;
+        }
+        for (Segment& segment : toMeasure(mb)->segments()) {
+            for (EngravingItem* annotation : segment.annotations()) {
+                if (!annotation || !annotation->isTempoText() || !annotation->visible()
+                    || !annotation->ldata() || annotation->ldata()->isSkipDraw()) {
+                    continue;
+                }
+
+                const RectF tempoRect = annotation->pageBoundingRect().translated(-ctx.system->pagePos());
+                if (tempoRect.isNull()) {
+                    continue;
+                }
+                const RectF paddedCandidate = candidateRect.adjusted(-clearance, -clearance, clearance, clearance);
+                const bool overlapsTempo = paddedCandidate.left() < tempoRect.right()
+                                           && paddedCandidate.right() > tempoRect.left()
+                                           && paddedCandidate.top() < tempoRect.bottom()
+                                           && paddedCandidate.bottom() > tempoRect.top();
+                if (!overlapsTempo) {
+                    continue;
+                }
+                if (candidateRect.center().y() <= tempoRect.center().y()) {
+                    return false;
+                }
+
+                const double moveUp = tempoRect.bottom() + clearance - candidateRect.top();
+                if (moveUp <= 0.0) {
+                    continue;
+                }
+
+                const RectF destination = tempoRect.translated(0.0, -moveUp);
+                Page* page = ctx.system->page();
+                const double pageTop = page ? -ctx.system->pagePos().y() : -DBL_MAX;
+                if (destination.top() < pageTop + clearance) {
+                    return false;
+                }
+
+                moves.push_back(TempoMove {
+                    annotation,
+                    page,
+                    moveUp,
+                    destination.translated(ctx.system->pagePos())
+                });
+            }
+        }
+    }
+
+    auto overlaps = [](const RectF& left, const RectF& right) {
+        return left.left() < right.right() && left.right() > right.left()
+               && left.top() < right.bottom() && left.bottom() > right.top();
+    };
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const TempoMove& move = moves[i];
+        if (!move.page) {
+            continue;
+        }
+
+        for (EngravingItem* item : move.page->items(move.destinationOnPage)) {
+            if (!item || item == move.item || item->isFingering() || !item->isTextBase() || !item->visible()
+                || !item->ldata() || item->ldata()->isSkipDraw()) {
+                continue;
+            }
+            const auto planned = std::find_if(moves.cbegin(), moves.cend(), [item](const TempoMove& other) {
+                return other.item == item;
+            });
+            const RectF itemRect = planned != moves.cend() ? planned->destinationOnPage : item->pageBoundingRect();
+            if (overlaps(move.destinationOnPage, itemRect)) {
+                return false;
+            }
+        }
+        for (size_t j = i + 1; j < moves.size(); ++j) {
+            if (moves[j].page == move.page && overlaps(move.destinationOnPage, moves[j].destinationOnPage)) {
+                return false;
+            }
+        }
+    }
+
+    if (apply) {
+        std::unordered_set<Page*> changedPages;
+        for (const TempoMove& move : moves) {
+            move.item->mutldata()->moveY(-move.moveUp);
+            if (move.page) {
+                changedPages.insert(move.page);
+            }
+        }
+        for (Page* page : changedPages) {
+            page->invalidateBspTree();
+        }
+    }
+    return true;
+}
+
 bool rectsOverlap(const RectF& a, const RectF& b)
 {
     return a.left() < b.right() && a.right() > b.left()
@@ -1282,7 +1399,8 @@ bool rectsOverlap(const RectF& a, const RectF& b)
 }
 
 bool fingeringGroupFinalTuckClearsSkyline(const RectF& baseRect, const RectF& candidateRect,
-                                          const FingeringGroupContext& ctx, double padSp = 0.02)
+                                          const FingeringGroupContext& ctx, double padSp = 0.02,
+                                          bool ignoreTempoText = false)
 {
     if (!ctx.system || ctx.staffIdx == muse::nidx || ctx.staffIdx >= ctx.system->staves().size()) {
         return true;
@@ -1300,9 +1418,10 @@ bool fingeringGroupFinalTuckClearsSkyline(const RectF& baseRect, const RectF& ca
     const double pad = padSp * ctx.spatium;
     candidateShape.adjust(-pad, -pad, pad, pad);
 
+    const auto skylineFilter = ignoreTempoText ? fingeringPocketSkylineFilterOut : fingeringTuckSkylineFilterOut;
     const SkylineLine filtered = ctx.above
-                                 ? sysStaff->skyline().north().getFilteredCopy(fingeringTuckSkylineFilterOut)
-                                 : sysStaff->skyline().south().getFilteredCopy(fingeringTuckSkylineFilterOut);
+                                 ? sysStaff->skyline().north().getFilteredCopy(skylineFilter)
+                                 : sysStaff->skyline().south().getFilteredCopy(skylineFilter);
 
     for (const ShapeElement& candidate : candidateShape.elements()) {
         if (candidate.height() <= 0.0) {
@@ -1518,6 +1637,58 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
     placement.dx = dx;
     double total = base;
     rect = movedAway(rect, base);
+
+    // An intervening skyline item can split the route back to the notes into
+    // two disjoint clear intervals. A common example is a tempo mark below a
+    // fingering that vanilla autoplace has already lifted above a slur. The
+    // ordinary walkback below deliberately stops at the first obstruction,
+    // so inspect the bounded range beyond it only when the group is still
+    // unreasonably detached. Every landing point must independently clear the
+    // notes, staff, marks, structural items, slurs and final skyline.
+    const double noteheadDetachment = fingeringRectDistanceFromNoteheads(rect, ctx.noteheadRect, ctx.above);
+    if (muse::RealIsNull(dx) && ctx.allowTuck
+        && noteheadDetachment > PM_FINGERING_NOTEHEAD_DETACHMENT_CAP * sp) {
+        const double staffIntrusion = PM_FINGERING_TUCK_STAFF_INTRUSION * sp;
+        auto clearsPocketAt = [&](double drop) {
+            const RectF candidate = movedAway(rect, -drop);
+            return requiredVerticalMoveFromNotationRect(candidate, ctx.noteDangerRect, ctx.above,
+                                                            PM_FINGERING_NOTE_CLEARANCE_MIN * sp) <= 0.0
+                   && requiredVerticalMoveFromStaff(candidate, ctx.staffTop + staffIntrusion,
+                                                    ctx.staffBottom - staffIntrusion, ctx.above,
+                                                    PM_FINGERING_STAFF_CLEARANCE_MIN * sp) <= 0.0
+                   && requiredVerticalMoveFromMarkObstacles(candidate, *ctx.obstacles, ctx.staffIdx, ctx.above,
+                                                            PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0
+                   && requiredVerticalMoveFromStructuralObstacles(candidate, ctx.structuralObstacles, ctx.above,
+                                                                  PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0
+                   && !slurAvoidanceForRect(candidate, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
+                                            PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+                   && fingeringGroupFinalTuckClearsSkyline(groupRect, candidate, ctx, 0.02, ctx.above)
+                   && clearTempoTextFromFingeringPocket(candidate, ctx, false);
+        };
+
+        constexpr int SEARCH_STEPS_PER_SPATIUM = 20;
+        const double searchLimit = std::min(noteheadDetachment, 12.0 * sp);
+        const double minimumDetachment = std::max(0.0, noteheadDetachment - searchLimit);
+        const int firstStep = static_cast<int>(std::ceil(minimumDetachment / sp
+                                                         * SEARCH_STEPS_PER_SPATIUM));
+        const int lastStep = static_cast<int>(std::floor(noteheadDetachment / sp
+                                                         * SEARCH_STEPS_PER_SPATIUM));
+        for (int step = firstStep; step <= lastStep; ++step) {
+            const double desiredDetachment = double(step) / SEARCH_STEPS_PER_SPATIUM * sp;
+            const double drop = noteheadDetachment - desiredDetachment;
+            if (!clearsPocketAt(drop)) {
+                continue;
+            }
+
+            placement.moveAway = total - drop;
+            placement.tucked = true;
+            placement.tuckAllowanceUsed = std::max(0.0, drop - total);
+            placement.tuckAllowanceProven = std::max(searchLimit, placement.tuckAllowanceUsed);
+            placement.slurResolved = true;
+            placement.needsTempoClearance = true;
+            return placement;
+        }
+    }
 
     // Vanilla autoplace often leaves a fingering higher above its note than
     // the obstacle model requires (skyline padding accumulates). When nothing
@@ -2136,6 +2307,9 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
     }
 
     const RectF finalRect = rect.translated(chosen.dx, dy);
+    if (chosen.needsTempoClearance) {
+        clearTempoTextFromFingeringPocket(finalRect, ctx, true);
+    }
     const bool notationStillCollides
         = requiredVerticalMoveFromMarkObstacles(finalRect, obstacles, ctx.staffIdx, ctx.above,
                                                 PM_FINGERING_MARK_CLEARANCE_TUCK * spatium) > 0.0
@@ -2393,6 +2567,11 @@ void applyFingeringGroupPlacementDelta(PmFingeringGroupAdjustment& adjustment, c
     const double dy = targetDy - currentDy;
     if (muse::RealIsNull(dx) && muse::RealIsNull(dy)) {
         adjustment.chosen = placement;
+        if (placement.needsTempoClearance) {
+            const RectF finalRect = adjustment.baseRect.translated(
+                placement.dx, adjustment.ctx.above ? -placement.moveAway : placement.moveAway);
+            clearTempoTextFromFingeringPocket(finalRect, adjustment.ctx, true);
+        }
         return;
     }
 
@@ -2402,6 +2581,11 @@ void applyFingeringGroupPlacementDelta(PmFingeringGroupAdjustment& adjustment, c
     }
 
     adjustment.chosen = placement;
+    if (placement.needsTempoClearance) {
+        const RectF finalRect = adjustment.baseRect.translated(
+            placement.dx, adjustment.ctx.above ? -placement.moveAway : placement.moveAway);
+        clearTempoTextFromFingeringPocket(finalRect, adjustment.ctx, true);
+    }
     if (adjustment.segment && adjustment.ctx.staffIdx != muse::nidx) {
         adjustment.segment->createShape(adjustment.ctx.staffIdx);
     }
