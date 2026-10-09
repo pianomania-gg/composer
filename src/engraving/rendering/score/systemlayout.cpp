@@ -147,6 +147,17 @@ constexpr double PM_FINGERING_FLIP_TRIGGER = 2.25;
 constexpr double PM_FINGERING_FLIP_ADVANTAGE = 1.0;
 constexpr double PM_FINGERING_DESPERATE_MOVE = 1.4;
 constexpr double PM_FINGERING_NOTEHEAD_DETACHMENT_CAP = 3.0;
+// Stem-side nestle (see pianomaniaStemSideNestleRect): a beamed note's digit
+// detached beyond a trigger (sp) is offered the pocket between its notehead
+// and beam, where it sits NOTE_GAP from the notehead and at most
+// MAX_DETACHMENT away (a notehead inside the staff hands it to the staff
+// edge). A stem-side digit past its own beam triggers at the notehead cap; a
+// notehead-side digit parked across the staff body or another voice's rests
+// triggers sooner (Moonlight m46: a G4 digit above the rest, 2.97sp out).
+constexpr double PM_FINGERING_NESTLE_TRIGGER = PM_FINGERING_NOTEHEAD_DETACHMENT_CAP;
+constexpr double PM_FINGERING_NESTLE_NOTEHEAD_SIDE_TRIGGER = 2.5;
+constexpr double PM_FINGERING_NESTLE_NOTE_GAP = PM_FINGERING_NOTE_CLEARANCE_MIN + PM_FINGERING_SLUR_TARGET_EXTRA;
+constexpr double PM_FINGERING_NESTLE_MAX_DETACHMENT = 1.5;
 constexpr double PM_TEXT_HAIRPIN_NOTATION_CLEARANCE = 0.25;
 constexpr double PM_TEXT_HAIRPIN_MIN_OVERLAP = 0.05;
 
@@ -2195,6 +2206,301 @@ void setFingeringGroupPlacementAndRelayout(const std::vector<Fingering*>& finger
     }
 }
 
+// Stem-side nestle. A beamed note's digit can be stranded far from its
+// notehead on either ordinary side: a lower-voice note hanging below the
+// staff gets its digit above the staff (past the staff body or the upper
+// voice's rest), and a stem-side digit on a long-stemmed note lands past the
+// beam. Engraved practice keeps such a digit in the pocket between the
+// notehead and its beam instead: just beyond the notehead on the stem side,
+// beside the stem rather than under it, and off the staff lines (Moonlight
+// m29/m46/m57: "nestled under the note heads, to the right of the stems").
+bool pianomaniaStemSideNestleEligible(const Fingering* fingering)
+{
+    const Note* note = fingering ? fingering->note() : nullptr;
+    const Chord* chord = note ? note->chord() : nullptr;
+    const Segment* segment = chord ? chord->segment() : nullptr;
+    if (!chord || !segment || !segment->measure() || chord->isGrace()
+        || !visibleObstacleItem(chord->beam()) || !visibleObstacleItem(chord->stem())) {
+        return false;
+    }
+
+    // Only the outermost note on the stem side owns the pocket; an inner
+    // chord tone's digit there would read as the outer note's.
+    return note == (chord->up() ? chord->upNote() : chord->downNote());
+}
+
+bool pianomaniaStemSideNestleRect(const Fingering* fingering, const RectF& digitRect, double staffTop, double staffBottom,
+                                  RectF& nestleRect)
+{
+    if (!pianomaniaStemSideNestleEligible(fingering) || digitRect.isNull()) {
+        return false;
+    }
+
+    const Note* note = fingering->note();
+    const Chord* chord = note->chord();
+    const Segment* segment = chord->segment();
+    const Measure* measure = segment->measure();
+    const bool up = chord->up();
+    const double sp = fingering->spatium();
+    const Stem* stem = chord->stem();
+    const RectF noteRect = noteSystemRect(note);
+    const RectF stemRect = stem->ldata()->bbox().translated(
+        PointF(0.0, staffYInSystem(measure->system(), chord->vStaffIdx()))
+        + chord->pos() + segment->pos() + measure->pos() + stem->pos() + stem->staffOffset());
+    if (noteRect.isNull() || stemRect.isNull()) {
+        return false;
+    }
+
+    // Centered on the notehead unless that brings the label within the
+    // structural clearance of its own stem: the digit sits beside the stem.
+    const double width = digitRect.width();
+    const double height = digitRect.height();
+    const double stemGap = (PM_FINGERING_STRUCTURE_CLEARANCE_MIN + PM_FINGERING_SLUR_TARGET_EXTRA) * sp;
+    double left = noteRect.center().x() - 0.5 * width;
+    if (up) {
+        left = std::min(left, stemRect.left() - stemGap - width);
+    } else {
+        left = std::max(left, stemRect.right() + stemGap);
+    }
+
+    // Just beyond the notehead, but never on the staff lines: a notehead
+    // inside the staff hands its digit to the staff edge.
+    const double noteGap = PM_FINGERING_NESTLE_NOTE_GAP * sp;
+    const double staffGap = (PM_FINGERING_STAFF_CLEARANCE_MIN + PM_FINGERING_SLUR_TARGET_EXTRA) * sp;
+    double top = up ? noteRect.top() - noteGap - height : noteRect.bottom() + noteGap;
+    if (top < staffBottom + staffGap && top + height > staffTop - staffGap) {
+        top = up ? staffTop - staffGap - height : staffBottom + staffGap;
+    }
+
+    nestleRect = RectF(left, top, width, height);
+    return fingeringRectDistanceFromNoteheads(nestleRect, noteRect, up) <= PM_FINGERING_NESTLE_MAX_DETACHMENT * sp;
+}
+
+// Whether the digit already sits in its note's stem-side pocket. Neither
+// vanilla autoplace nor the ordinary resolver lands a beamed note's digit
+// between its notehead and beam (both stack past the beam), so a digit found
+// there was nestled by an earlier pass of this layout. The page-stage reruns
+// start from that position, where the ordinary resolver would read the stem
+// beside the re-centered digit as a wall and drift it sideways; recognising
+// the pocket keeps the reruns at the same nestle rect.
+bool pianomaniaFingeringRectInStemSidePocket(const RectF& rect, const Fingering* fingering)
+{
+    if (!pianomaniaStemSideNestleEligible(fingering) || rect.isNull()) {
+        return false;
+    }
+    const Note* note = fingering->note();
+    const Chord* chord = note->chord();
+    const RectF noteRect = noteSystemRect(note);
+    const bool up = chord->up();
+    const bool onStemSide = up ? rect.bottom() <= noteRect.center().y() : rect.top() >= noteRect.center().y();
+    const double sp = fingering->spatium();
+    return onStemSide && rect.right() > noteRect.left() && rect.left() < noteRect.right()
+           && fingeringRectDistanceFromNoteheads(rect, noteRect, up)
+           <= (PM_FINGERING_NESTLE_MAX_DETACHMENT + PM_FINGERING_SLUR_TARGET_EXTRA) * sp;
+}
+
+// Stems, flags and beams near a nestle landing keep the structural
+// clearance. The pocket is walled by the note's own stem and beam, so beams
+// are tested against their drawn band rather than BeamSegment::shape(): the
+// per-spatium sub-boxes of a sloped beam step up to a slope's worth past the
+// band, which would close pockets the beam leaves open.
+bool pianomaniaStemSideNestleClearsStructure(const RectF& rect, const FingeringGroupContext& ctx)
+{
+    const System* system = ctx.system;
+    if (!system) {
+        return false;
+    }
+    const double sp = ctx.spatium;
+    const double clearance = PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp;
+    // Euclidean gap between the digit and an ink rect: a stem or beam corner
+    // diagonally off the label's corner is farther than either axis gap.
+    auto distanceTo = [&rect](double left, double top, double right, double bottom) {
+        const double dx = std::max({ 0.0, left - rect.right(), rect.left() - right });
+        const double dy = std::max({ 0.0, top - rect.bottom(), rect.top() - bottom });
+        return std::hypot(dx, dy);
+    };
+    auto rectClears = [&](const RectF& ink) {
+        return distanceTo(ink.left(), ink.top(), ink.right(), ink.bottom()) >= clearance;
+    };
+    // The band is sampled finely along its centre line; each sample is a
+    // vertical slice of the drawn beam.
+    auto beamClears = [&](const Beam* beam) {
+        const PointF offset = beamSystemOffset(beam, system);
+        const double halfWidth = 0.5 * beam->beamWidth();
+        const double step = 0.05 * sp;
+        for (const BeamSegment* beamSegment : beam->beamSegments()) {
+            PointF start = beamSegment->line.p1() + offset;
+            PointF end = beamSegment->line.p2() + offset;
+            if (start.x() > end.x()) {
+                std::swap(start, end);
+            }
+            const double left = std::max(start.x(), rect.left() - clearance);
+            const double right = std::min(end.x(), rect.right() + clearance);
+            for (double x = left; x <= right + 0.5 * step; x += step) {
+                const double sampleX = std::min(x, right);
+                const double centerY = muse::RealIsEqual(start.x(), end.x())
+                                       ? start.y()
+                                       : start.y() + (end.y() - start.y()) * (sampleX - start.x()) / (end.x() - start.x());
+                if (distanceTo(sampleX, centerY - halfWidth, sampleX, centerY + halfWidth) < clearance) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    std::set<const Beam*> seenBeams;
+    for (const MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        const Measure* measure = toMeasure(mb);
+        for (const Segment& segment : measure->segments()) {
+            if (!segment.isChordRestType()) {
+                continue;
+            }
+            for (const EngravingItem* item : segment.elist()) {
+                if (!item || !item->isChord() || item->vStaffIdx() != ctx.staffIdx) {
+                    continue;
+                }
+                const Chord* chord = toChord(item);
+                const PointF chordOrigin = PointF(0.0, staffYInSystem(system, ctx.staffIdx))
+                                           + chord->pos() + segment.pos() + measure->pos();
+                const Stem* stem = chord->stem();
+                if (visibleObstacleItem(stem)
+                    && !rectClears(stem->ldata()->bbox().translated(chordOrigin + stem->pos() + stem->staffOffset()))) {
+                    return false;
+                }
+                const Hook* hook = chord->hook();
+                if (visibleObstacleItem(hook)
+                    && !rectClears(hook->ldata()->bbox().translated(chordOrigin + hook->pos() + hook->staffOffset()))) {
+                    return false;
+                }
+                const Beam* beam = chord->beam();
+                if (visibleObstacleItem(beam) && seenBeams.insert(beam).second && !beamClears(beam)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// The pocket is bounded by the note's own stem and beam, so the landing is
+// proven against rendered geometry on all sides rather than pushed along one
+// axis: stems, flags and beams keep the structural clearance; everything
+// engraved on the staff (noteheads, ledger lines, accidentals, dots, rests,
+// articulations, other digits) plus marks, tuplets, slurs and the skyline
+// (ties, ...) keep the note clearance.
+bool pianomaniaStemSideNestleClearsNotation(const RectF& rect, const Fingering* fingering, const FingeringGroupContext& ctx)
+{
+    const double sp = ctx.spatium;
+    if (!pianomaniaStemSideNestleClearsStructure(rect, ctx)) {
+        return false;
+    }
+
+    const double clearance = PM_FINGERING_NOTE_CLEARANCE_MIN * sp;
+    const RectF padded = rect.adjusted(-clearance, -clearance, clearance, clearance);
+    const double accidentalClearance = PM_FINGERING_NOTE_CLEARANCE * sp;
+    const RectF accidentalPadded = rect.adjusted(-accidentalClearance, -accidentalClearance,
+                                                 accidentalClearance, accidentalClearance);
+    for (const FingeringObstacle& obstacle : *ctx.obstacles) {
+        if (!obstacle.slurSegment && obstacle.staffIdx == ctx.staffIdx && rectsOverlap(padded, obstacle.rect)) {
+            return false;
+        }
+    }
+    if (slurAvoidanceForRect(rect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, true, sp).conflict) {
+        return false;
+    }
+
+    // Other staves only once the system has real staff offsets (the
+    // degenerate system-stage frame stacks every staff at y = 0); the
+    // page-stage rerun repeats this check with them.
+    const System* system = ctx.system;
+    if (!system) {
+        return false;
+    }
+    std::vector<staff_idx_t> staves;
+    for (staff_idx_t staffIdx = 0; staffIdx < system->staves().size(); ++staffIdx) {
+        if (staffIdx == ctx.staffIdx || std::abs(staffYInSystem(system, staffIdx) - ctx.staffTop) > 0.01) {
+            staves.push_back(staffIdx);
+        }
+    }
+    for (const MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        const Measure* measure = toMeasure(mb);
+        for (const Segment& segment : measure->segments()) {
+            for (staff_idx_t staffIdx : staves) {
+                const PointF origin = measure->pos() + segment.pos() + PointF(0.0, staffYInSystem(system, staffIdx));
+                const Shape& shape = segment.staffShape(staffIdx);
+                if (shape.empty() || !rectsOverlap(accidentalPadded, shape.bbox().translated(origin))) {
+                    continue;
+                }
+                for (const ShapeElement& element : shape.elements()) {
+                    const EngravingItem* item = element.item();
+                    if (!item || item == fingering || !visibleObstacleItem(item)) {
+                        continue;
+                    }
+                    // Segment shapes still hold digits at their pre-pass positions.
+                    const RectF obstacle = item->isFingering() ? fingeringSystemRect(toFingering(item))
+                                           : element.translated(origin);
+                    // A digit squeezed against an accidental reads as part of
+                    // it ("♮4"): accidentals keep the ordinary note clearance.
+                    if (rectsOverlap(item->isAccidental() ? accidentalPadded : padded, obstacle)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    FingeringGroupContext skylineCtx = ctx;
+    skylineCtx.groupShape = Shape(rect);
+    for (bool above : { true, false }) {
+        skylineCtx.above = above;
+        if (!fingeringGroupFinalTuckClearsSkyline(rect, rect, skylineCtx)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The slice of a group context the nestle landing checks consult.
+FingeringGroupContext pianomaniaStemSideNestleContext(const Fingering* fingering,
+                                                     const std::vector<FingeringObstacle>& obstacles)
+{
+    FingeringGroupContext ctx;
+    const Note* note = fingering->note();
+    const Chord* chord = note ? note->chord() : nullptr;
+    const Measure* measure = chord ? chord->measure() : nullptr;
+    ctx.obstacles = &obstacles;
+    ctx.system = measure ? measure->system() : nullptr;
+    ctx.staffIdx = chord ? chord->vStaffIdx() : muse::nidx;
+    ctx.spatium = fingering->spatium();
+    ctx.staffTop = staffYInSystem(ctx.system, ctx.staffIdx);
+    ctx.staffBottom = ctx.staffTop + staffHeightForElement(fingering, ctx.spatium);
+    ctx.above = chord && chord->up();
+    return ctx;
+}
+
+// Moves a single digit onto its stem side and into the proven pocket rect.
+bool seatFingeringInStemSidePocket(Fingering* fingering, const RectF& nestleRect)
+{
+    const Chord* chord = fingering->note()->chord();
+    const PlacementV stemSide = chord->up() ? PlacementV::ABOVE : PlacementV::BELOW;
+    if (fingering->placement() != stemSide) {
+        setFingeringGroupPlacementAndRelayout({ fingering }, stemSide);
+    }
+    const RectF current = fingeringSystemRect(fingering);
+    const double dx = nestleRect.center().x() - current.center().x();
+    const double dy = chord->up() ? nestleRect.bottom() - current.bottom() : nestleRect.top() - current.top();
+    fingering->mutldata()->moveX(dx);
+    fingering->mutldata()->moveY(dy);
+    return !muse::RealIsNull(dx) || !muse::RealIsNull(dy);
+}
+
 struct PmFingeringGroupAdjustment {
     std::vector<Fingering*> fingerings;
     const Chord* chord = nullptr;
@@ -2204,6 +2510,14 @@ struct PmFingeringGroupAdjustment {
     GroupPlacement chosen;
     bool allowTuck = true;
     bool flipped = false;
+    // Seated in its stem-side pocket: anchored to the notehead, so the
+    // slur-chain and run-coherence passes must not re-step it. The ordinary
+    // resolution is kept so beam coherence can return the digit to it.
+    bool nestled = false;
+    PointF ordinaryPos;
+    PlacementV ordinaryPlacement = PlacementV::ABOVE;
+    bool ordinaryValid = false;
+    bool ordinaryCollides = false;
     bool valid = false;
 };
 
@@ -2241,6 +2555,17 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
     const Measure* measure = segment ? segment->measure() : nullptr;
     const System* system = measure ? measure->system() : nullptr;
     const double staffHeight = staff ? staff->staffHeight(first->tick()) : 4.0 * spatium;
+
+    // A digit an earlier pass of this layout seated in its pocket resolves
+    // its ordinary placement from its vanilla position again, as that pass
+    // did; from inside the pocket the resolver would read the stem beside the
+    // re-centered digit as a wall and drift the digit sideways.
+    const bool startedInPocket = fingerings.size() == 1
+                                 && pianomaniaFingeringRectInStemSidePocket(fingeringSystemRect(first), first);
+    if (startedInPocket) {
+        setFingeringGroupPlacementAndRelayout(fingerings, preferredPlacement);
+        centerFingeringGroupOverNotes(fingerings);
+    }
 
     FingeringGroupContext ctx;
     ctx.obstacles = &obstacles;
@@ -2351,20 +2676,16 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
         }
     }
 
-    if (!flipped && muse::RealIsNull(chosen.moveAway) && muse::RealIsNull(chosen.dx)) {
-        return false;
-    }
-
+    const bool moved = flipped || !muse::RealIsNull(chosen.moveAway) || !muse::RealIsNull(chosen.dx);
     const double dy = ctx.above ? -chosen.moveAway : chosen.moveAway;
-    for (Fingering* fingering : fingerings) {
-        fingering->mutldata()->moveX(chosen.dx);
-        fingering->mutldata()->moveY(dy);
+    if (moved) {
+        for (Fingering* fingering : fingerings) {
+            fingering->mutldata()->moveX(chosen.dx);
+            fingering->mutldata()->moveY(dy);
+        }
     }
 
-    const RectF finalRect = rect.translated(chosen.dx, dy);
-    if (chosen.needsTempoClearance) {
-        clearTempoTextFromFingeringPocket(finalRect, ctx, true);
-    }
+    const RectF finalRect = moved ? rect.translated(chosen.dx, dy) : rect;
     const bool notationStillCollides
         = requiredVerticalMoveFromMarkObstacles(finalRect, obstacles, ctx.staffIdx, ctx.above,
                                                 PM_FINGERING_MARK_CLEARANCE_TUCK * spatium) > 0.0
@@ -2374,11 +2695,7 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
                                   PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict;
     const bool noteStillCollides = requiredVerticalMoveFromNotationRect(finalRect, ctx.noteDangerRect, ctx.above,
                                                                         PM_FINGERING_NOTE_CLEARANCE_MIN * spatium) > 0.0;
-    if (notationStillCollides || noteStillCollides) {
-        ++MScore::pianomaniaManualReviewFingerings;
-        LOGW() << "Pianomania fingering/notation clearance needs manual review at tick " << chord->tick().ticks()
-               << ", track " << chord->track();
-    }
+    const bool ordinaryCollides = moved && (notationStillCollides || noteStillCollides);
 
     if (adjustment) {
         adjustment->fingerings = fingerings;
@@ -2389,9 +2706,44 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
         adjustment->chosen = chosen;
         adjustment->allowTuck = allowTuck;
         adjustment->flipped = flipped;
-        adjustment->valid = true;
+        adjustment->valid = moved;
     }
 
+    // Stem-side nestle: a single digit whose ordinary placement (flips
+    // included) stranded it beyond its side's trigger takes its note's pocket
+    // when one fits; the ordinary result is kept for beam coherence.
+    const double nestleTrigger = (ctx.above == chord->up() ? PM_FINGERING_NESTLE_TRIGGER
+                                  : PM_FINGERING_NESTLE_NOTEHEAD_SIDE_TRIGGER) * spatium;
+    RectF nestleRect;
+    if (fingerings.size() == 1 && !reservedZoneDodge
+        && (startedInPocket || fingeringRectDistanceFromNoteheads(finalRect, ctx.noteheadRect, ctx.above) > nestleTrigger)
+        && pianomaniaStemSideNestleRect(first, finalRect, ctx.staffTop, ctx.staffBottom, nestleRect)
+        && pianomaniaStemSideNestleClearsNotation(nestleRect, first, ctx)) {
+        const PointF ordinaryPos = first->ldata()->pos();
+        const PlacementV ordinaryPlacement = first->placement();
+        seatFingeringInStemSidePocket(first, nestleRect);
+        if (adjustment) {
+            adjustment->ordinaryValid = moved;
+            adjustment->ordinaryPos = ordinaryPos;
+            adjustment->ordinaryPlacement = ordinaryPlacement;
+            adjustment->ordinaryCollides = ordinaryCollides;
+            adjustment->nestled = true;
+            adjustment->valid = true;
+        }
+        return true;
+    }
+
+    if (!moved) {
+        return false;
+    }
+    if (chosen.needsTempoClearance) {
+        clearTempoTextFromFingeringPocket(finalRect, ctx, true);
+    }
+    if (ordinaryCollides) {
+        ++MScore::pianomaniaManualReviewFingerings;
+        LOGW() << "Pianomania fingering/notation clearance needs manual review at tick " << chord->tick().ticks()
+               << ", track " << chord->track();
+    }
     return true;
 }
 
@@ -2734,6 +3086,7 @@ struct PmFingeringChainNode {
     double noteY = 0.0;
     RectF noteRect;
     RectF rect;
+    bool nestled = false;
 };
 
 const Slur* pianomaniaSharedCoveringSlur(const Chord* a, const Chord* b, staff_idx_t staffIdx,
@@ -2880,7 +3233,7 @@ void enforcePianomaniaSlurTuckCoherence(std::vector<PmFingeringGroupAdjustment>&
 
     std::set<staff_idx_t> staves;
     for (const PmFingeringGroupAdjustment& adjustment : adjustments) {
-        if (adjustment.valid && adjustment.allowTuck && adjustment.chord
+        if (adjustment.valid && adjustment.allowTuck && !adjustment.nestled && adjustment.chord
             && adjustment.ctx.staffIdx != muse::nidx) {
             staves.insert(adjustment.ctx.staffIdx);
         }
@@ -2893,7 +3246,7 @@ void enforcePianomaniaSlurTuckCoherence(std::vector<PmFingeringGroupAdjustment>&
             ordered.reserve(adjustments.size());
             for (size_t i = 0; i < adjustments.size(); ++i) {
                 const PmFingeringGroupAdjustment& adjustment = adjustments[i];
-                if (adjustment.valid && adjustment.allowTuck && adjustment.chord
+                if (adjustment.valid && adjustment.allowTuck && !adjustment.nestled && adjustment.chord
                     && adjustment.ctx.staffIdx == staffIdx && adjustment.ctx.above == above) {
                     ordered.push_back(i);
                 }
@@ -2930,7 +3283,8 @@ void enforcePianomaniaSlurTuckCoherence(std::vector<PmFingeringGroupAdjustment>&
     }
 }
 
-void enforcePianomaniaFingeringRunCoherence(System* system, const std::vector<FingeringObstacle>& obstacles)
+void enforcePianomaniaFingeringRunCoherence(System* system, const std::vector<FingeringObstacle>& obstacles,
+                                            const std::set<const Fingering*>& nestled)
 {
     constexpr size_t minChainLength = 3;
 
@@ -2979,6 +3333,10 @@ void enforcePianomaniaFingeringRunCoherence(System* system, const std::vector<Fi
                     }
                     node.noteY = noteRect.center().y();
                     node.noteRect = noteRect;
+                    node.nestled = std::any_of(node.fingerings.begin(), node.fingerings.end(),
+                                               [&nestled](const Fingering* fingering) {
+                        return nestled.count(fingering) > 0;
+                    });
                     nodes.push_back(std::move(node));
                 }
             }
@@ -3000,8 +3358,10 @@ void enforcePianomaniaFingeringRunCoherence(System* system, const std::vector<Fi
             const double staffTop = staffYInSystem(system, staffIdx);
             size_t start = 0;
             while (start < staffNodes.size()) {
+                // A nestled digit is anchored to its notehead inside the beam
+                // pocket; it neither joins nor steps a run.
                 size_t end = start;
-                while (end + 1 < staffNodes.size()
+                while (!staffNodes[start]->nestled && end + 1 < staffNodes.size() && !staffNodes[end + 1]->nestled
                        && pianomaniaChordsShareBeamOrSlur(staffNodes[end]->chord, staffNodes[end + 1]->chord,
                                                           staffIdx, obstacles)) {
                     ++end;
@@ -3232,18 +3592,121 @@ void placeSparseInnerNoteFingerings(System* system, const std::vector<FingeringO
     }
 }
 
+// A single digit that could take its note's stem-side pocket, with the
+// adjustment that records its ordinary resolution.
+struct PmNestleCandidate {
+    Fingering* fingering = nullptr;
+    const Beam* beam = nullptr;
+    size_t adjustmentIndex = muse::nidx;
+    bool nestled = false;
+};
+
+// The digits along one beam read as one row: a nestled digit next to a
+// neighbor left outside the staff or past the beam scatters the row (and a
+// neighbor just under the trigger strands a lone digit in place). Per beam,
+// either every eligible digit takes its pocket — the stragglers follow when
+// their pockets are proven clear — or none does, and the nestled ones return
+// to their ordinary placement.
+void enforcePianomaniaBeamNestleCoherence(std::vector<PmNestleCandidate>& candidates,
+                                          std::vector<PmFingeringGroupAdjustment>& adjustments,
+                                          const std::vector<FingeringObstacle>& obstacles,
+                                          std::set<const Segment*>& changedSegments)
+{
+    std::map<const Beam*, std::vector<PmNestleCandidate*>> byBeam;
+    for (PmNestleCandidate& candidate : candidates) {
+        byBeam[candidate.beam].push_back(&candidate);
+    }
+
+    for (auto& [beam, members] : byBeam) {
+        const bool anyNestled = std::any_of(members.begin(), members.end(), [](const PmNestleCandidate* c) {
+            return c->nestled;
+        });
+        const bool allNestled = std::all_of(members.begin(), members.end(), [](const PmNestleCandidate* c) {
+            return c->nestled;
+        });
+        if (!anyNestled || allNestled) {
+            continue;
+        }
+
+        std::vector<std::pair<PmNestleCandidate*, RectF>> stragglers;
+        bool stragglersFit = true;
+        for (PmNestleCandidate* candidate : members) {
+            if (candidate->nestled) {
+                continue;
+            }
+            const FingeringGroupContext ctx = pianomaniaStemSideNestleContext(candidate->fingering, obstacles);
+            RectF nestleRect;
+            if (!pianomaniaStemSideNestleRect(candidate->fingering, fingeringSystemRect(candidate->fingering), ctx.staffTop,
+                                              ctx.staffBottom, nestleRect)
+                || !pianomaniaStemSideNestleClearsNotation(nestleRect, candidate->fingering, ctx)) {
+                stragglersFit = false;
+                break;
+            }
+            stragglers.emplace_back(candidate, nestleRect);
+        }
+
+        if (stragglersFit) {
+            for (auto& [candidate, nestleRect] : stragglers) {
+                seatFingeringInStemSidePocket(candidate->fingering, nestleRect);
+                candidate->nestled = true;
+                if (candidate->adjustmentIndex != muse::nidx) {
+                    adjustments[candidate->adjustmentIndex].nestled = true;
+                }
+                changedSegments.insert(candidate->fingering->note()->chord()->segment());
+            }
+            continue;
+        }
+
+        for (PmNestleCandidate* candidate : members) {
+            if (!candidate->nestled || candidate->adjustmentIndex == muse::nidx) {
+                continue;
+            }
+            PmFingeringGroupAdjustment& adjustment = adjustments[candidate->adjustmentIndex];
+            Fingering* fingering = candidate->fingering;
+            if (fingering->placement() != adjustment.ordinaryPlacement) {
+                fingering->setPlacement(adjustment.ordinaryPlacement);
+                TLayout::layoutFingering(fingering, fingering->mutldata());
+            }
+            fingering->mutldata()->setPos(adjustment.ordinaryPos);
+            adjustment.nestled = false;
+            adjustment.valid = adjustment.ordinaryValid;
+            if (adjustment.valid && adjustment.chosen.needsTempoClearance) {
+                const RectF finalRect = adjustment.baseRect.translated(
+                    adjustment.chosen.dx, adjustment.ctx.above ? -adjustment.chosen.moveAway : adjustment.chosen.moveAway);
+                clearTempoTextFromFingeringPocket(finalRect, adjustment.ctx, true);
+            }
+            if (adjustment.ordinaryCollides) {
+                ++MScore::pianomaniaManualReviewFingerings;
+                LOGW() << "Pianomania fingering/notation clearance needs manual review at tick "
+                       << fingering->note()->chord()->tick().ticks() << ", track " << fingering->note()->chord()->track();
+            }
+            candidate->nestled = false;
+            changedSegments.insert(fingering->note()->chord()->segment());
+        }
+    }
+}
+
 void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addFinalRectsToSkylines)
 {
     const std::vector<FingeringObstacle> obstacles = collectPianomaniaFingeringObstacles(system);
     std::vector<PmFingeringGroupAdjustment> adjustments;
+    std::vector<PmNestleCandidate> nestleCandidates;
+    // Grace digits align to the digit row of their host and next segments;
+    // when beam coherence later moves a digit of that row, the alignment is
+    // redone from the grace digit's own resolved position.
+    struct GraceAlignment {
+        std::vector<Fingering*> group;
+        std::vector<PointF> resolvedPos;
+    };
+    std::vector<GraceAlignment> graceAlignments;
 
     // Digits of one segment column that resolve to the same displayed staff
     // and side must be treated as ONE group even when they come from chords
     // of different voices: vanilla autoplace resolves each track against a
     // stale skyline and prints them on top of each other. Grace chords keep
     // their own groups — they anchor to their own x position.
-    auto processGroup = [&obstacles, &adjustments](const std::vector<Fingering*>& group, bool multiChord, bool graceGroup,
-                                                   bool allowOppositeSide) -> bool {
+    auto processGroup = [&obstacles, &adjustments, &nestleCandidates, &graceAlignments](
+        const std::vector<Fingering*>& group, bool multiChord, bool graceGroup, bool allowOppositeSide) -> bool {
         if (group.empty()) {
             return false;
         }
@@ -3278,10 +3741,23 @@ void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addF
         const bool adjusted = adjustFingeringGroupAroundNotation(group, obstacles, allowOppositeSide, !graceGroup,
                                                                  0.0, &adjustment, rescueManualPlacement);
         const bool compactedFermataStack = !graceGroup && compactExcessiveAutomaticFermataStack(group, obstacles);
+        if (group.size() == 1 && !graceGroup && !compactedFermataStack && pianomaniaStemSideNestleEligible(group.front())) {
+            PmNestleCandidate candidate;
+            candidate.fingering = group.front();
+            candidate.beam = group.front()->note()->chord()->beam();
+            candidate.adjustmentIndex = adjustment.valid ? adjustments.size() : muse::nidx;
+            candidate.nestled = adjustment.valid && adjustment.nestled;
+            nestleCandidates.push_back(candidate);
+        }
         if (adjustment.valid && !compactedFermataStack) {
             adjustments.push_back(std::move(adjustment));
         }
         if (graceGroup) {
+            GraceAlignment alignment { group, {} };
+            for (const Fingering* fingering : group) {
+                alignment.resolvedPos.push_back(fingering->ldata()->pos());
+            }
+            graceAlignments.push_back(std::move(alignment));
             moved = alignGraceFingeringGroupToNearbyMainBaseline(group, obstacles) || moved;
         }
         moved = compactedFermataStack || adjusted || moved;
@@ -3371,8 +3847,39 @@ void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addF
         }
     }
 
+    std::set<const Segment*> coherenceSegments;
+    enforcePianomaniaBeamNestleCoherence(nestleCandidates, adjustments, obstacles, coherenceSegments);
+    std::set<Segment*> reshapedSegments;
+    for (const Segment* segment : coherenceSegments) {
+        reshapedSegments.insert(const_cast<Segment*>(segment));
+    }
+    for (GraceAlignment& alignment : graceAlignments) {
+        const Chord* grace = alignment.group.front()->note()->chord();
+        const EngravingObject* parent = grace->explicitParent();
+        Segment* hostSegment = parent && parent->isChord() ? toChord(parent)->segment() : nullptr;
+        if (!hostSegment || (!coherenceSegments.count(hostSegment)
+                             && !coherenceSegments.count(hostSegment->next1(SegmentType::ChordRest)))) {
+            continue;
+        }
+        for (size_t i = 0; i < alignment.group.size(); ++i) {
+            alignment.group[i]->mutldata()->setPos(alignment.resolvedPos[i]);
+        }
+        alignGraceFingeringGroupToNearbyMainBaseline(alignment.group, obstacles);
+        reshapedSegments.insert(hostSegment);
+    }
+    for (Segment* segment : reshapedSegments) {
+        for (staff_idx_t staffIdx = 0; staffIdx < system->staves().size(); ++staffIdx) {
+            segment->createShape(staffIdx);
+        }
+    }
     enforcePianomaniaSlurTuckCoherence(adjustments, obstacles);
-    enforcePianomaniaFingeringRunCoherence(system, obstacles);
+    std::set<const Fingering*> nestled;
+    for (const PmNestleCandidate& candidate : nestleCandidates) {
+        if (candidate.nestled) {
+            nestled.insert(candidate.fingering);
+        }
+    }
+    enforcePianomaniaFingeringRunCoherence(system, obstacles, nestled);
     placeSparseInnerNoteFingerings(system, obstacles);
 
     // The skylines were built before this pass, so they hold every digit at
