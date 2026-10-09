@@ -3839,3 +3839,48 @@ TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredHairpinsSitBelowCrossStaf
 
     delete score;
 }
+
+// Test value: A long slur passing over a chord clears the accent that a shorter
+// slur ending on that chord pushed outside itself (Chopin Op. 9 No. 1 m30).
+TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsMarkMovedOutsideShorterSlur)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"slur-over-mark-outside-short-slur.mscx");
+    ASSERT_TRUE(score);
+
+    Slur* longSlur = nullptr;
+    for (const auto& pair : score->spanner()) {
+        Slur* slur = pair.second && pair.second->isSlur() ? toSlur(pair.second) : nullptr;
+        if (slur && slur->staffIdx() == 0 && (!longSlur || slur->ticks() > longSlur->ticks())) {
+            longSlur = slur;
+        }
+    }
+    ASSERT_TRUE(longSlur);
+    ASSERT_EQ(longSlur->nsegments(), 1u);
+    SlurSegment* slurSegment = longSlur->frontSegment();
+
+    size_t checked = 0;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->tick() <= longSlur->tick() || chord->tick() >= longSlur->tick2() || chord->staffIdx() != 0) {
+            continue;
+        }
+        for (Articulation* accent : chord->articulations()) {
+            if (!accent->isAccent() || accent->up() != longSlur->up()) {
+                continue;
+            }
+            const double spatium = accent->spatium();
+            Shape accentShape(Shape::Type::Composite);
+            accentShape.add(accent->shape().translated(accent->pagePos()));
+            accentShape.add(accent->ldata()->bbox().translated(accent->pagePos()));
+            Shape slurShape = slurSegment->shape().translated(slurSegment->pagePos());
+            slurShape.add(sampledPathShape(slurSegment->ldata()->path(), slurSegment->pagePos()));
+            const double clearance = longSlur->up() ? slurShape.verticalClearance(accentShape, 0.0)
+                                     : accentShape.verticalClearance(slurShape, 0.0);
+            EXPECT_GE(clearance, 0.1 * spatium);
+            ++checked;
+        }
+    }
+    EXPECT_GE(checked, 1u);
+
+    delete score;
+}

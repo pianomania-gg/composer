@@ -30,6 +30,7 @@
 #include "../../types/types.h"
 
 namespace mu::engraving {
+class Articulation;
 class BarLine;
 class Bracket;
 class BracketItem;
@@ -202,6 +203,8 @@ private:
     static bool whammyBarShouldBeCenteredBetweenStaves(const WhammyBarSegment* wbar, const System* system);
     static bool elementHasAnotherStackedOutside(const EngravingItem* element, const Shape& elementShape, const SkylineLine& skylineLine);
     static void centerElementBetweenStaves(EngravingItem* element, const System* system);
+    static void resolveSlursOverMovedMarks(System* system, const std::vector<Spanner*>& slurs,
+                                           const std::map<const Articulation*, double>& markYBefore, LayoutContext& ctx);
     static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerMMRestBetweenStaves(MMRest* mmRest, const System* system);
 
