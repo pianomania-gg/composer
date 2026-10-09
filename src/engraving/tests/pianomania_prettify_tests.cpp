@@ -1069,6 +1069,31 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
         EXPECT_GE(skylineSlurBounds.right(), finalSlurShapeBounds.right() - 0.001);
         EXPECT_LE(skylineSlurBounds.top(), finalSlurShapeBounds.top() + 0.001);
         EXPECT_GE(skylineSlurBounds.bottom(), finalSlurShapeBounds.bottom() - 0.001);
+        const Shape finalSlurShape = phrase->shape().translated(phrase->pos());
+        size_t phraseSkylineElementCount = 0;
+        auto expectCurrentPhraseSkylineElements = [phrase, &finalSlurShape, &phraseSkylineElementCount](const SkylineLine& line) {
+            for (const ShapeElement& skylineElement : line.elements()) {
+                const EngravingItem* item = skylineElement.item();
+                if (!item || (item != phrase && item->parentItem() != phrase)) {
+                    continue;
+                }
+                ++phraseSkylineElementCount;
+                const bool matchesCurrentShape = std::any_of(
+                    finalSlurShape.elements().cbegin(), finalSlurShape.elements().cend(),
+                    [&skylineElement](const ShapeElement& shapeElement) {
+                        return std::abs(skylineElement.left() - shapeElement.left()) <= 0.001
+                               && std::abs(skylineElement.top() - shapeElement.top()) <= 0.001
+                               && std::abs(skylineElement.right() - shapeElement.right()) <= 0.001
+                               && std::abs(skylineElement.bottom() - shapeElement.bottom()) <= 0.001;
+                    });
+                EXPECT_TRUE(matchesCurrentShape)
+                    << "stale phrase skyline element=" << skylineElement.left() << "," << skylineElement.top()
+                    << "," << skylineElement.right() << "," << skylineElement.bottom();
+            }
+        };
+        expectCurrentPhraseSkylineElements(skyline.north());
+        expectCurrentPhraseSkylineElements(skyline.south());
+        EXPECT_GT(phraseSkylineElementCount, 0u);
         const double minimumClearance = minimumClearanceFor(points, accidentalRect);
         const char* glyphName = symbol == u"\u266d" ? "flat" : symbol == u"\u266e" ? "natural" : "sharp";
         RecordProperty(std::string("accidental_slur_") + glyphName,

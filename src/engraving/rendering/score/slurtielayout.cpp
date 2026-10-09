@@ -22,6 +22,7 @@
 #include "slurtielayout.h"
 
 #include <limits>
+#include <cstdio>
 
 #include "iengravingfont.h"
 
@@ -606,6 +607,23 @@ bool pianomaniaCurveClearsShapes(const Shape& segShapes, bool up, const PointF& 
         const RectF slurRect(prev, cur);
         const bool intersection = up ? !Shape(slurRect).clearsVertically(segShapes) : !segShapes.clearsVertically(slurRect);
         if (intersection) {
+            std::fprintf(stderr,
+                         "PMRESIDUAL sampled-shape reject sample=%u up=%d rect=[%.17g,%.17g,%.17g,%.17g] "
+                         "p2=(%.17g,%.17g) p3=(%.17g,%.17g) p4=(%.17g,%.17g) arc=%.17g\n",
+                         i, up ? 1 : 0, slurRect.left(), slurRect.top(), slurRect.right(), slurRect.bottom(),
+                         p2.x(), p2.y(), p3.x(), p3.y(), p4.x(), p4.y(), arcClearance);
+            for (const ShapeElement& obstacle : segShapes.elements()) {
+                const bool obstacleIntersection = up ? !Shape(slurRect).clearsVertically(Shape(obstacle))
+                                                     : !Shape(obstacle).clearsVertically(slurRect);
+                if (obstacleIntersection) {
+                    const EngravingItem* item = obstacle.item();
+                    std::fprintf(stderr,
+                                 "PMRESIDUAL sampled-obstacle type=%d staff=%zu bounds=[%.17g,%.17g,%.17g,%.17g]\n",
+                                 item ? static_cast<int>(item->type()) : -1,
+                                 item ? static_cast<size_t>(item->vStaffIdx()) : static_cast<size_t>(muse::nidx),
+                                 obstacle.left(), obstacle.top(), obstacle.right(), obstacle.bottom());
+                }
+            }
             return false;
         }
         prev = cur;
@@ -778,6 +796,14 @@ bool curveClearsShapeWindows(const std::array<PointF, 4>& points, const Shape& s
         double maxY = -std::numeric_limits<double>::infinity();
         includeCubicYExtrema(points, t0, t1, minY, maxY);
         if ((up && maxY > obstacle.top() - numericalMargin) || (!up && minY < obstacle.bottom() + numericalMargin)) {
+            std::fprintf(stderr,
+                         "PMRESIDUAL exact-window reject accidentalOnly=%d staff=%zu obstacleStaff=%zu obstacleType=%d "
+                         "obstacle=[%.17g,%.17g,%.17g,%.17g] t=[%.17g,%.17g] y=[%.17g,%.17g] margin=%.17g\n",
+                         accidentalOnly ? 1 : 0, static_cast<size_t>(staffIdx),
+                         item ? static_cast<size_t>(item->vStaffIdx()) : static_cast<size_t>(muse::nidx),
+                         item ? static_cast<int>(item->type()) : -1,
+                         obstacle.left(), obstacle.top(), obstacle.right(), obstacle.bottom(), t0, t1, minY, maxY,
+                         numericalMargin);
             return false;
         }
     }
@@ -789,28 +815,55 @@ bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF,
     const System* system = segment ? segment->system() : nullptr;
     const Page* page = system ? system->page() : nullptr;
     if (!page || !page->ldata() || page->ldata()->bbox().isNull()) {
+        std::fprintf(stderr, "PMRESIDUAL page reject missing-page page=%p ldata=%p\n", static_cast<const void*>(page),
+                     page ? static_cast<const void*>(page->ldata()) : nullptr);
         return false;
     }
     const std::vector<System*>& systems = page->systems();
     const auto systemIt = std::find(systems.cbegin(), systems.cend(), system);
     if (systemIt == systems.cend()) {
+        std::fprintf(stderr, "PMRESIDUAL page reject system-not-in-page system=%p systems=%zu\n",
+                     static_cast<const void*>(system), systems.size());
         return false;
     }
     double minY = std::numeric_limits<double>::infinity();
     double maxY = -std::numeric_limits<double>::infinity();
     includeCubicYExtrema(points, 0.0, 1.0, minY, maxY);
     if (!std::isfinite(minY) || !std::isfinite(maxY)) {
+        std::fprintf(stderr, "PMRESIDUAL page reject nonfinite-extrema min=%.17g max=%.17g\n", minY, maxY);
         return false;
     }
     const PointF pageTranslation = segment->pagePos() - segment->pos();
     const RectF curveBounds(points.front().x() + pageTranslation.x(), minY + pageTranslation.y(),
                             points.back().x() - points.front().x(), maxY - minY);
     const RectF pageBounds = page->ldata()->bbox().adjusted(padding, padding, -padding, -padding);
+    std::fprintf(stderr,
+                 "PMRESIDUAL page-check translation=(%.17g,%.17g) curve=[%.17g,%.17g,%.17g,%.17g] "
+                 "page=[%.17g,%.17g,%.17g,%.17g] systemPos=(%.17g,%.17g) systems=%zu\n",
+                 pageTranslation.x(), pageTranslation.y(), curveBounds.left(), curveBounds.top(), curveBounds.right(),
+                 curveBounds.bottom(), pageBounds.left(), pageBounds.top(), pageBounds.right(), pageBounds.bottom(),
+                 system->pos().x(), system->pos().y(), systems.size());
     if (!pageBounds.contains(curveBounds.topLeft()) || !pageBounds.contains(curveBounds.bottomRight())) {
+        std::fprintf(stderr, "PMRESIDUAL page reject page-bounds\n");
         return false;
     }
 
     const size_t systemIndex = static_cast<size_t>(std::distance(systems.cbegin(), systemIt));
+    std::fprintf(stderr, "PMRESIDUAL page-systems currentIndex=%zu count=%zu\n", systemIndex, systems.size());
+    for (size_t diagnosticIndex = 0; diagnosticIndex < systems.size(); ++diagnosticIndex) {
+        const System* diagnosticSystem = systems.at(diagnosticIndex);
+        std::fprintf(stderr,
+                     "PMRESIDUAL page-system index=%zu ptr=%p current=%d vbox=%p firstMeasure=%p "
+                     "pos=(%.17g,%.17g) height=%.17g minTop=%.17g minBottom=%.17g\n",
+                     diagnosticIndex, static_cast<const void*>(diagnosticSystem), diagnosticSystem == system ? 1 : 0,
+                     diagnosticSystem ? static_cast<const void*>(diagnosticSystem->vbox()) : nullptr,
+                     diagnosticSystem ? static_cast<const void*>(diagnosticSystem->firstMeasure()) : nullptr,
+                     diagnosticSystem ? diagnosticSystem->pos().x() : 0.0,
+                     diagnosticSystem ? diagnosticSystem->pos().y() : 0.0,
+                     diagnosticSystem ? diagnosticSystem->height() : 0.0,
+                     diagnosticSystem ? diagnosticSystem->minTop() : 0.0,
+                     diagnosticSystem ? diagnosticSystem->minBottom() : 0.0);
+    }
     if (systemIndex > 0) {
         const System* previous = systems.at(systemIndex - 1);
         if (!previous || !std::isfinite(previous->pos().y()) || !std::isfinite(previous->height())
@@ -819,6 +872,8 @@ bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF,
         }
         const double corridorTop = previous->pos().y() + previous->height() + previous->minBottom() + padding;
         if (curveBounds.top() < corridorTop) {
+            std::fprintf(stderr, "PMRESIDUAL page reject previous-corridor curveTop=%.17g corridorTop=%.17g\n",
+                         curveBounds.top(), corridorTop);
             return false;
         }
     }
@@ -829,6 +884,8 @@ bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF,
         }
         const double corridorBottom = next->pos().y() - next->minTop() - padding;
         if (curveBounds.bottom() > corridorBottom) {
+            std::fprintf(stderr, "PMRESIDUAL page reject next-corridor curveBottom=%.17g corridorBottom=%.17g\n",
+                         curveBounds.bottom(), corridorBottom);
             return false;
         }
     }
@@ -847,21 +904,37 @@ bool SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
     SlurSegment* slurSeg, const Shape& segShapes, bool up, double spatium, const PointF& pp1, const PointF& p2,
     PointF& p3, PointF& p4, const Transform& toSystemCoordinates, double arcClearance)
 {
+    std::fprintf(stderr,
+                 "PMRESIDUAL enter enabled=%d segment=%p autoplace=%d edited=%d endpointsEdited=%d shapes=%zu up=%d "
+                 "spatium=%.17g arc=%.17g\n",
+                 MScore::pianomaniaPrettifySlursFingerings ? 1 : 0, static_cast<void*>(slurSeg),
+                 slurSeg && slurSeg->autoplace() ? 1 : 0, slurSeg && slurSeg->isEdited() ? 1 : 0,
+                 slurSeg && slurSeg->isEndPointsEdited() ? 1 : 0, segShapes.elements().size(), up ? 1 : 0,
+                 spatium, arcClearance);
     if (!MScore::pianomaniaPrettifySlursFingerings || !slurSeg || !slurSeg->autoplace() || slurSeg->isEdited() ||
         slurSeg->isEndPointsEdited() || segShapes.empty()) {
+        std::fprintf(stderr, "PMRESIDUAL return gate\n");
         return false;
     }
 
     std::array<PointF, 4> points = {pp1, toSystemCoordinates.map(p3), toSystemCoordinates.map(p4),
                                     toSystemCoordinates.map(p2)};
     const double margin = 0.005 * spatium; // Structural shapes already include the 0.10sp clearance.
+    std::fprintf(stderr,
+                 "PMRESIDUAL points p0=(%.17g,%.17g) p1=(%.17g,%.17g) p2=(%.17g,%.17g) p3=(%.17g,%.17g) "
+                 "staff=%zu margin=%.17g\n",
+                 points[0].x(), points[0].y(), points[1].x(), points[1].y(), points[2].x(), points[2].y(),
+                 points[3].x(), points[3].y(), static_cast<size_t>(slurSeg->vStaffIdx()), margin);
     if (curveClearsShapeWindows(points, segShapes, slurSeg->vStaffIdx(), up, margin, true)) {
+        std::fprintf(stderr, "PMRESIDUAL return no-accidental-collision\n");
         return false;
     }
 
     const double span = std::hypot(points.back().x() - points.front().x(), points.back().y() - points.front().y());
     const double maxLift = std::min(12.0 * spatium, 0.35 * span);
+    std::fprintf(stderr, "PMRESIDUAL span=%.17g maxLift=%.17g\n", span, maxLift);
     if (!(maxLift > 0.0) || !std::isfinite(maxLift)) {
+        std::fprintf(stderr, "PMRESIDUAL return invalid-maxLift\n");
         return false;
     }
     auto liftedPoints = [&](double lift) {
@@ -873,16 +946,23 @@ bool SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
     };
     const Transform fromSystemCoordinates = toSystemCoordinates.inverted();
     auto clearsAllShapes = [&](const std::array<PointF, 4>& candidate) {
-        if (!curveClearsShapeWindows(candidate, segShapes, slurSeg->vStaffIdx(), up, margin, false)) {
+        const bool exact = curveClearsShapeWindows(candidate, segShapes, slurSeg->vStaffIdx(), up, margin, false);
+        if (!exact) {
+            std::fprintf(stderr, "PMRESIDUAL candidate exact=0 controlsY=(%.17g,%.17g)\n",
+                         candidate[1].y(), candidate[2].y());
             return false;
         }
         const PointF candidateP3 = fromSystemCoordinates.map(candidate[1]);
         const PointF candidateP4 = fromSystemCoordinates.map(candidate[2]);
-        return pianomaniaCurveClearsShapes(segShapes, up, p2, candidateP3, candidateP4, toSystemCoordinates,
-                                           arcClearance);
+        const bool sampled = pianomaniaCurveClearsShapes(segShapes, up, p2, candidateP3, candidateP4,
+                                                         toSystemCoordinates, arcClearance);
+        std::fprintf(stderr, "PMRESIDUAL candidate exact=1 sampled=%d controlsY=(%.17g,%.17g)\n",
+                     sampled ? 1 : 0, candidate[1].y(), candidate[2].y());
+        return sampled;
     };
     const std::array<PointF, 4> upper = liftedPoints(maxLift);
     if (!clearsAllShapes(upper)) {
+        std::fprintf(stderr, "PMRESIDUAL return maximum-lift-rejected\n");
         return false;
     }
 
@@ -897,35 +977,57 @@ bool SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             lo = mid;
         }
     }
+    std::fprintf(stderr, "PMRESIDUAL binary acceptedLift=%.17g rejectedBelow=%.17g\n", hi, lo);
     if (!(hi > 0.0) || !std::isfinite(hi)) {
+        std::fprintf(stderr, "PMRESIDUAL return invalid-accepted-lift\n");
         return false;
     }
     const std::array<PointF, 4> accepted = liftedPoints(hi);
     if (!curveRemainsInsidePage(slurSeg, accepted, 0.1 * spatium)) {
+        std::fprintf(stderr, "PMRESIDUAL return page-guard\n");
         return false;
     }
     p3 = fromSystemCoordinates.map(accepted[1]);
     p4 = fromSystemCoordinates.map(accepted[2]);
+    std::fprintf(stderr, "PMRESIDUAL return corrected p3=(%.17g,%.17g) p4=(%.17g,%.17g)\n",
+                 p3.x(), p3.y(), p4.x(), p4.y());
     return true;
 }
 
 bool SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(SlurSegment* slurSeg)
 {
+    std::fprintf(stderr,
+                 "PMPAGESTAGE enter enabled=%d segment=%p visible=%d autoplace=%d edited=%d endpointsEdited=%d "
+                 "offset=(%.17g,%.17g)\n",
+                 MScore::pianomaniaPrettifySlursFingerings ? 1 : 0, static_cast<void*>(slurSeg),
+                 slurSeg && slurSeg->visible() ? 1 : 0, slurSeg && slurSeg->autoplace() ? 1 : 0,
+                 slurSeg && slurSeg->isEdited() ? 1 : 0, slurSeg && slurSeg->isEndPointsEdited() ? 1 : 0,
+                 slurSeg ? slurSeg->offset().x() : 0.0, slurSeg ? slurSeg->offset().y() : 0.0);
     if (!MScore::pianomaniaPrettifySlursFingerings || !slurSeg || !slurSeg->visible() || !slurSeg->autoplace()
         || slurSeg->isEdited() || slurSeg->isEndPointsEdited() || !slurSeg->offset().isNull()) {
+        std::fprintf(stderr, "PMPAGESTAGE return segment-gate\n");
         return false;
     }
     Slur* slur = slurSeg->slur();
     System* system = slurSeg->system();
     Page* page = system ? system->page() : nullptr;
+    const bool systemInPage = page && std::find(page->systems().cbegin(), page->systems().cend(), system) != page->systems().cend();
     if (!slur || !slur->visible() || !system || !page || slur->isCrossStaff() || slur->hasCrossBeams()
-        || std::find(page->systems().cbegin(), page->systems().cend(), system) == page->systems().cend()) {
+        || !systemInPage) {
+        std::fprintf(stderr,
+                     "PMPAGESTAGE return parent-gate slur=%p visible=%d system=%p page=%p cross=%d beams=%d inPage=%d\n",
+                     static_cast<void*>(slur), slur && slur->visible() ? 1 : 0, static_cast<void*>(system),
+                     static_cast<void*>(page), slur && slur->isCrossStaff() ? 1 : 0,
+                     slur && slur->hasCrossBeams() ? 1 : 0, systemInPage ? 1 : 0);
         return false;
     }
     ChordRest* startCR = slur->startCR();
     ChordRest* endCR = slur->endCR();
     if (!startCR || !endCR || slurSeg->effectiveStaffIdx() == muse::nidx
         || slurSeg->effectiveStaffIdx() >= system->staves().size()) {
+        std::fprintf(stderr, "PMPAGESTAGE return anchor-gate start=%p end=%p effective=%zu staves=%zu\n",
+                     static_cast<void*>(startCR), static_cast<void*>(endCR),
+                     static_cast<size_t>(slurSeg->effectiveStaffIdx()), system->staves().size());
         return false;
     }
 
@@ -948,6 +1050,7 @@ bool SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(SlurSegment* slu
     PointF p3 = toSlurCoordinates.map(control1);
     PointF p4 = toSlurCoordinates.map(control2);
     if (!(p2.x() > 0.0)) {
+        std::fprintf(stderr, "PMPAGESTAGE return invalid-local-end p2=(%.17g,%.17g)\n", p2.x(), p2.y());
         return false;
     }
 
@@ -966,15 +1069,25 @@ bool SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(SlurSegment* slu
         segShapes.add(other->shape().translated(other->pos() + PointF(0.0, staffDelta)));
     }
     if (segShapes.empty()) {
+        std::fprintf(stderr, "PMPAGESTAGE return empty-shapes\n");
         return false;
     }
+    std::fprintf(stderr,
+                 "PMPAGESTAGE call-helper shapes=%zu effective=%zu pageTranslation=(%.17g,%.17g) systemPos=(%.17g,%.17g) "
+                 "points=(%.17g,%.17g);(%.17g,%.17g);(%.17g,%.17g);(%.17g,%.17g)\n",
+                 segShapes.elements().size(), static_cast<size_t>(targetStaff),
+                 (slurSeg->pagePos() - slurSeg->pos()).x(), (slurSeg->pagePos() - slurSeg->pos()).y(),
+                 system->pos().x(), system->pos().y(), pp1.x(), pp1.y(), control1.x(), control1.y(),
+                 control2.x(), control2.y(), pp2.x(), pp2.y());
 
     const double spanSp = p2.x() / spatium;
     const double arcClearance = (slur->up() ? 1.0 : -1.0) * computeArcClearance(spatium, spanSp, slurAngle);
     if (!clearResidualPianomaniaAccidentalStaffText(slurSeg, segShapes, slur->up(), spatium, pp1, p2, p3, p4,
                                                     toSystemCoordinates, arcClearance)) {
+        std::fprintf(stderr, "PMPAGESTAGE return helper-rejected\n");
         return false;
     }
+    std::fprintf(stderr, "PMPAGESTAGE corrected\n");
 
     slurSeg->ups(Grip::BEZIER1).p = toSystemCoordinates.map(p3) - slurSeg->ups(Grip::BEZIER1).off;
     slurSeg->ups(Grip::BEZIER2).p = toSystemCoordinates.map(p4) - slurSeg->ups(Grip::BEZIER2).off;

@@ -476,10 +476,18 @@ void PageLayout::layoutCrossStaffSlurs(LayoutContext& ctx, System* system)
                 if (!SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(slurSegment)) {
                     continue;
                 }
-                SystemLayout::removeElementFromSkyline(slurSegment, system);
                 const staff_idx_t staffIdx = slurSegment->effectiveStaffIdx();
-                if (staffIdx != muse::nidx && staffIdx < system->staves().size() && slurSegment->addToSkyline()) {
-                    system->staff(staffIdx)->skyline().add(slurSegment->shape().translate(slurSegment->pos()));
+                if (staffIdx != muse::nidx && staffIdx < system->staves().size()) {
+                    Skyline& skyline = system->staff(staffIdx)->skyline();
+                    auto removeStaleSegmentShape = [slurSegment](ShapeElement& element) {
+                        return element.item()
+                               && (element.item() == slurSegment || element.item()->parentItem() == slurSegment);
+                    };
+                    skyline.north().remove_if(removeStaleSegmentShape);
+                    skyline.south().remove_if(removeStaleSegmentShape);
+                    if (slurSegment->addToSkyline()) {
+                        skyline.add(slurSegment->shape().translate(slurSegment->pos()));
+                    }
                 }
                 ChordRest* scr = toChordRest(slur->startElement());
                 ChordRest* ecr = toChordRest(slur->endElement());
