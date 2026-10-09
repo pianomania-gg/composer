@@ -74,6 +74,9 @@
 #include "engraving/types/types.h"
 #include "io/file.h"
 
+#include "engraving/rendering/score/slurtielayout.h"
+#include "draw/types/transform.h"
+
 #include "utils/scorerw.h"
 
 using namespace mu::engraving;
@@ -1085,6 +1088,129 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
         EXPECT_TRUE(snapshotsEquivalent(first, capturePrettifySnapshot(score)));
         EXPECT_EQ(originalStructure, captureStructuralAssignment(score));
         delete score;
+    }
+
+    {
+        // Exercise the final correction in its own coordinate frame. A complete
+        // Prettify command can also change staff spacing, so absolute endpoint
+        // comparisons across that command cannot isolate this stage's contract.
+        MasterScore* collidingScore = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
+        ASSERT_TRUE(collidingScore);
+        mu::engraving::pm::applyPianomaniaAutoLayout(collidingScore);
+        applyPrettifyCommand(collidingScore);
+        StaffText* collidingAccidental = nullptr;
+        for (StaffText* text : collectStaffTexts(collidingScore)) {
+            if (text->plainText() == u"\u266d") {
+                collidingAccidental = text;
+                break;
+            }
+        }
+        ASSERT_TRUE(collidingAccidental);
+        const Segment* collidingAnchor = toSegment(collidingAccidental->parentItem());
+        const Measure* collidingMeasure = collidingAnchor->measure();
+        const System* collidingSystem = collidingMeasure->system();
+        SlurSegment* collidingPhrase = nullptr;
+        for (const auto& pair : collidingScore->spanner()) {
+            if (!pair.second || !pair.second->isSlur()) {
+                continue;
+            }
+            Slur* slur = toSlur(pair.second);
+            if (!slur->up() || slur->staffIdx() != collidingAccidental->staffIdx()
+                || slur->tick() >= collidingAccidental->tick() || slur->tick2() <= collidingAccidental->tick()) {
+                continue;
+            }
+            for (SpannerSegment* segment : slur->spannerSegments()) {
+                if (segment->system() == collidingSystem) {
+                    collidingPhrase = toSlurSegment(segment);
+                }
+            }
+        }
+        ASSERT_TRUE(collidingPhrase);
+        std::array<PointF, 4> stagePoints;
+        for (size_t i = 0; i < PRETTIFY_GRIPS.size(); ++i) {
+            stagePoints[i] = collidingPhrase->ups(PRETTIFY_GRIPS[i]).pos();
+        }
+        for (int i = 0; i < int(Grip::GRIPS); ++i) {
+            collidingPhrase->ups(Grip(i)).off = PointF();
+        }
+        collidingPhrase->setAutoplace(true);
+        ASSERT_FALSE(collidingPhrase->isEdited());
+        const double stageSpatium = collidingPhrase->spatium();
+        RectF syntheticAccidental = collidingAccidental->ldata()->bbox().translated(
+            collidingAccidental->pos() + collidingAnchor->pos() + collidingMeasure->pos());
+        auto stageClearance = [](const std::array<PointF, 4>& points, const RectF& rect) {
+            double minimum = std::numeric_limits<double>::infinity();
+            for (int i = 0; i <= 4000; ++i) {
+                const double t = static_cast<double>(i) / 4000.0;
+                const double u = 1.0 - t;
+                const PointF point = points[0] * (u * u * u) + points[1] * (3.0 * u * u * t)
+                                     + points[2] * (3.0 * u * t * t) + points[3] * (t * t * t);
+                if (point.x() >= rect.left() && point.x() <= rect.right()) {
+                    minimum = std::min(minimum, rect.top() - point.y());
+                }
+            }
+            return minimum;
+        };
+        const double originalClearance = stageClearance(stagePoints, syntheticAccidental);
+        ASSERT_TRUE(std::isfinite(originalClearance));
+        syntheticAccidental.translate(PointF(0.0, -originalClearance - 0.30 * stageSpatium));
+        EXPECT_NEAR(stageClearance(stagePoints, syntheticAccidental), -0.30 * stageSpatium, 0.001);
+        const RectF higherNotation(syntheticAccidental.left(), syntheticAccidental.top() - 0.40 * stageSpatium,
+                                  syntheticAccidental.width(), 0.20 * stageSpatium);
+        Shape stageShapes;
+        stageShapes.add(syntheticAccidental.adjusted(0.0, -0.10 * stageSpatium, 0.0, 0.0), collidingAccidental);
+        stageShapes.add(higherNotation.adjusted(0.0, -0.40 * stageSpatium, 0.0, 0.0),
+                        toChord(collidingPhrase->slur()->startElement())->upNote());
+        struct StageFlagsScope {
+            const bool previous = MScore::pianomaniaPrettifySlursFingerings;
+            StageFlagsScope() { MScore::pianomaniaPrettifySlursFingerings = true; }
+            ~StageFlagsScope() { MScore::pianomaniaPrettifySlursFingerings = previous; }
+        } stageFlagsScope;
+        const muse::draw::Transform stageTransform;
+        PointF control1 = stagePoints[1];
+        PointF control2 = stagePoints[2];
+        const PointF startPoint = stagePoints[0];
+        const PointF endPoint = stagePoints[3];
+        ASSERT_TRUE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        const std::array<PointF, 4> stageCorrected = { startPoint, control1, control2, endPoint };
+        EXPECT_GE(stageClearance(stageCorrected, syntheticAccidental), 0.10 * stageSpatium);
+        EXPECT_GE(stageClearance(stageCorrected, higherNotation), 0.40 * stageSpatium);
+        EXPECT_EQ(stageCorrected.front(), stagePoints.front());
+        EXPECT_EQ(stageCorrected.back(), stagePoints.back());
+        EXPECT_EQ(control1.x(), stagePoints[1].x());
+        EXPECT_EQ(control2.x(), stagePoints[2].x());
+        const double stageLift = stagePoints[1].y() - control1.y();
+        EXPECT_GT(stageLift, 0.0);
+        EXPECT_LE(stageLift, 12.0 * stageSpatium);
+        EXPECT_NEAR(stageLift, stagePoints[2].y() - control2.y(), 0.001);
+        RecordProperty("residual_stage_clearance_and_lift_sp",
+                       std::to_string(stageClearance(stageCorrected, syntheticAccidental) / stageSpatium) + ","
+                       + std::to_string(stageClearance(stageCorrected, higherNotation) / stageSpatium) + ","
+                       + std::to_string(stageLift / stageSpatium));
+        EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        EXPECT_EQ(control1, stageCorrected[1]);
+        EXPECT_EQ(control2, stageCorrected[2]);
+
+        Shape unreachableShapes;
+        unreachableShapes.add(syntheticAccidental.translated(PointF(0.0, -20.0 * stageSpatium)), collidingAccidental);
+        control1 = stagePoints[1];
+        control2 = stagePoints[2];
+        EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, unreachableShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        EXPECT_EQ(control1, stagePoints[1]);
+        EXPECT_EQ(control2, stagePoints[2]);
+        collidingPhrase->ups(Grip::BEZIER1).off = PointF(0.0, 0.10 * stageSpatium);
+        EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        EXPECT_EQ(control1, stagePoints[1]);
+        EXPECT_EQ(control2, stagePoints[2]);
+        delete collidingScore;
     }
 
     MasterScore* authoredScore = ScoreRW::readScore(u"pianomania_prettify_data/ornament-accidental-slur.mscx");
@@ -2729,10 +2855,13 @@ TEST_F(Engraving_PianomaniaPrettifyTests, stemSideAccentClearsSlurTakingOffAtIts
 TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpperLane)
 {
     constexpr const char* targetHairpinEid = "WgiBdP/Vtz_g367TZXT7DJ";
-    auto findTarget = [&](MasterScore* score) -> Hairpin* {
-        for (const auto& pair : score->spanner()) {
+    auto findTarget = [&](MasterScore* score) -> Hairpin*
+    {
+        for (const auto& pair : score->spanner())
+        {
             Spanner* spanner = pair.second;
-            if (spanner && spanner->isHairpin() && spanner->eid().toStdString() == targetHairpinEid) {
+            if (spanner && spanner->isHairpin() && spanner->eid().toStdString() == targetHairpinEid)
+            {
                 return toHairpin(spanner);
             }
         }
@@ -2753,14 +2882,16 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
 
     std::vector<PointF> baselinePagePositions;
     std::vector<RectF> baselineShapes;
-    for (SpannerSegment* segment : hairpin->spannerSegments()) {
+    for (SpannerSegment* segment : hairpin->spannerSegments())
+    {
         segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
         segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
         segment->setAutoplace(true);
         segment->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::STYLED);
     }
     relayoutScore(score);
-    for (SpannerSegment* segment : hairpin->spannerSegments()) {
+    for (SpannerSegment* segment : hairpin->spannerSegments())
+    {
         baselinePagePositions.push_back(segment->pagePos());
         baselineShapes.push_back(segment->ldata()->shape().bbox());
     }
@@ -2771,7 +2902,8 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
     MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
 
     ASSERT_EQ(hairpin->spannerSegments().size(), 2);
-    for (size_t i = 0; i < hairpin->spannerSegments().size(); ++i) {
+    for (size_t i = 0; i < hairpin->spannerSegments().size(); ++i)
+    {
         SpannerSegment* segment = hairpin->segmentAt(static_cast<int>(i));
         ASSERT_TRUE(segment);
         EXPECT_TRUE(segment->placeAbove());
@@ -2791,98 +2923,193 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
     EXPECT_EQ(hairpin->endElement()->eid(), endEid);
     delete score;
 
-    MasterScore* persisted = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
-    ASSERT_TRUE(persisted);
-    mu::engraving::pm::applyPianomaniaAutoLayout(persisted);
-    relayoutScore(persisted);
-    Hairpin* persistedHairpin = findTarget(persisted);
-    ASSERT_TRUE(persistedHairpin);
-    EXPECT_TRUE(applyPrettifyCommand(persisted).changed);
+    // Match ConsoleApp's three-flag export frame: both global flags are set
+    // before score load, Auto Layout, the public Prettify command, and every
+    // replay/save operation. The UI-style flags-only case above remains a
+    // separate contract.
+    struct CliPrettifyFlagsScope
+    {
+        bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+        bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
 
-    std::vector<PointF> offsets;
-    std::vector<PropertyFlags> offsetFlags;
-    std::vector<PointF> pagePositions;
-    for (SpannerSegment* segment : persistedHairpin->spannerSegments()) {
-        offsets.push_back(segment->offset());
-        offsetFlags.push_back(segment->propertyFlags(Pid::OFFSET));
-        pagePositions.push_back(segment->pagePos());
+        CliPrettifyFlagsScope()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = true;
+            MScore::pianomaniaForceNormalizeSlursFingerings = true;
+        }
+
+        ~CliPrettifyFlagsScope()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+            MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+        }
+    };
+
+    auto physicalUpperSkylineGapSp = [](HairpinSegment* segment)
+    {
+        System* system = segment ? segment->system() : nullptr;
+        const staff_idx_t thisIdx = segment ? segment->staffIdx() : muse::nidx;
+        const staff_idx_t upperIdx = system ? system->prevVisibleStaff(thisIdx) : muse::nidx;
+        SysStaff* thisStaff = system && thisIdx != muse::nidx ? system->staff(thisIdx) : nullptr;
+        SysStaff* upperStaff = system && upperIdx != muse::nidx ? system->staff(upperIdx) : nullptr;
+        if (!segment || !system || !thisStaff || !upperStaff)
+        {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+
+        const double elementXInSystem = segment->pageX() - system->pageX();
+        const double horizontalClearance = system->style().styleMM(Sid::skylineMinHorizontalClearance);
+        Shape shape = segment->ldata()
+                          ->shape()
+                          .translated(PointF(elementXInSystem, segment->y()))
+                          .adjust(-horizontalClearance, 0.0, horizontalClearance, 0.0);
+        shape.remove_if([](ShapeElement& shapeElement) { return shapeElement.ignoreForLayout(); });
+        SkylineLine upperSkyline = upperStaff->skyline().south();
+        upperSkyline.translateY(upperStaff->y() - thisStaff->y());
+        return upperSkyline.verticalClaranceBelow(shape) / segment->spatium();
+    };
+
+    // Retain the UI-command property contract separately from the CLI frame.
+    // In this path Prettify starts disabled, so the public command must create
+    // and persist the bounded generated offset on both system segments.
+    MasterScore* uiPersisted = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
+    ASSERT_TRUE(uiPersisted);
+    mu::engraving::pm::applyPianomaniaAutoLayout(uiPersisted);
+    relayoutScore(uiPersisted);
+    Hairpin* uiPersistedHairpin = findTarget(uiPersisted);
+    ASSERT_TRUE(uiPersistedHairpin);
+    EXPECT_TRUE(applyPrettifyCommand(uiPersisted).changed);
+    ASSERT_EQ(uiPersistedHairpin->spannerSegments().size(), 2);
+    for (SpannerSegment* segment : uiPersistedHairpin->spannerSegments())
+    {
+        const double persistedLift = segment->propertyDefault(Pid::OFFSET).value<PointF>().y() - segment->offset().y();
+        EXPECT_GE(persistedLift, 0.25 * segment->spatium());
+        EXPECT_LE(persistedLift, 0.40 * segment->spatium());
     }
-    relayoutScore(persisted);
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
-        EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
-        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
-        EXPECT_TRUE(pointNear(segment->pagePos(), pagePositions[i], 0.02 * segment->spatium()));
+    delete uiPersisted;
+
+    {
+        CliPrettifyFlagsScope cliPrettifyFlagsScope;
+        MasterScore* persisted = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
+        ASSERT_TRUE(persisted);
+        mu::engraving::pm::applyPianomaniaAutoLayout(persisted);
+        relayoutScore(persisted);
+        Hairpin* persistedHairpin = findTarget(persisted);
+        ASSERT_TRUE(persistedHairpin);
+        // Auto Layout has already run with the same flags as ConsoleApp, so the
+        // public command must be an idempotent no-op in this frame.
+        EXPECT_FALSE(applyPrettifyCommand(persisted).changed);
+        ASSERT_EQ(persistedHairpin->spannerSegments().size(), 2);
+        const double physicalUpperGapSp = physicalUpperSkylineGapSp(toHairpinSegment(persistedHairpin->segmentAt(0)));
+        ASSERT_TRUE(std::isfinite(physicalUpperGapSp));
+        EXPECT_GE(physicalUpperGapSp, 0.25);
+        EXPECT_LE(physicalUpperGapSp, 0.55);
+        // The public force-normalization path must retain the upper-lane lift on
+        // both systems. A flags-only layout pass does not prove export replay.
+        for (size_t i = 0; i < persistedHairpin->spannerSegments().size(); ++i)
+        {
+            SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
+            RecordProperty(std::string("final_staff_wedge_segment_") + std::to_string(i),
+                           std::to_string(physicalUpperSkylineGapSp(toHairpinSegment(segment))) + "," +
+                               std::to_string(segment->pagePos().y() / segment->spatium()) + "," +
+                               std::to_string(segment->offset().y() / segment->spatium()));
+        }
+
+        std::vector<PointF> offsets;
+        std::vector<PropertyFlags> offsetFlags;
+        std::vector<PointF> pagePositions;
+        for (SpannerSegment* segment : persistedHairpin->spannerSegments())
+        {
+            offsets.push_back(segment->offset());
+            offsetFlags.push_back(segment->propertyFlags(Pid::OFFSET));
+            pagePositions.push_back(segment->pagePos());
+        }
+        relayoutScore(persisted);
+        for (size_t i = 0; i < offsets.size(); ++i)
+        {
+            SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
+            EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
+            EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+            EXPECT_TRUE(pointNear(segment->pagePos(), pagePositions[i], 0.02 * segment->spatium()));
+        }
+
+        applyPrettifyCommand(persisted);
+        for (size_t i = 0; i < offsets.size(); ++i)
+        {
+            SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
+            EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
+            EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+        }
+
+        const std::string savedFileName = testing::TempDir() + "compact-grandstaff-hairpin-lane-roundtrip.mscz";
+        const String savedPath = String::fromUtf8(savedFileName);
+        muse::io::File savedFile(savedPath);
+        ASSERT_TRUE(savedFile.open(muse::io::IODevice::WriteOnly));
+        MscWriter::Params writerParams;
+        writerParams.device = &savedFile;
+        writerParams.filePath = savedPath;
+        writerParams.mode = MscIoMode::Zip;
+        MscWriter writer(writerParams);
+        ASSERT_TRUE(writer.open());
+        MscSaver saver(persisted->iocContext());
+        ASSERT_TRUE(saver.writeMscz(persisted, writer, false));
+        writer.close();
+        ASSERT_FALSE(writer.hasError());
+        savedFile.close();
+        MasterScore* reloaded = ScoreRW::readScore(savedPath, true);
+        ASSERT_TRUE(reloaded);
+        relayoutScore(reloaded);
+        Hairpin* reloadedHairpin = findTarget(reloaded);
+        ASSERT_TRUE(reloadedHairpin);
+        ASSERT_EQ(reloadedHairpin->spannerSegments().size(), offsets.size());
+        for (size_t i = 0; i < offsets.size(); ++i)
+        {
+            SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+            EXPECT_NEAR(segment->spatium(), persistedHairpin->spatium(), 0.01);
+            EXPECT_NEAR(segment->offset().x() / segment->spatium(), offsets[i].x() / persistedHairpin->spatium(), 0.01);
+            EXPECT_NEAR(segment->offset().y() / segment->spatium(), offsets[i].y() / persistedHairpin->spatium(), 0.01);
+            EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+        }
+        EXPECT_EQ(reloadedHairpin->tick(), startTick);
+        EXPECT_EQ(reloadedHairpin->tick2(), endTick);
+        EXPECT_EQ(reloadedHairpin->startElement()->eid(), startEid);
+        EXPECT_EQ(reloadedHairpin->endElement()->eid(), endEid);
+
+        applyPrettifyCommand(reloaded);
+        std::vector<PointF> reloadedOffsets;
+        std::vector<PointF> reloadedPositions;
+        std::vector<RectF> reloadedShapes;
+        for (size_t i = 0; i < offsets.size(); ++i)
+        {
+            SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+            reloadedOffsets.push_back(segment->offset());
+            reloadedPositions.push_back(segment->pos());
+            reloadedShapes.push_back(segment->ldata()->shape().bbox());
+        }
+        applyPrettifyCommand(reloaded);
+        for (size_t i = 0; i < reloadedOffsets.size(); ++i)
+        {
+            SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+            EXPECT_TRUE(pointNear(segment->offset(), reloadedOffsets[i], 0.01 * segment->spatium()));
+            EXPECT_NEAR(segment->pos().x() / segment->spatium(), reloadedPositions[i].x() / segment->spatium(), 0.01);
+            EXPECT_NEAR(segment->pos().y() / segment->spatium(), reloadedPositions[i].y() / segment->spatium(), 0.01);
+            EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().topLeft(), reloadedShapes[i].topLeft(), 0.01));
+            EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().bottomRight(), reloadedShapes[i].bottomRight(), 0.01));
+        }
+
+        delete reloaded;
+        delete persisted;
+        std::remove(savedFileName.c_str());
     }
 
-    applyPrettifyCommand(persisted);
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
-        EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
-        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
-    }
-
-    const std::string savedFileName = testing::TempDir() + "compact-grandstaff-hairpin-lane-roundtrip.mscz";
-    const String savedPath = String::fromUtf8(savedFileName);
-    muse::io::File savedFile(savedPath);
-    ASSERT_TRUE(savedFile.open(muse::io::IODevice::WriteOnly));
-    MscWriter::Params writerParams;
-    writerParams.device = &savedFile;
-    writerParams.filePath = savedPath;
-    writerParams.mode = MscIoMode::Zip;
-    MscWriter writer(writerParams);
-    ASSERT_TRUE(writer.open());
-    MscSaver saver(persisted->iocContext());
-    ASSERT_TRUE(saver.writeMscz(persisted, writer, false));
-    writer.close();
-    ASSERT_FALSE(writer.hasError());
-    savedFile.close();
-    MasterScore* reloaded = ScoreRW::readScore(savedPath, true);
-    ASSERT_TRUE(reloaded);
-    relayoutScore(reloaded);
-    Hairpin* reloadedHairpin = findTarget(reloaded);
-    ASSERT_TRUE(reloadedHairpin);
-    ASSERT_EQ(reloadedHairpin->spannerSegments().size(), offsets.size());
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
-        EXPECT_NEAR(segment->spatium(), persistedHairpin->spatium(), 0.01);
-        EXPECT_NEAR(segment->offset().x() / segment->spatium(),
-                    offsets[i].x() / persistedHairpin->spatium(), 0.01);
-        EXPECT_NEAR(segment->offset().y() / segment->spatium(),
-                    offsets[i].y() / persistedHairpin->spatium(), 0.01);
-        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
-    }
-    EXPECT_EQ(reloadedHairpin->tick(), startTick);
-    EXPECT_EQ(reloadedHairpin->tick2(), endTick);
-    EXPECT_EQ(reloadedHairpin->startElement()->eid(), startEid);
-    EXPECT_EQ(reloadedHairpin->endElement()->eid(), endEid);
-
-    applyPrettifyCommand(reloaded);
-    std::vector<PointF> reloadedOffsets;
-    std::vector<PointF> reloadedPositions;
-    std::vector<RectF> reloadedShapes;
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
-        reloadedOffsets.push_back(segment->offset());
-        reloadedPositions.push_back(segment->pos());
-        reloadedShapes.push_back(segment->ldata()->shape().bbox());
-    }
-    applyPrettifyCommand(reloaded);
-    for (size_t i = 0; i < reloadedOffsets.size(); ++i) {
-        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
-        EXPECT_TRUE(pointNear(segment->offset(), reloadedOffsets[i], 0.01 * segment->spatium()));
-        EXPECT_NEAR(segment->pos().x() / segment->spatium(), reloadedPositions[i].x() / segment->spatium(), 0.01);
-        EXPECT_NEAR(segment->pos().y() / segment->spatium(), reloadedPositions[i].y() / segment->spatium(), 0.01);
-        EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().topLeft(), reloadedShapes[i].topLeft(), 0.01));
-        EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().bottomRight(), reloadedShapes[i].bottomRight(), 0.01));
-    }
-
-    delete reloaded;
-    delete persisted;
-    std::remove(savedFileName.c_str());
-
-    enum class ControlKind { CenterOff, AutoplaceOff, ManualOffset };
-    for (ControlKind kind : { ControlKind::CenterOff, ControlKind::AutoplaceOff, ControlKind::ManualOffset }) {
+    enum class ControlKind
+    {
+        CenterOff,
+        AutoplaceOff,
+        ManualOffset
+    };
+    for (ControlKind kind : {ControlKind::CenterOff, ControlKind::AutoplaceOff, ControlKind::ManualOffset})
+    {
         MasterScore* control = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
         ASSERT_TRUE(control);
         mu::engraving::pm::applyPianomaniaAutoLayout(control);
@@ -2891,20 +3118,28 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
         ASSERT_TRUE(controlHairpin);
         ASSERT_EQ(controlHairpin->spannerSegments().size(), 2);
 
-        if (kind == ControlKind::CenterOff) {
-            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+        if (kind == ControlKind::CenterOff)
+        {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments())
+            {
                 segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
                 segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
             }
             controlHairpin->setProperty(Pid::CENTER_BETWEEN_STAVES, AutoOnOff::OFF);
-        } else if (kind == ControlKind::AutoplaceOff) {
-            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+        }
+        else if (kind == ControlKind::AutoplaceOff)
+        {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments())
+            {
                 segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
                 segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
             }
             controlHairpin->setAutoplace(false);
-        } else {
-            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+        }
+        else
+        {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments())
+            {
                 segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
                 segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
             }
@@ -2913,11 +3148,13 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
 
         std::vector<PointF> controlOffsets;
         std::vector<PropertyFlags> controlOffsetFlags;
-        for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+        for (SpannerSegment* segment : controlHairpin->spannerSegments())
+        {
             controlOffsets.push_back(segment->offset());
             controlOffsetFlags.push_back(segment->propertyFlags(Pid::OFFSET));
         }
-        if (kind == ControlKind::ManualOffset) {
+        if (kind == ControlKind::ManualOffset)
+        {
             ASSERT_TRUE(std::any_of(controlOffsetFlags.begin(), controlOffsetFlags.end(),
                                     [](PropertyFlags flags) { return flags != PropertyFlags::STYLED; }));
         }
@@ -2925,14 +3162,18 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpp
         MScore::pianomaniaPrettifySlursFingerings = true;
         relayoutScore(control);
         MScore::pianomaniaPrettifySlursFingerings = previousControlPrettify;
-        for (size_t i = 0; i < controlOffsets.size(); ++i) {
+        for (size_t i = 0; i < controlOffsets.size(); ++i)
+        {
             SpannerSegment* segment = controlHairpin->segmentAt(static_cast<int>(i));
             EXPECT_TRUE(pointNear(segment->offset(), controlOffsets[i], 0.01));
             EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), controlOffsetFlags[i]);
         }
-        if (kind == ControlKind::CenterOff) {
+        if (kind == ControlKind::CenterOff)
+        {
             EXPECT_EQ(controlHairpin->centerBetweenStaves(), AutoOnOff::OFF);
-        } else if (kind == ControlKind::AutoplaceOff) {
+        }
+        else if (kind == ControlKind::AutoplaceOff)
+        {
             EXPECT_FALSE(controlHairpin->autoplace());
         }
         delete control;

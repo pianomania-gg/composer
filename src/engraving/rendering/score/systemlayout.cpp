@@ -6843,7 +6843,11 @@ void SystemLayout::centerElementBetweenStaves(EngravingItem* element, const Syst
         constexpr double maxLiftSp = 0.40;
         constexpr double minUpperClearanceSp = 0.25;
         const double sp = element->spatium();
-        const double safeLift = std::max(0.0, availSpaceAbove + yMove - minUpperClearanceSp * sp);
+        // availSpaceAbove already excludes the ordinary minimum distance.
+        // The upper-lane clamp needs the physical gap after centering, so add
+        // that allowance back before reserving the smaller Prettify clearance.
+        const double physicalSpaceAbove = availSpaceAbove + elementMinDist + yMove;
+        const double safeLift = std::max(0.0, physicalSpaceAbove - minUpperClearanceSp * sp);
         yMove -= std::min(maxLiftSp * sp, safeLift);
     }
 

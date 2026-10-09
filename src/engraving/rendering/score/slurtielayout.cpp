@@ -21,6 +21,8 @@
  */
 #include "slurtielayout.h"
 
+#include <limits>
+
 #include "iengravingfont.h"
 
 #include "dom/slur.h"
@@ -42,6 +44,7 @@
 #include "dom/laissezvib.h"
 #include "dom/parenthesis.h"
 #include "dom/partialtie.h"
+#include "dom/page.h"
 
 #include "editing/editchord.h"
 
@@ -690,6 +693,188 @@ void reconcilePianomaniaSlurShape(PmSlurClass pmClass, const Shape& segShapes, b
     tryFlatten(PointF(p3.x(), p3.y() * halfScale), PointF(p4.x(), p4.y() * halfScale));
 }
 
+double cubicCoordinate(double p0, double p1, double p2, double p3, double t)
+{
+    const double u = 1.0 - t;
+    return p0 * u * u * u + 3.0 * p1 * u * u * t + 3.0 * p2 * u * t * t + p3 * t * t * t;
+}
+
+double cubicParameterAtX(const std::array<PointF, 4>& points, double x)
+{
+    double lo = 0.0;
+    double hi = 1.0;
+    for (int i = 0; i < 32; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        if (cubicCoordinate(points[0].x(), points[1].x(), points[2].x(), points[3].x(), mid) < x) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0.5 * (lo + hi);
+}
+
+void includeCubicYExtrema(const std::array<PointF, 4>& points, double t0, double t1, double& minY, double& maxY)
+{
+    auto include = [&](double t) {
+        const double y = cubicCoordinate(points[0].y(), points[1].y(), points[2].y(), points[3].y(), t);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
+    };
+    include(t0);
+    include(t1);
+
+    const double a = 3.0 * (-points[0].y() + 3.0 * points[1].y() - 3.0 * points[2].y() + points[3].y());
+    const double b = 6.0 * (points[0].y() - 2.0 * points[1].y() + points[2].y());
+    const double c = 3.0 * (points[1].y() - points[0].y());
+    auto includeRoot = [&](double t) {
+        if (std::isfinite(t) && t > t0 && t < t1) {
+            include(t);
+        }
+    };
+    if (std::abs(a) < 1e-12) {
+        if (std::abs(b) >= 1e-12) {
+            includeRoot(-c / b);
+        }
+        return;
+    }
+    const double discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0.0) {
+        return;
+    }
+    const double root = std::sqrt(discriminant);
+    includeRoot((-b - root) / (2.0 * a));
+    includeRoot((-b + root) / (2.0 * a));
+}
+
+bool curveClearsShapeWindows(const std::array<PointF, 4>& points, const Shape& segShapes, staff_idx_t staffIdx, bool up,
+                             double numericalMargin, bool accidentalOnly)
+{
+    // Exact x-window clipping needs a monotonic system-x curve. The smoothness
+    // pass normally guarantees this; fail closed rather than apply a correction
+    // in a coordinate frame whose interval cannot be inverted safely.
+    for (size_t i = 1; i < points.size(); ++i) {
+        if (points[i].x() + 1e-9 < points[i - 1].x()) {
+            return false;
+        }
+    }
+
+    for (const ShapeElement& obstacle : segShapes.elements()) {
+        const EngravingItem* item = obstacle.item();
+        if (accidentalOnly &&
+            (!isAccidentalStaffText(item) || !item->visible() || !item->addToSkyline() || item->vStaffIdx() != staffIdx)) {
+            continue;
+        }
+        // Shape::clearsVertically(), used by the ordinary solver, evaluates every
+        // ShapeElement regardless of ignoreForLayout. Match that behavior here.
+        if (obstacle.right() < points.front().x() || obstacle.left() > points.back().x()) {
+            continue;
+        }
+        const double left = std::max(obstacle.left(), points.front().x());
+        const double right = std::min(obstacle.right(), points.back().x());
+        const double t0 = cubicParameterAtX(points, left);
+        const double t1 = cubicParameterAtX(points, right);
+        double minY = std::numeric_limits<double>::infinity();
+        double maxY = -std::numeric_limits<double>::infinity();
+        includeCubicYExtrema(points, t0, t1, minY, maxY);
+        if ((up && maxY > obstacle.top() - numericalMargin) || (!up && minY < obstacle.bottom() + numericalMargin)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF, 4>& points, double padding)
+{
+    const Page* page = segment && segment->system() ? segment->system()->page() : nullptr;
+    if (!page || !page->ldata() || page->ldata()->bbox().isNull()) {
+        return false;
+    }
+    double minY = std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    includeCubicYExtrema(points, 0.0, 1.0, minY, maxY);
+    if (!std::isfinite(minY) || !std::isfinite(maxY)) {
+        return false;
+    }
+    const PointF pageTranslation = segment->pagePos() - segment->pos();
+    const RectF curveBounds(points.front().x() + pageTranslation.x(), minY + pageTranslation.y(),
+                            points.back().x() - points.front().x(), maxY - minY);
+    const RectF pageBounds = page->ldata()->bbox().adjusted(padding, padding, -padding, -padding);
+    return pageBounds.contains(curveBounds.topLeft()) && pageBounds.contains(curveBounds.bottomRight());
+}
+
+} // namespace
+
+// The general solver uses a coarse collision approximation. A narrow
+// single-glyph ornament accidental near a long slur endpoint can therefore
+// leave a residual collision after the final smoothness pass. Correct only that
+// residual in the supported Prettify pass by moving both handles vertically
+// outward. Endpoints, handle x positions, musical anchors, and every
+// authored/manual curve stay fixed.
+bool SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+    SlurSegment* slurSeg, const Shape& segShapes, bool up, double spatium, const PointF& pp1, const PointF& p2,
+    PointF& p3, PointF& p4, const Transform& toSystemCoordinates, double arcClearance)
+{
+    if (!MScore::pianomaniaPrettifySlursFingerings || !slurSeg || !slurSeg->autoplace() || slurSeg->isEdited() ||
+        slurSeg->isEndPointsEdited() || segShapes.empty()) {
+        return false;
+    }
+
+    std::array<PointF, 4> points = {pp1, toSystemCoordinates.map(p3), toSystemCoordinates.map(p4),
+                                    toSystemCoordinates.map(p2)};
+    const double margin = 0.005 * spatium; // Structural shapes already include the 0.10sp clearance.
+    if (curveClearsShapeWindows(points, segShapes, slurSeg->vStaffIdx(), up, margin, true)) {
+        return false;
+    }
+
+    const double span = std::hypot(points.back().x() - points.front().x(), points.back().y() - points.front().y());
+    const double maxLift = std::min(12.0 * spatium, 0.35 * span);
+    if (!(maxLift > 0.0) || !std::isfinite(maxLift)) {
+        return false;
+    }
+    auto liftedPoints = [&](double lift) {
+        std::array<PointF, 4> candidate = points;
+        const double signedLift = up ? -lift : lift;
+        candidate[1].ry() += signedLift;
+        candidate[2].ry() += signedLift;
+        return candidate;
+    };
+    const Transform fromSystemCoordinates = toSystemCoordinates.inverted();
+    auto clearsAllShapes = [&](const std::array<PointF, 4>& candidate) {
+        if (!curveClearsShapeWindows(candidate, segShapes, slurSeg->vStaffIdx(), up, margin, false)) {
+            return false;
+        }
+        const PointF candidateP3 = fromSystemCoordinates.map(candidate[1]);
+        const PointF candidateP4 = fromSystemCoordinates.map(candidate[2]);
+        return pianomaniaCurveClearsShapes(segShapes, up, p2, candidateP3, candidateP4, toSystemCoordinates,
+                                           arcClearance);
+    };
+    const std::array<PointF, 4> upper = liftedPoints(maxLift);
+    if (!clearsAllShapes(upper)) {
+        return false;
+    }
+
+    double lo = 0.0;
+    double hi = maxLift;
+    for (int i = 0; i < 24; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        const std::array<PointF, 4> candidate = liftedPoints(mid);
+        if (clearsAllShapes(candidate)) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    if (!(hi > 0.0) || !std::isfinite(hi)) {
+        return false;
+    }
+    const std::array<PointF, 4> accepted = liftedPoints(hi);
+    if (!curveRemainsInsidePage(slurSeg, accepted, 0.1 * spatium)) {
+        return false;
+    }
+    p3 = fromSystemCoordinates.map(accepted[1]);
+    p4 = fromSystemCoordinates.map(accepted[2]);
+    return true;
 }
 
 SpannerSegment* SlurTieLayout::layoutSystem(Slur* item, System* system, LayoutContext& ctx)
@@ -3603,6 +3788,10 @@ void SlurTieLayout::computeBezier(SlurSegment* slurSeg, PointF shoulderOffset)
         const double arcClearance = (slurUp ? 1.0 : -1.0) * computeArcClearance(_spatium, finalSpanSp, slurAngle);
         reconcilePianomaniaSlurShape(pmClass, segShapes, slurUp, _spatium, finalEndpointDeltaSp, p2, p3, p4,
                                       toSystemCoordinates, arcClearance);
+        if (!manualSlurEdit) {
+            clearResidualPianomaniaAccidentalStaffText(slurSeg, segShapes, slurUp, _spatium, pp1, p2, p3, p4,
+                                                       toSystemCoordinates, arcClearance);
+        }
     }
 
     // Calculate p5 and p6
