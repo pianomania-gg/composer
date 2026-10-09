@@ -6554,7 +6554,9 @@ void SystemLayout::centerElementBetweenStaves(EngravingItem* element, const Syst
         if (!shapeItem) {
             return false;
         }
-        return shapeItem->isAccidental() || Autoplace::itemsShouldIgnoreEachOther(element, shapeItem);
+        // Ledger accidentals occupy the grand-staff gap too. Ignoring them
+        // can move a centred dynamic into a sharp after normal autoplace.
+        return Autoplace::itemsShouldIgnoreEachOther(element, shapeItem);
     });
 
     double yStaffDiff = nextStaff->y() - thisStaff->y();

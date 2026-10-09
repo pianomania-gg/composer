@@ -21,7 +21,6 @@
  */
 
 #include <gtest/gtest.h>
-#include "engraving/dom/articulation.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -41,6 +40,8 @@
 #include "engraving/tests/utils/scorecomp.h"
 
 #include "engraving/dom/masterscore.h"
+#include "engraving/dom/articulation.h"
+#include "engraving/dom/accidental.h"
 #include "engraving/dom/excerpt.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
@@ -1450,6 +1451,76 @@ TEST_F(Mei_Tests, mei_hairpin_01) {
     meiReadTest("hairpin-01");
 }
 
+TEST_F(Mei_Tests, mei_export_wedge_keeps_only_owned_endpoint_system_geometry) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Hairpin* hairpin = nullptr;
+    std::vector<Spanner*> others;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isHairpin()) {
+            continue;
+        }
+        Hairpin* wedge = toHairpin(candidate);
+        if (!hairpin && !wedge->isLineType() && !wedge->segmentsEmpty()) {
+            hairpin = wedge;
+        } else {
+            others.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(hairpin);
+    for (Spanner* other : others) {
+        score->removeSpanner(other);
+    }
+    const size_t legitimateCount = hairpin->spannerSegments().size();
+    const String baselineName = u"pianomania-wedge-owned-baseline.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, baselineName, exportFunc));
+    const auto baselineTags = collectStartTags(readTestTextFile(baselineName), "hairpin");
+    ASSERT_EQ(baselineTags.size(), 1u);
+
+    Page* page = hairpin->frontSegment()->system()->page();
+    ASSERT_TRUE(page);
+    System* recycled = Factory::createSystem(page);
+    recycled->moveToPage(page);
+    ASSERT_EQ(recycled->page(), page);
+    ASSERT_EQ(std::find(page->systems().cbegin(), page->systems().cend(), recycled),
+              page->systems().cend());
+    System* outside = Factory::createSystem(score->pages().back());
+    outside->adjustStavesNumber(score->nstaves());
+    score->pages().back()->appendSystem(outside);
+    const auto* original = toHairpinSegment(hairpin->frontSegment());
+    for (System* invalidSystem : {recycled, outside}) {
+        auto* ghost = toHairpinSegment(hairpin->createLineSegment(invalidSystem));
+        ghost->setSystem(invalidSystem);
+        ghost->setPos(PointF(600.0, 600.0));
+        ghost->setPos2(PointF(160.0, 0.0));
+        ghost->mutldata()->points = original->ldata()->points;
+        ghost->mutldata()->npoints = original->ldata()->npoints;
+        hairpin->add(ghost);
+    }
+    ASSERT_EQ(hairpin->spannerSegments().size(), legitimateCount + 2u);
+    const String outputName = u"pianomania-wedge-owned-systems.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const auto tags = collectStartTags(readTestTextFile(outputName), "hairpin");
+    ASSERT_EQ(tags.size(), 1u);
+    for (const char* attribute : {"pm:segments", "pm:hairpin-lines", "pm:x1y1x2y2"}) {
+        const auto baseline = xmlAttributeValue(baselineTags.front(), attribute);
+        const auto actual = xmlAttributeValue(tags.front(), attribute);
+        ASSERT_TRUE(baseline.has_value()) << attribute;
+        ASSERT_TRUE(actual.has_value()) << attribute;
+        EXPECT_EQ(*actual, *baseline) << attribute;
+    }
+    delete recycled;
+    delete score;
+}
+
 TEST_F(Mei_Tests, mei_export_articulation_centres_match_native_rendered_bounds) {
     for (const String fixture : {u"artic-01.mscx"}) {
         SCOPED_TRACE(fixture.toStdString());
@@ -1576,6 +1647,7 @@ TEST_F(Mei_Tests, mei_export_articulation_centres_preserve_native_notehead_ancho
         delete score;
     }
 }
+
 
 TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present) {
     auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
@@ -2556,4 +2628,40 @@ TEST_F(Mei_Tests, mei_ending_label_exports_plain_display_text) {
         EXPECT_EQ(xmlAttributeValue(ending, "label"), "1.");
     }
 }
+
+TEST_F(Mei_Tests, pianomania_staff_centered_dynamic_clears_ledger_accidental) {
+    // A Practice export must not move a staff-centred dynamic through an
+    // accidental protruding into the grand-staff gap after normal autoplace.
+    PianomaniaPrettifyFlagScope flags(true, true);
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false));
+    ASSERT_TRUE(score);
+    Segment* segment = score->firstSegment(SegmentType::ChordRest);
+    ASSERT_TRUE(segment);
+    Chord* chord = toChord(segment->element(0));
+    ASSERT_TRUE(chord);
+    Note* note = chord->upNote();
+    ASSERT_TRUE(note);
+    note->setPitch(54, 20, 20); // F-sharp in the lower ledger region of the treble staff.
+    Dynamic* dynamic = Factory::createDynamic(segment, true);
+    dynamic->setTrack(0);
+    dynamic->setDynamicType(DynamicType::P);
+    dynamic->setCenterBetweenStaves(AutoOnOff::ON);
+    dynamic->setVoiceAssignment(VoiceAssignment::ALL_VOICE_IN_INSTRUMENT);
+    segment->add(dynamic);
+    score->style().set(Sid::dynamicsHairpinsAutoCenterOnGrandStaff, true);
+    score->setLayoutAll();
+    score->doLayout();
+    ASSERT_TRUE(note->accidental());
+    // Align the horizontal attack column while retaining normal vertical
+    // autoplace, as a left-offset dynamic beside a ledger accidental does.
+    dynamic->setOffset(dynamic->offset() + PointF(note->accidental()->pageBoundingRect().center().x() - dynamic->pageBoundingRect().center().x(), 0.0));
+    score->setLayoutAll();
+    score->doLayout();
+    const RectF accidentalBounds = note->accidental()->pageBoundingRect();
+    const RectF dynamicBounds = dynamic->pageBoundingRect();
+    ASSERT_LT(dynamicBounds.left(), accidentalBounds.right());
+    ASSERT_GT(dynamicBounds.right(), accidentalBounds.left());
+    EXPECT_GE(dynamicBounds.top() - accidentalBounds.bottom(), dynamic->minDistance().toMM(dynamic->spatium()) - 0.02 * dynamic->spatium());
+}
+
 }

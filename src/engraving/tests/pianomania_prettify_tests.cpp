@@ -25,11 +25,13 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <set>
 #include <vector>
 
 #include "engraving/dom/articulation.h"
+#include "engraving/dom/barline.h"
 #include "engraving/dom/bracketItem.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
@@ -48,6 +50,7 @@
 #include "engraving/dom/page.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/score.h"
+#include "engraving/dom/segment.h"
 #include "engraving/dom/slur.h"
 #include "engraving/dom/spanner.h"
 #include "engraving/dom/staff.h"
@@ -809,6 +812,46 @@ std::vector<T*> collectAnnotations(Score* score, bool (EngravingObject::*isType)
         }
     }
     return items;
+}
+
+Expression* expressionWithText(Score* score, const String& text)
+{
+    for (Expression* expression : collectAnnotations<Expression>(score, &EngravingObject::isExpression)) {
+        if (expression->plainText() == text) {
+            return expression;
+        }
+    }
+    return nullptr;
+}
+
+EngravingItem* adjacentBarline(const Expression* expression, bool following)
+{
+    if (!expression || !expression->segment() || !expression->segment()->measure()->system()) {
+        return nullptr;
+    }
+
+    const System* system = expression->segment()->measure()->system();
+    for (Segment* segment = expression->segment(); segment && segment->measure()->system() == system;
+         segment = following ? segment->next1enabled() : segment->prev1enabled()) {
+        if (segment->segmentType() & SegmentType::BarLineType) {
+            return segment->element(expression->staffIdx() * VOICES);
+        }
+    }
+    return nullptr;
+}
+
+double followingBarlineClearance(const Expression* expression)
+{
+    const EngravingItem* barline = adjacentBarline(expression, true);
+    return barline ? barline->pageBoundingRect().left() - expression->pageBoundingRect().right()
+                   : -std::numeric_limits<double>::infinity();
+}
+
+double precedingBarlineClearance(const Expression* expression)
+{
+    const EngravingItem* barline = adjacentBarline(expression, false);
+    return barline ? expression->pageBoundingRect().left() - barline->pageBoundingRect().right()
+                   : -std::numeric_limits<double>::infinity();
 }
 
 std::vector<Hairpin*> collectHairpins(Score* score)
@@ -1596,6 +1639,155 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutNormalizesExpressionStaffTex
     EXPECT_TRUE(staffTextStyleSnapshotsEquivalent(firstSnapshot, captureStaffTextStyleSnapshot(score)));
 
     delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, expressionClearsFollowingBarlineAndPersists)
+{
+    struct PrettifyFlagsOff {
+        const bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+        const bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+
+        PrettifyFlagsOff()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = false;
+            MScore::pianomaniaForceNormalizeSlursFingerings = false;
+        }
+
+        ~PrettifyFlagsOff()
+        {
+            MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+            MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+        }
+    } prettifyFlagsOff;
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/expression-following-barline.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    Expression* expression = expressionWithText(score, u"poco ritenuto");
+    ASSERT_TRUE(expression);
+    ASSERT_TRUE(adjacentBarline(expression, false));
+    ASSERT_TRUE(adjacentBarline(expression, true));
+
+    const String originalText = expression->xmlText();
+    const Fraction originalTick = expression->tick();
+    const staff_idx_t originalStaff = expression->staffIdx();
+    const PlacementV originalPlacement = expression->placement();
+    const PointF originalOffset = expression->offset();
+    const PropertyFlags originalOffsetFlags = expression->propertyFlags(Pid::OFFSET);
+    EXPECT_EQ(originalOffsetFlags, PropertyFlags::STYLED);
+    const double originalY = expression->pagePos().y();
+    const double minimumClearance = 0.25 * expression->spatium();
+    EXPECT_LT(followingBarlineClearance(expression), minimumClearance - 0.05);
+
+    const mu::engraving::pm::PmPrettifyResult firstResult = applyPrettifyCommand(score);
+    EXPECT_TRUE(firstResult.changed);
+    EXPECT_FALSE(firstResult.structuralAssignmentChanged);
+    EXPECT_GE(followingBarlineClearance(expression), minimumClearance - 0.05);
+    EXPECT_GE(precedingBarlineClearance(expression), minimumClearance - 0.05);
+    EXPECT_LT(expression->pagePos().x(), expression->segment()->pagePos().x());
+    EXPECT_LE(expression->pageBoundingRect().left(), expression->segment()->pagePos().x());
+    EXPECT_GE(expression->pageBoundingRect().right(), expression->segment()->pagePos().x());
+    EXPECT_EQ(expression->xmlText(), originalText);
+    EXPECT_EQ(expression->tick(), originalTick);
+    EXPECT_EQ(expression->staffIdx(), originalStaff);
+    EXPECT_EQ(expression->placement(), originalPlacement);
+    EXPECT_TRUE(expression->autoplace());
+    EXPECT_EQ(expression->propertyFlags(Pid::OFFSET), PropertyFlags::UNSTYLED);
+    EXPECT_NEAR(expression->pagePos().y(), originalY, 0.05);
+
+    const PointF repairedOffset = expression->offset();
+    const PointF repairedPosition = expression->pagePos();
+    relayoutScore(score);
+    EXPECT_TRUE(pointNear(expression->pagePos(), repairedPosition, 0.02 * expression->spatium()));
+    EXPECT_GE(followingBarlineClearance(expression), minimumClearance - 0.05);
+
+    EditData undoEditData;
+    score->undoStack()->undo(&undoEditData);
+    relayoutScore(score);
+    EXPECT_EQ(expression->offset(), originalOffset);
+    EXPECT_EQ(expression->propertyFlags(Pid::OFFSET), originalOffsetFlags);
+
+    EditData redoEditData;
+    score->undoStack()->redo(&redoEditData);
+    relayoutScore(score);
+    EXPECT_EQ(expression->offset(), repairedOffset);
+    EXPECT_EQ(expression->propertyFlags(Pid::OFFSET), PropertyFlags::UNSTYLED);
+    EXPECT_TRUE(pointNear(expression->pagePos(), repairedPosition, 0.02 * expression->spatium()));
+    EXPECT_GE(followingBarlineClearance(expression), minimumClearance - 0.05);
+
+    applyPrettifyCommand(score);
+    EXPECT_EQ(expression->offset(), repairedOffset);
+    EXPECT_TRUE(pointNear(expression->pagePos(), repairedPosition, 0.02 * expression->spatium()));
+    EXPECT_GE(followingBarlineClearance(expression), minimumClearance - 0.05);
+
+    const std::string savedFileName = testing::TempDir() + "pianomania-expression-following-barline-roundtrip.mscx";
+    const String savedPath = String::fromUtf8(savedFileName);
+    ASSERT_TRUE(ScoreRW::saveScore(score, savedPath));
+    MasterScore* reloadedScore = ScoreRW::readScore(savedPath, true);
+    ASSERT_TRUE(reloadedScore);
+    Expression* reloadedExpression = expressionWithText(reloadedScore, u"poco ritenuto");
+    ASSERT_TRUE(reloadedExpression);
+    relayoutScore(reloadedScore);
+
+    EXPECT_TRUE(pointNear(reloadedExpression->offset(), repairedOffset, 0.02 * reloadedExpression->spatium()));
+    EXPECT_EQ(reloadedExpression->propertyFlags(Pid::OFFSET), PropertyFlags::UNSTYLED);
+    EXPECT_GE(followingBarlineClearance(reloadedExpression), 0.25 * reloadedExpression->spatium() - 0.05);
+    EXPECT_GE(precedingBarlineClearance(reloadedExpression), 0.25 * reloadedExpression->spatium() - 0.05);
+    EXPECT_LE(reloadedExpression->pageBoundingRect().left(), reloadedExpression->segment()->pagePos().x());
+    EXPECT_GE(reloadedExpression->pageBoundingRect().right(), reloadedExpression->segment()->pagePos().x());
+    EXPECT_EQ(reloadedExpression->xmlText(), originalText);
+    EXPECT_EQ(reloadedExpression->tick(), originalTick);
+    EXPECT_EQ(reloadedExpression->staffIdx(), originalStaff);
+    EXPECT_EQ(reloadedExpression->placement(), originalPlacement);
+    EXPECT_TRUE(reloadedExpression->autoplace());
+    EXPECT_NEAR(reloadedExpression->pagePos().y(), originalY, 0.05);
+
+    const PointF reloadedOffset = reloadedExpression->offset();
+    const PointF reloadedPosition = reloadedExpression->pagePos();
+    applyPrettifyCommand(reloadedScore);
+    relayoutScore(reloadedScore);
+    EXPECT_TRUE(pointNear(reloadedExpression->offset(), reloadedOffset, 0.02 * reloadedExpression->spatium()));
+    EXPECT_TRUE(pointNear(reloadedExpression->pagePos(), reloadedPosition, 0.02 * reloadedExpression->spatium()));
+    EXPECT_GE(followingBarlineClearance(reloadedExpression), 0.25 * reloadedExpression->spatium() - 0.05);
+
+    delete reloadedScore;
+    std::remove(savedFileName.c_str());
+    delete score;
+}
+
+TEST_F(Engraving_PianomaniaPrettifyTests, expressionBarlineClearancePreservesManualPlacement)
+{
+    for (int scenario = 0; scenario < 2; ++scenario) {
+        SCOPED_TRACE(scenario);
+        MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/expression-following-barline.mscx");
+        ASSERT_TRUE(score);
+        Expression* expression = expressionWithText(score, u"poco ritenuto");
+        ASSERT_TRUE(expression);
+
+        if (scenario == 0) {
+            expression->setProperty(Pid::OFFSET, PointF(0.4 * expression->spatium(), 0.0));
+            expression->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
+        } else {
+            expression->setProperty(Pid::AUTOPLACE, false);
+            expression->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::UNSTYLED);
+        }
+        relayoutScore(score);
+        const PointF manualOffset = expression->offset();
+        const PropertyFlags manualOffsetFlags = expression->propertyFlags(Pid::OFFSET);
+        const bool manualAutoplace = expression->autoplace();
+        const PropertyFlags manualAutoplaceFlags = expression->propertyFlags(Pid::AUTOPLACE);
+        const PointF manualPosition = expression->pagePos();
+
+        applyPrettifyCommand(score);
+        EXPECT_EQ(expression->offset(), manualOffset);
+        EXPECT_EQ(expression->propertyFlags(Pid::OFFSET), manualOffsetFlags);
+        EXPECT_EQ(expression->autoplace(), manualAutoplace);
+        EXPECT_EQ(expression->propertyFlags(Pid::AUTOPLACE), manualAutoplaceFlags);
+        EXPECT_TRUE(pointNear(expression->pagePos(), manualPosition, 0.02 * expression->spatium()));
+
+        delete score;
+    }
 }
 
 TEST_F(Engraving_PianomaniaPrettifyTests, slurEndpointOffsetUndoRedoClearsStaleEndpointCarryover)

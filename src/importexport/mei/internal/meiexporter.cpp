@@ -414,6 +414,79 @@ const ChordRest *findExportedRubatoBoundaryAnchor(const Measure *measure,
   return nullptr;
 }
 
+static std::optional<size_t> placedScoreSystemIndex(const Score *score,
+                                                    const System *system) {
+  if (!score || !system) {
+    return std::nullopt;
+  }
+
+  size_t systemIndex = 0;
+  for (const Page *page : score->pages()) {
+    for (const System *pageSystem : page->systems()) {
+      if (pageSystem == system) {
+        // Page::systems is the ownership source. A stale parent Page pointer
+        // cannot make coordinates from a recycled System valid.
+        return system->page() == page ? std::optional<size_t>(systemIndex)
+                                     : std::nullopt;
+      }
+      ++systemIndex;
+    }
+  }
+  return std::nullopt;
+}
+
+struct PlacedHairpinSegment {
+  const HairpinSegment *segment = nullptr;
+  size_t systemIndex = 0;
+};
+
+static std::vector<const HairpinSegment *>
+placedHairpinSegmentsInEndpointRange(const Hairpin *hairpin) {
+  if (!hairpin || !hairpin->score()) {
+    return {};
+  }
+  const Score *score = hairpin->score();
+  Spanner *mutableHairpin = const_cast<Hairpin *>(hairpin);
+  const ChordRest *startAnchor =
+      findExportedSpannerEndpointAnchor(mutableHairpin, true);
+  const ChordRest *endAnchor =
+      findExportedSpannerEndpointAnchor(mutableHairpin, false);
+  const System *startSystem = startAnchor && startAnchor->measure()
+                                  ? startAnchor->measure()->system() : nullptr;
+  const System *endSystem = endAnchor && endAnchor->measure()
+                                ? endAnchor->measure()->system() : nullptr;
+  const auto startIndex = placedScoreSystemIndex(score, startSystem);
+  const auto endIndex = placedScoreSystemIndex(score, endSystem);
+  if (!startIndex.has_value() || !endIndex.has_value() || *startIndex > *endIndex) {
+    LOGE() << "MeiExporter::writeHairpin cannot resolve its endpoint system range";
+    return {};
+  }
+
+  std::vector<PlacedHairpinSegment> accepted;
+  for (const SpannerSegment *segment : hairpin->spannerSegments()) {
+    if (!segment || !segment->isHairpinSegment()) {
+      continue;
+    }
+    const auto index = placedScoreSystemIndex(score, segment->system());
+    if (!index.has_value() || *index < *startIndex || *index > *endIndex) {
+      LOGW() << "MeiExporter::writeHairpin excludes a segment outside its owned endpoint systems";
+      continue;
+    }
+    accepted.push_back({toHairpinSegment(segment), *index});
+  }
+  std::stable_sort(accepted.begin(), accepted.end(),
+                   [](const PlacedHairpinSegment &left,
+                      const PlacedHairpinSegment &right) {
+                     return left.systemIndex < right.systemIndex;
+                   });
+  std::vector<const HairpinSegment *> segments;
+  segments.reserve(accepted.size());
+  for (const PlacedHairpinSegment &entry : accepted) {
+    segments.push_back(entry.segment);
+  }
+  return segments;
+}
+
 std::optional<std::pair<const HairpinSegment *, const System *>>
 resolvedHairpinLayout(const Hairpin *hairpin) {
   if (!hairpin || hairpin->segmentsEmpty()) {
@@ -4031,12 +4104,12 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
     return this->writeDir(dynamic_cast<const TextLineBase *>(hairpin), startid);
   }
 
-  const auto layout = resolvedHairpinLayout(hairpin);
-  if (!layout.has_value()) {
+  const auto placedSegments = placedHairpinSegmentsInEndpointRange(hairpin);
+  if (placedSegments.empty()) {
     return false;
   }
-  const HairpinSegment *firstSegment = layout->first;
-  const System *hairpinSystem = layout->second;
+  const HairpinSegment *firstSegment = placedSegments.front();
+  const System *hairpinSystem = firstSegment->system();
 
   pugi::xml_node hairpinNode = m_currentNode.append_child();
   libmei::Hairpin meiHairpin = Convert::hairpinToMEI(hairpin);
@@ -4045,7 +4118,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
   // First write all MEI attributes (including xml:id).
   meiHairpin.Write(hairpinNode, this->getXmlIdFor(hairpin, 'h'));
 
-  const double yPos = getHairpinYOffset(hairpin);
+  const double yPos = getHairpinYOffset(hairpin, firstSegment);
   hairpinNode.append_attribute("yOffset") = formatDecimalStr(yPos, 1);
 
   const bool centered = engraving::rendering::score::SystemLayout::
@@ -4060,9 +4133,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
       return std::pair<double, double>(x, y);
     };
 
-    const HairpinSegment *lastSegment = hairpin->backSegment()
-                                             ? toHairpinSegment(hairpin->backSegment())
-                                             : nullptr;
+    const HairpinSegment *lastSegment = placedSegments.back();
 
     if (firstSegment && lastSegment) {
       auto [x1, y1] = makePoint(firstSegment->pagePos());
@@ -4095,7 +4166,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
                            formatDecimalStr(y2, 3);
       };
 
-      for (const SpannerSegment *seg : hairpin->spannerSegments()) {
+      for (const SpannerSegment *seg : placedSegments) {
         const HairpinSegment *hairpinSeg = seg->isHairpinSegment()
                                               ? toHairpinSegment(seg)
                                               : nullptr;
@@ -5051,27 +5122,6 @@ struct PlacedSlurSegment {
   const SlurSegment *segment = nullptr;
   size_t systemIndex = 0;
 };
-
-static std::optional<size_t> placedScoreSystemIndex(const Score *score,
-                                                    const System *system) {
-  if (!score || !system) {
-    return std::nullopt;
-  }
-
-  size_t systemIndex = 0;
-  for (const Page *page : score->pages()) {
-    for (const System *pageSystem : page->systems()) {
-      if (pageSystem == system) {
-        // Page::systems is the ownership source. A stale parent Page pointer
-        // cannot make coordinates from a recycled System valid.
-        return system->page() == page ? std::optional<size_t>(systemIndex)
-                                     : std::nullopt;
-      }
-      ++systemIndex;
-    }
-  }
-  return std::nullopt;
-}
 
 static std::vector<const SlurSegment *>
 placedSlurSegmentsInEndpointRange(const Score *score, const Slur *slur) {
@@ -6480,7 +6530,8 @@ double MeiExporter::getFermataYOffset(const Fermata *fermata) {
 // y-position in staff spaces relative to bottom note. Returns a "yOffset"
 // double to the hairpin equal to number of staff spaces between the hairpin and
 // the bottom note of the note/chord.
-double MeiExporter::getHairpinYOffset(const Hairpin *hairpin) {
+double MeiExporter::getHairpinYOffset(
+    const Hairpin *hairpin, const HairpinSegment *firstSegment) {
   if (!hairpin) {
     return 0.0;
   }
@@ -6491,7 +6542,8 @@ double MeiExporter::getHairpinYOffset(const Hairpin *hairpin) {
   // Get the first segment of the hairpin spanner, which contains the actual
   // rendered position after layout and collision detection (same approach as
   // ottava)
-  const SpannerSegment *segment = hairpin->spannerSegments().front();
+  const SpannerSegment *segment =
+      firstSegment ? firstSegment : hairpin->spannerSegments().front();
 
   // Get hairpin's Y position in PAGE coordinates (same as anchor lines use)
   double hairpinY = segment->pagePos().y();

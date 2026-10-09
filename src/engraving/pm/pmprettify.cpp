@@ -14,6 +14,7 @@
 #include "log.h"
 
 #include "../dom/engravingitem.h"
+#include "../dom/expression.h"
 #include "../dom/fingering.h"
 #include "../dom/hairpin.h"
 #include "../dom/measure.h"
@@ -76,12 +77,19 @@ struct PianomaniaTempoTextTarget
     PointF pos;
 };
 
+struct PianomaniaExpressionTarget
+{
+    Expression* expression = nullptr;
+    PointF pos;
+};
+
 struct PianomaniaPrettifyTargets
 {
     std::vector<PianomaniaSlurSegmentTarget> slurSegments;
     std::vector<PianomaniaFingeringTarget> fingerings;
     std::vector<PianomaniaHairpinSegmentTarget> hairpinSegments;
     std::vector<PianomaniaTempoTextTarget> tempoTexts;
+    std::vector<PianomaniaExpressionTarget> expressions;
 };
 
 struct PianomaniaSlurSnapshotEntry
@@ -141,12 +149,25 @@ struct PianomaniaTempoTextSnapshotEntry
     double spatium = 1.0;
 };
 
+struct PianomaniaExpressionSnapshotEntry
+{
+    Expression* expression = nullptr;
+    PointF offset;
+    PropertyFlags offsetFlags = PropertyFlags::STYLED;
+    bool autoplace = true;
+    PropertyFlags autoplaceFlags = PropertyFlags::STYLED;
+    OffsetChange offsetChanged = OffsetChange::NONE;
+    PointF changedPos;
+    double spatium = 1.0;
+};
+
 struct PianomaniaPrettifySnapshot
 {
     std::vector<PianomaniaSlurSnapshotEntry> slurSegments;
     std::vector<PianomaniaFingeringSnapshotEntry> fingerings;
     std::vector<PianomaniaHairpinSnapshotEntry> hairpinSegments;
     std::vector<PianomaniaTempoTextSnapshotEntry> tempoTexts;
+    std::vector<PianomaniaExpressionSnapshotEntry> expressions;
 };
 
 struct PianomaniaStructuralAssignment
@@ -275,6 +296,12 @@ PianomaniaPrettifyTargets collectPianomaniaPrettifyTargets(Score* score)
             for (EngravingItem* annotation : segment->annotations()) {
                 if (annotation && annotation->isTempoText()) {
                     targets.tempoTexts.push_back(PianomaniaTempoTextTarget { toTempoText(annotation), annotation->pos() });
+                } else if (annotation && annotation->isExpression()) {
+                    Expression* expression = toExpression(annotation);
+                    if (expression->visible() && expression->autoplace() && expression->isStyled(Pid::OFFSET)
+                        && !expression->snappedDynamic()) {
+                        targets.expressions.push_back(PianomaniaExpressionTarget { expression, expression->pos() });
+                    }
                 }
             }
         }
@@ -357,6 +384,20 @@ PianomaniaPrettifySnapshot collectPianomaniaPrettifySnapshot(Score* score)
         for (Segment* segment = measure->first(); segment; segment = segment->next()) {
             for (EngravingItem* annotation : segment->annotations()) {
                 if (!annotation || !annotation->isTempoText()) {
+                    if (!annotation || !annotation->isExpression()) {
+                        continue;
+                    }
+                    Expression* expression = toExpression(annotation);
+                    snapshot.expressions.push_back(PianomaniaExpressionSnapshotEntry {
+                        expression,
+                        expression->offset(),
+                        expression->propertyFlags(Pid::OFFSET),
+                        expression->autoplace(),
+                        expression->propertyFlags(Pid::AUTOPLACE),
+                        expression->ldata()->offsetChanged(),
+                        expression->ldata()->autoplace.changedPos,
+                        std::max(1.0, expression->spatium())
+                    });
                     continue;
                 }
                 TempoText* tempoText = toTempoText(annotation);
@@ -386,7 +427,8 @@ bool snapshotsEquivalent(const PianomaniaPrettifySnapshot& a, const PianomaniaPr
 {
     if (a.slurSegments.size() != b.slurSegments.size() || a.fingerings.size() != b.fingerings.size()
         || a.hairpinSegments.size() != b.hairpinSegments.size()
-        || a.tempoTexts.size() != b.tempoTexts.size()) {
+        || a.tempoTexts.size() != b.tempoTexts.size()
+        || a.expressions.size() != b.expressions.size()) {
         return false;
     }
 
@@ -456,6 +498,21 @@ bool snapshotsEquivalent(const PianomaniaPrettifySnapshot& a, const PianomaniaPr
         const PianomaniaTempoTextSnapshotEntry& right = b.tempoTexts[i];
         const double tolerance = PIANOMANIA_PRETTIFY_SNAPSHOT_TOLERANCE_SP * left.spatium;
         if (left.tempoText != right.tempoText
+            || left.offsetFlags != right.offsetFlags
+            || left.autoplace != right.autoplace
+            || left.autoplaceFlags != right.autoplaceFlags
+            || left.offsetChanged != right.offsetChanged
+            || !pointNear(left.offset, right.offset, tolerance)
+            || !pointNear(left.changedPos, right.changedPos, tolerance)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < a.expressions.size(); ++i) {
+        const PianomaniaExpressionSnapshotEntry& left = a.expressions[i];
+        const PianomaniaExpressionSnapshotEntry& right = b.expressions[i];
+        const double tolerance = PIANOMANIA_PRETTIFY_SNAPSHOT_TOLERANCE_SP * left.spatium;
+        if (left.expression != right.expression
             || left.offsetFlags != right.offsetFlags
             || left.autoplace != right.autoplace
             || left.autoplaceFlags != right.autoplaceFlags
@@ -544,6 +601,20 @@ void restorePianomaniaPrettifySnapshot(const PianomaniaPrettifySnapshot& snapsho
         tempoText->setPropertyFlags(Pid::AUTOPLACE, entry.autoplaceFlags);
         tempoText->mutldata()->autoplace.offsetChanged = entry.offsetChanged;
         tempoText->mutldata()->autoplace.changedPos = entry.changedPos;
+    }
+
+    for (const PianomaniaExpressionSnapshotEntry& entry : snapshot.expressions) {
+        Expression* expression = entry.expression;
+        if (!expression) {
+            continue;
+        }
+
+        expression->setProperty(Pid::OFFSET, entry.offset);
+        expression->setPropertyFlags(Pid::OFFSET, entry.offsetFlags);
+        expression->setProperty(Pid::AUTOPLACE, entry.autoplace);
+        expression->setPropertyFlags(Pid::AUTOPLACE, entry.autoplaceFlags);
+        expression->mutldata()->autoplace.offsetChanged = entry.offsetChanged;
+        expression->mutldata()->autoplace.changedPos = entry.changedPos;
     }
 }
 
@@ -851,6 +922,24 @@ bool applyPianomaniaPrettifyTargetDeltas(const PianomaniaPrettifyTargets& target
         static_cast<EngravingItem*>(tempoText)->undoChangeProperty(Pid::OFFSET, tempoText->offset() + delta,
                                                                   PropertyFlags::UNSTYLED);
         tempoText->setOffsetChanged(false);
+        changed = true;
+    }
+
+    for (const PianomaniaExpressionTarget& target : targets.expressions) {
+        Expression* expression = target.expression;
+        if (!expression) {
+            continue;
+        }
+
+        const PointF delta = target.pos - expression->pos();
+        const double sp = expression->spatium();
+        if (std::hypot(delta.x(), delta.y()) <= PIANOMANIA_PRETTIFY_CONVERGENCE_SP * sp) {
+            continue;
+        }
+
+        static_cast<EngravingItem*>(expression)->undoChangeProperty(Pid::OFFSET, expression->offset() + delta,
+                                                                    PropertyFlags::UNSTYLED);
+        expression->setOffsetChanged(false);
         changed = true;
     }
 

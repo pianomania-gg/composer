@@ -91,6 +91,7 @@
 
 #include "dom/marker.h"
 #include "dom/measurebase.h"
+#include "dom/mscore.h"
 #include "dom/measurenumber.h"
 #include "dom/measurenumberbase.h"
 #include "dom/measurerepeat.h"
@@ -1821,6 +1822,78 @@ void TLayout::layoutDynamic(Dynamic* item, Dynamic::LayoutData* ldata, const Lay
     DynamicsLayout::layoutDynamic(item, ldata, conf);
 }
 
+static void keepPianomaniaExpressionClearOfFollowingBarline(const Expression* item, Expression::LayoutData* ldata)
+{
+    if (!MScore::pianomaniaPrettifySlursFingerings || !item->visible() || !item->autoplace()
+        || !item->isStyled(Pid::OFFSET)) {
+        return;
+    }
+
+    Segment* anchorSegment = item->segment();
+    System* system = anchorSegment ? anchorSegment->measure()->system() : nullptr;
+    if (!system) {
+        return;
+    }
+
+    staff_idx_t barLineStaff = item->staffIdx();
+    if (item->placeAbove()) {
+        barLineStaff = muse::nidx;
+        for (int staffIndex = static_cast<int>(item->staffIdx()) - 1; staffIndex >= 0; --staffIndex) {
+            if (system->staff(staffIndex)->show()) {
+                barLineStaff = static_cast<staff_idx_t>(staffIndex);
+                break;
+            }
+        }
+    }
+    if (barLineStaff == muse::nidx || !item->score()->staff(barLineStaff)->barLineSpan()) {
+        return;
+    }
+
+    Segment* rightBarLineSegment = nullptr;
+    for (Segment* segment = anchorSegment; segment && segment->measure()->system() == system; segment = segment->next1enabled()) {
+        if (segment->segmentType() & SegmentType::BarLineType) {
+            rightBarLineSegment = segment;
+            break;
+        }
+    }
+    EngravingItem* rightBarLine = rightBarLineSegment ? rightBarLineSegment->element(barLineStaff * VOICES) : nullptr;
+    if (!rightBarLine) {
+        return;
+    }
+
+    const double minBarLineDistance = 0.25 * item->spatium();
+    const RectF expressionRect = ldata->bbox().translated(item->pagePos());
+    const double missingRightClearance = rightBarLine->ldata()->bbox().translated(rightBarLine->pagePos()).left()
+                                         - expressionRect.right() - minBarLineDistance;
+    if (missingRightClearance >= 0.0) {
+        return;
+    }
+
+    const RectF shiftedRect = expressionRect.translated(missingRightClearance, 0.0);
+    const double anchorX = anchorSegment->pagePos().x();
+    if (anchorX < shiftedRect.left() || anchorX > shiftedRect.right()) {
+        return;
+    }
+
+    Segment* leftBarLineSegment = nullptr;
+    for (Segment* segment = anchorSegment; segment && segment->measure()->system() == system; segment = segment->prev1enabled()) {
+        if (segment->segmentType() & SegmentType::BarLineType) {
+            leftBarLineSegment = segment;
+            break;
+        }
+    }
+    EngravingItem* leftBarLine = leftBarLineSegment ? leftBarLineSegment->element(barLineStaff * VOICES) : nullptr;
+    if (leftBarLine) {
+        const double leftLimit = leftBarLine->ldata()->bbox().translated(leftBarLine->pagePos()).right()
+                                 + minBarLineDistance;
+        if (shiftedRect.left() < leftLimit) {
+            return;
+        }
+    }
+
+    ldata->moveX(missingRightClearance);
+}
+
 void TLayout::layoutExpression(const Expression* item, Expression::LayoutData* ldata)
 {
     LAYOUT_CALL_ITEM(item);
@@ -1875,6 +1948,7 @@ void TLayout::layoutExpression(const Expression* item, Expression::LayoutData* l
     }
     if (!dynamic || dynamic->placeAbove() != item->placeAbove() || dynamic->voiceAssignment() != item->voiceAssignment()
         || !dynamic->visible()) {
+        keepPianomaniaExpressionClearOfFollowingBarline(item, ldata);
         Autoplace::autoplaceSegmentElement(item, ldata);
         return;
     }

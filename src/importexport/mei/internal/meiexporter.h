@@ -438,7 +438,8 @@ private:
   getFingeringOffsets(const engraving::Fingering *fing,
                       const std::string &startid) const;
   double getOrnamentYOffset(const engraving::Ornament *ornament) const;
-  double getHairpinYOffset(const engraving::Hairpin *hairpin);
+  double getHairpinYOffset(const engraving::Hairpin *hairpin,
+                           const engraving::HairpinSegment *firstSegment = nullptr);
   double getOctaveYOffset(const engraving::Ottava *ottava);
   double getOctaveEndHookHeight(const engraving::Ottava *ottava);
   double getVoltaLineYOffset(const engraving::VoltaSegment *segment) const;

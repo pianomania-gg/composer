@@ -1222,7 +1222,7 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
     collectPianomaniaHeldPitchCurve(note, noteChannel, tick1, pitchWheelRenderer, noteEffect);
 
     NoteEventList nel = note->playEvents();
-    if (hasGameplayOrnament && applyOrnamentNoteOff) {
+    if (hasGameplayOrnament && applyOrnamentNoteOff && chord->playEventType() == PlayEventType::Auto) {
         normalizeGameplayOrnamentEvents(nel, note, gameplayOrnament, gameplayOrnamentSymId);
     }
     size_t nels = nel.size();
