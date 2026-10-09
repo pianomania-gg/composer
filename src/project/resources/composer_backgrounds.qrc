@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/composer/backgrounds">
+        <file alias="courtyard.jpg">composer-backgrounds/courtyard.jpg</file>
+        <file alias="windmill.jpg">composer-backgrounds/windmill.jpg</file>
+        <file alias="library.jpg">composer-backgrounds/library.jpg</file>
+        <file alias="river.jpg">composer-backgrounds/river.jpg</file>
+    </qresource>
+</RCC>
