@@ -140,10 +140,10 @@ add_test(
         --gtest_filter=${PIANOMANIA_ENGRAVING_TEST_FILTER}
 )
 
-# GTest exits 0 when a filter matches nothing. Pin the 32 Prettify contracts and
+# GTest exits 0 when a filter matches nothing. Pin the 34 Prettify contracts and
 # the two explicit/automatic ornament controls so missing sources or fixtures
 # cannot silently weaken this gate.
 # runutests.sh sets GTEST_COLOR=1, so allow colour escapes before the count.
 set_tests_properties(engraving_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*34 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*36 tests"
 )

@@ -3549,6 +3549,24 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
 }
 
 namespace {
+// The flags the Practice exporter lays out with.
+struct PracticeExportFlags {
+    bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+
+    PracticeExportFlags()
+    {
+        MScore::pianomaniaPrettifySlursFingerings = true;
+        MScore::pianomaniaForceNormalizeSlursFingerings = true;
+    }
+
+    ~PracticeExportFlags()
+    {
+        MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+        MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+    }
+};
+
 MasterScore* readAutoLaidOut(const String& fixture)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/" + fixture);
@@ -3574,11 +3592,56 @@ std::vector<Chord*> collectChords(Score* score)
     return chords;
 }
 
+std::vector<RectF> crossStaffBeamPageRects(Score* score)
+{
+    std::set<const Beam*> beams;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->beam() && chord->beam()->cross()) {
+            beams.insert(chord->beam());
+        }
+    }
+    std::vector<RectF> rects;
+    for (const Beam* beam : beams) {
+        for (const RectF& rect : beam->shape().translated(beam->pagePos()).toRects()) {
+            rects.push_back(rect);
+        }
+    }
+    return rects;
+}
+
+// Noteheads and accidentals of one staff (cross-staff notes count where they are drawn).
+std::vector<RectF> notePageRects(Score* score, staff_idx_t vStaffIdx)
+{
+    std::vector<RectF> rects;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->vStaffIdx() != vStaffIdx) {
+            continue;
+        }
+        for (Note* note : chord->notes()) {
+            rects.push_back(note->pageBoundingRect());
+            if (note->accidental() && note->accidental()->visible()) {
+                rects.push_back(note->accidental()->pageBoundingRect());
+            }
+        }
+    }
+    return rects;
+}
+
 double staffLinePageY(const System* system, staff_idx_t staffIdx, int line, const Fraction& tick)
 {
     const Staff* staff = system->score()->staff(staffIdx);
     return system->pagePos().y() + system->staff(staffIdx)->y() + line * staff->lineDistance(tick) * staff->spatium(tick);
-}}
+}
+
+std::vector<PointF> hairpinPagePoints(const HairpinSegment* segment)
+{
+    std::vector<PointF> points;
+    for (size_t i = 0; i < 4; ++i) {
+        points.push_back(segment->pagePos() + segment->ldata()->points[i]);
+    }
+    return points;
+}
+}
 
 // Test value: Auto Layout returns a hairpin end grip dragged before the last
 // note of its span, and a dragged ottava hook, to their automatic placement.
@@ -3704,6 +3767,75 @@ TEST_F(Engraving_PianomaniaPrettifyTests, beamSideTupletNumberStaysOffStaffLines
     score->style().set(Sid::tupletOutOfStaff, false);
     relayoutScore(score);
     EXPECT_GE(straddlingNumbers(score).second, 1u);
+
+    delete score;
+}
+
+// Test value: A centred dynamic in the grand-staff gap clears a cross-staff
+// beam rising from the lower staff (Beethoven Op. 27 No. 2 m5 "pp").
+TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredDynamicClearsCrossStaffBeam)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"staff-centered-dynamic-cross-staff-beam.mscx");
+    ASSERT_TRUE(score);
+
+    const std::vector<Dynamic*> dynamics = collectAnnotations<Dynamic>(score, &EngravingObject::isDynamic);
+    ASSERT_EQ(dynamics.size(), 1u);
+    const Dynamic* dynamic = dynamics.front();
+    const RectF bounds = dynamic->pageBoundingRect();
+    const std::vector<RectF> beams = crossStaffBeamPageRects(score);
+    ASSERT_FALSE(beams.empty());
+    for (const RectF& beam : beams) {
+        EXPECT_FALSE(rectsOverlap(bounds, beam));
+    }
+    for (staff_idx_t staffIdx : { staff_idx_t(0), staff_idx_t(1) }) {
+        for (const RectF& head : notePageRects(score, staffIdx)) {
+            EXPECT_FALSE(rectsOverlap(bounds, head));
+        }
+    }
+    const System* system = dynamic->segment()->measure()->system();
+    EXPECT_GT(bounds.top(), staffLinePageY(system, 0, 4, dynamic->tick()));
+    EXPECT_LT(bounds.bottom(), staffLinePageY(system, 1, 0, dynamic->tick()));
+
+    delete score;
+}
+
+// Test value: Centred hairpins under cross-staff beams sit below the beams and
+// cross only the lower staff's stems (C. P. E. Bach H. 220 m7-8).
+TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredHairpinsSitBelowCrossStaffBeams)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"staff-centered-hairpins-cross-staff-beams.mscx");
+    ASSERT_TRUE(score);
+
+    const std::vector<RectF> beams = crossStaffBeamPageRects(score);
+    ASSERT_FALSE(beams.empty());
+    size_t checked = 0;
+    for (Hairpin* hairpin : collectHairpins(score)) {
+        for (SpannerSegment* spannerSegment : hairpin->spannerSegments()) {
+            const HairpinSegment* segment = toHairpinSegment(spannerSegment);
+            const std::vector<PointF> points = hairpinPagePoints(segment);
+            double left = std::numeric_limits<double>::max();
+            double right = -left;
+            double top = std::numeric_limits<double>::max();
+            double bottom = -top;
+            for (const PointF& point : points) {
+                left = std::min(left, point.x());
+                right = std::max(right, point.x());
+                top = std::min(top, point.y());
+                bottom = std::max(bottom, point.y());
+            }
+            for (const RectF& beam : beams) {
+                if (beam.right() <= left || beam.left() >= right) {
+                    continue;
+                }
+                EXPECT_GT(top, beam.bottom());
+            }
+            EXPECT_LT(bottom, staffLinePageY(segment->system(), 1, 0, hairpin->tick()));
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 2u);
 
     delete score;
 }
