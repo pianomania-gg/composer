@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "../dom/articulation.h"
 #include "../dom/measurebase.h"
 #include "../dom/score.h"
 #include "../editing/editsystemlocks.h"
@@ -85,6 +86,12 @@ std::unordered_map<Sid, PropertyValue> mu::engraving::pm::pianomaniaStyleValues(
         { Sid::barAccidentalDistance, Spatium(0.65) },
         { Sid::measureSpacing, 1.5 },
         { Sid::minMeasureWidth, Spatium(8.0) },
+
+        // Stem-side marks (a staccato under a beam) centre on the notehead.
+        { Sid::articulationStemHAlign, int(ArticulationStemSideAlign::NOTEHEAD) },
+        // A tuplet number is taller than a staff space, so inside the staff it
+        // always crosses a line. Keep numbers and brackets outside the staff.
+        { Sid::tupletOutOfStaff, true },
 
         { Sid::akkoladeDistance, Spatium(6.5) },
         { Sid::staffDistance, Spatium(6.5) },

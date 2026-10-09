@@ -3549,6 +3549,16 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
 }
 
 namespace {
+MasterScore* readAutoLaidOut(const String& fixture)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/" + fixture);
+    if (score) {
+        mu::engraving::pm::applyPianomaniaAutoLayout(score);
+        relayoutScore(score);
+    }
+    return score;
+}
+
 std::vector<Chord*> collectChords(Score* score)
 {
     std::vector<Chord*> chords;
@@ -3562,6 +3572,12 @@ std::vector<Chord*> collectChords(Score* score)
         }
     }
     return chords;
+}
+
+double staffLinePageY(const System* system, staff_idx_t staffIdx, int line, const Fraction& tick)
+{
+    const Staff* staff = system->score()->staff(staffIdx);
+    return system->pagePos().y() + system->staff(staffIdx)->y() + line * staff->lineDistance(tick) * staff->spatium(tick);
 }}
 
 // Test value: Auto Layout returns a hairpin end grip dragged before the last
@@ -3607,6 +3623,87 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutResetsDraggedLineEndsAndOtta
     EXPECT_TRUE(ottava->isStyled(Pid::END_HOOK_HEIGHT));
     EXPECT_EQ(ottava->getProperty(Pid::END_HOOK_HEIGHT), ottava->propertyDefault(Pid::END_HOOK_HEIGHT));
     EXPECT_EQ(ottava->getProperty(Pid::BEGIN_HOOK_HEIGHT), ottava->propertyDefault(Pid::BEGIN_HOOK_HEIGHT));
+
+    delete score;
+}
+
+// Test value: A staccato on the stem side of a beamed note centres on the
+// notehead (Gurlitt Op. 101 No. 8), not halfway towards the stem.
+TEST_F(Engraving_PianomaniaPrettifyTests, stemSideStaccatosCentreOnTheirNoteheads)
+{
+    MasterScore* score = readAutoLaidOut(u"stem-side-staccatos-under-beams.mscx");
+    ASSERT_TRUE(score);
+
+    auto stemSideStaccatoOffsets = [](Score* current) {
+        std::vector<double> offsets;
+        for (Chord* chord : collectChords(current)) {
+            for (Articulation* articulation : chord->articulations()) {
+                if (!articulation->isStaccato() || articulation->up() != chord->up() || !chord->stem()) {
+                    continue;
+                }
+                const Note* head = chord->up() ? chord->downNote() : chord->upNote();
+                offsets.push_back((articulation->pageBoundingRect().center().x() - head->pageBoundingRect().center().x())
+                                  / articulation->spatium());
+            }
+        }
+        return offsets;
+    };
+
+    const std::vector<double> centred = stemSideStaccatoOffsets(score);
+    ASSERT_GE(centred.size(), 2u);
+    for (double offset : centred) {
+        EXPECT_NEAR(offset, 0.0, 0.02);
+    }
+
+    // The fixture exercises the rule: halfway alignment moves every mark.
+    score->style().set(Sid::articulationStemHAlign, int(ArticulationStemSideAlign::AVERAGE));
+    relayoutScore(score);
+    for (double offset : stemSideStaccatoOffsets(score)) {
+        EXPECT_GT(std::abs(offset), 0.1);
+    }
+
+    delete score;
+}
+
+// Test value: A tuplet number on the beam side never straddles a staff line
+// (Chopin Op. 9 No. 1 m3 "11"); the source's tuplets-inside-the-staff style
+// put it across the bottom line.
+TEST_F(Engraving_PianomaniaPrettifyTests, beamSideTupletNumberStaysOffStaffLines)
+{
+    MasterScore* score = readAutoLaidOut(u"beam-side-tuplet-number.mscx");
+    ASSERT_TRUE(score);
+
+    auto straddlingNumbers = [](Score* current) {
+        size_t straddling = 0;
+        size_t numbers = 0;
+        for (Tuplet* tuplet : collectTuplets(current)) {
+            const Text* number = tuplet->number();
+            if (!number || !number->visible() || number->ldata()->isSkipDraw() || tuplet->cross()) {
+                continue;
+            }
+            const System* system = tuplet->measure()->system();
+            const RectF bounds = number->pageBoundingRect();
+            ++numbers;
+            const int lines = current->staff(tuplet->staffIdx())->lines(tuplet->tick());
+            for (int line = 0; line < lines; ++line) {
+                const double y = staffLinePageY(system, tuplet->staffIdx(), line, tuplet->tick());
+                if (bounds.top() < y && bounds.bottom() > y) {
+                    ++straddling;
+                    break;
+                }
+            }
+        }
+        return std::make_pair(numbers, straddling);
+    };
+
+    const auto [numbers, straddling] = straddlingNumbers(score);
+    ASSERT_GE(numbers, 1u);
+    EXPECT_EQ(straddling, 0u);
+
+    // The fixture exercises the rule: tuplets inside the staff cross a line.
+    score->style().set(Sid::tupletOutOfStaff, false);
+    relayoutScore(score);
+    EXPECT_GE(straddlingNumbers(score).second, 1u);
 
     delete score;
 }
