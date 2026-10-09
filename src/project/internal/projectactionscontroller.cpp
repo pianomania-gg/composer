@@ -24,11 +24,14 @@
 #include <QBuffer>
 #include <QApplication>
 #include <QFileDialog>
-#include <QImageReader>
 #include <QMessageBox>
 #include <QSaveFile>
 #include <QTemporaryDir>
+#include <QStandardPaths>
+#include <QRegularExpression>
+#include <QSettings>
 #include "composerpackage.h"
+#include "composerbackgrounddialog.h"
 #include "composersession.h"
 #include <QCheckBox>
 #include <QDialog>
@@ -1919,18 +1922,15 @@ void ProjectActionsController::exportComposer()
     try {
         auto notation = currentNotation();
         if (!notation || !notation->elements()->msScore()) return;
-        QString coverPath = QFileDialog::getOpenFileName(parent, "Background image", {}, "Images (*.png *.jpg *.jpeg)");
-        if (coverPath.isEmpty()) return;
-        QFile coverFile(coverPath);
-        QImageReader image(coverPath);
-        QSize dimensions = image.size();
-        if (!coverFile.open(QIODevice::ReadOnly) || coverFile.size() > 20 * 1024 * 1024 || !dimensions.isValid()
-            || dimensions.width() > 8192 || dimensions.height() > 8192 || image.read().isNull())
-            throw std::runtime_error("Choose a PNG or JPEG image under 20 MB and 8192 pixels per side.");
-        QByteArray cover = coverFile.readAll();
-        QString destination = QFileDialog::getSaveFileName(parent, "Pianomania Composer", notation->name() + ".pm", "Pianomania (*.pm)");
-        if (destination.isEmpty()) return;
-        if (!destination.endsWith(".pm", Qt::CaseInsensitive)) destination += ".pm";
+        QSettings settings;
+        QString directory = settings.value("composer/exportDirectory", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).toString();
+        if (!QDir(directory).exists()) directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const auto exportPath = configuration()->defaultSavingFilePath(currentNotationProject(), {}, "pm");
+        QString fileName = QFileInfo(exportPath.toQString()).fileName();
+        fileName.replace(QRegularExpression("[<>:\"/\\\\|?*\\x00-\\x1f]"), "_");
+        const auto selection = composer::chooseExport(parent, QDir(directory).filePath(fileName));
+        if (!selection) return;
+        const QString destination = selection->destination;
 
         // All engraving changes belong to this snapshot. The authored project stays unchanged.
         std::unique_ptr<mu::engraving::MasterScore> snapshot(notation->elements()->msScore()->masterScore()->clone());
@@ -1953,7 +1953,7 @@ void ProjectActionsController::exportComposer()
         };
         add(1, "song.mei"); add(2, "song.mid"); add(4, "manifest.json");
         if (result.val.repeatInfo.hasRepeats) add(3, "song-repeats.mid");
-        sections.append({5, "cover." + QFileInfo(coverPath).suffix().toLower(), cover});
+        sections.append({5, selection->background.fileName, selection->background.bytes});
         QString hash = composer::meiHash(sections);
         QByteArray license = composer::license(hash, parent);
         composer::validateLicense(license, composer::currentUid(), hash);
@@ -1963,6 +1963,7 @@ void ProjectActionsController::exportComposer()
         output.setDirectWriteFallback(false);
         if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit())
             throw std::runtime_error("Could not save the Pianomania file. The previous file was preserved.");
+        settings.setValue("composer/exportDirectory", QFileInfo(destination).absolutePath());
         QMessageBox saved(QMessageBox::Information, "Pianomania Composer",
                           "Your Pianomania file was exported successfully.", QMessageBox::Ok, parent);
         saved.setInformativeText("Saved to:\n" + QDir::toNativeSeparators(destination));
