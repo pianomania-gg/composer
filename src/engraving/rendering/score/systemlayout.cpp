@@ -4768,6 +4768,19 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
 
     processLines(system, ctx, elementsToLayout.slurs);
 
+    // Marks on slur end chords move outside their slur below. Remember where
+    // they were, so a slur passing over such a chord can be solved again.
+    std::map<const Articulation*, double> endpointMarkY;
+    for (Spanner* sp : elementsToLayout.slurs) {
+        for (EngravingItem* endpoint : { sp->startElement(), sp->endElement() }) {
+            if (endpoint && endpoint->isChord()) {
+                for (const Articulation* articulation : toChord(endpoint)->articulations()) {
+                    endpointMarkY.emplace(articulation, articulation->y());
+                }
+            }
+        }
+    }
+
     for (Spanner* sp : elementsToLayout.slurs) {
         Slur* slur = toSlur(sp);
         ChordRest* scr = toChordRest(slur->startElement());
@@ -4778,6 +4791,12 @@ void SystemLayout::layoutSystemElements(System* system, LayoutContext& ctx)
         if (ecr && ecr->isChord()) {
             ChordLayout::layoutArticulations3(toChord(ecr), slur, ctx);
         }
+    }
+
+    resolveSlursOverMovedMarks(system, elementsToLayout.slurs, endpointMarkY, ctx);
+
+    for (Spanner* sp : elementsToLayout.slurs) {
+        Slur* slur = toSlur(sp);
         if (slur->isHammerOnPullOff()) {
             StaffType* staffType = slur->staff()->staffType(slur->tick());
             if ((staffType->isTabStaff() && ctx.conf().styleB(Sid::hopoAlignLettersTabStaves))
@@ -6528,6 +6547,76 @@ double SystemLayout::minDistance(const System* top, const System* bottom, const 
         dist = std::max(dist, sld);
     }
     return dist;
+}
+
+// A mark that layoutArticulations3 pushed outside a short slur (an accent
+// under the end of a two-note slur) can land on a longer slur over the same
+// chord, which was solved against the mark's earlier place. Solve those
+// longer slurs again so their arc clears the mark, then let their own end
+// marks settle against the new arc.
+void SystemLayout::resolveSlursOverMovedMarks(System* system, const std::vector<Spanner*>& slurs,
+                                              const std::map<const Articulation*, double>& markYBefore, LayoutContext& ctx)
+{
+    std::vector<const Articulation*> moved;
+    for (const auto& [articulation, y] : markYBefore) {
+        if (articulation->visible() && std::abs(articulation->y() - y) > 0.01 * articulation->spatium()) {
+            moved.push_back(articulation);
+        }
+    }
+    if (moved.empty()) {
+        return;
+    }
+
+    for (Spanner* sp : slurs) {
+        Slur* slur = toSlur(sp);
+        const ChordRest* startCR = slur->startCR();
+        const ChordRest* endCR = slur->endCR();
+        if (!startCR || !endCR) {
+            continue;
+        }
+        for (SpannerSegment* spannerSegment : slur->spannerSegments()) {
+            if (spannerSegment->system() != system || !spannerSegment->isSlurSegment()) {
+                continue;
+            }
+            SlurSegment* segment = toSlurSegment(spannerSegment);
+            if (!segment->autoplace() || segment->isEdited() || segment->ldata()->isSkipDraw()) {
+                continue;
+            }
+            const double left = segment->ups(Grip::START).pos().x();
+            const double right = segment->ups(Grip::END).pos().x();
+            bool passesOverMovedMark = false;
+            for (const Articulation* articulation : moved) {
+                const EngravingItem* parent = articulation->parentItem();
+                const Chord* chord = parent && parent->isChord() ? toChord(parent) : nullptr;
+                if (!chord || chord == startCR || chord == endCR || articulation->up() != slur->up()
+                    || chord->vStaffIdx() != segment->vStaffIdx() || chord->tick() <= startCR->tick() || chord->tick() >= endCR->tick()) {
+                    continue;
+                }
+                const double x = chord->systemPos().x();
+                if (x > left && x < right) {
+                    passesOverMovedMark = true;
+                    break;
+                }
+            }
+            if (!passesOverMovedMark) {
+                continue;
+            }
+
+            Skyline& skyline = system->staff(segment->vStaffIdx())->skyline();
+            auto ownedBySegment = [segment](ShapeElement& element) { return element.item() == segment; };
+            skyline.north().remove_if(ownedBySegment);
+            skyline.south().remove_if(ownedBySegment);
+            SlurTieLayout::computeBezier(segment);
+            if (segment->addToSkyline()) {
+                skyline.add(segment->shape().translate(segment->pos()));
+            }
+            for (ChordRest* endpoint : { slur->startCR(), slur->endCR() }) {
+                if (endpoint && endpoint->isChord()) {
+                    ChordLayout::layoutArticulations3(toChord(endpoint), slur, ctx);
+                }
+            }
+        }
+    }
 }
 
 void SystemLayout::removeElementFromSkyline(EngravingItem* element, const System* system)
