@@ -2819,6 +2819,29 @@ bool MeiExporter::writeArtic(const Articulation *articulation) {
                         formatDecimalStr(ay, 3);
   articNode.append_attribute("pm:xy") = articXY.c_str();
 
+  // A page-space centre is independent of the source font's drawing bearings.
+  if (const auto center = getCenteredInchesFor(articulation); center.has_value()) {
+    const std::string value = formatDecimalStr(center->first, 3) + "," +
+                              formatDecimalStr(center->second, 3);
+    articNode.append_attribute("pm:artic-center") = value.c_str();
+  }
+
+  if (articulationBelongsToChord) {
+    // Preserve the authored horizontal offset from the rendered notehead group
+    // when the Practice display font has different notehead metrics.
+    std::optional<RectF> headBounds;
+    for (const Note *note : visibleNotes(toChord(cr))) {
+      const RectF bounds = note->symBbox(note->noteHead()).translated(note->pagePos());
+      headBounds = headBounds.has_value() ? headBounds->united(bounds) : bounds;
+    }
+    if (headBounds.has_value()) {
+      const PointF anchor = headBounds->center();
+      const std::string value = formatDecimalStr(anchor.x() / DPI, 5) + "," +
+                                formatDecimalStr(toBottomLeftInches(anchor.y()), 5);
+      articNode.append_attribute("pm:artic-anchor-center") = value.c_str();
+    }
+  }
+
   return true;
 }
 
