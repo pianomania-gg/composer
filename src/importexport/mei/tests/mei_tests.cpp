@@ -21,6 +21,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "engraving/dom/articulation.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1447,6 +1448,133 @@ TEST_F(Mei_Tests, mei_gracenote_02) {
 
 TEST_F(Mei_Tests, mei_hairpin_01) {
     meiReadTest("hairpin-01");
+}
+
+TEST_F(Mei_Tests, mei_export_articulation_centres_match_native_rendered_bounds) {
+    for (const String fixture : {u"artic-01.mscx"}) {
+        SCOPED_TRACE(fixture.toStdString());
+        MasterScore* score = ScoreRW::readScore(MEI_DIR + fixture, false);
+        ASSERT_TRUE(score);
+        score->setLayoutAll();
+        score->doLayout();
+        std::vector<std::array<double, 2>> expected;
+        score->scanElements([&](EngravingItem* item) {
+            if (!item->isArticulation()) {
+                return;
+            }
+            const RectF bounds = item->pageBoundingRect();
+            expected.push_back({bounds.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - bounds.center().y() / DPI});
+        });
+        ASSERT_FALSE(expected.empty());
+        std::string output;
+        ASSERT_TRUE(pmWriteMeiToString(score, true, output));
+        std::vector<std::array<double, 2>> actual;
+        bool distinctFromOrigin = false;
+        for (const auto& tag : collectStartTags(output, "artic")) {
+            const auto center = xmlAttributeValue(tag, "pm:artic-center");
+            ASSERT_TRUE(center.has_value()) << tag;
+            const auto coordinates = parseCoordinates(*center);
+            ASSERT_EQ(coordinates.size(), 2u);
+            actual.push_back({coordinates[0], coordinates[1]});
+            distinctFromOrigin |= center != xmlAttributeValue(tag, "pm:xy");
+        }
+        ASSERT_EQ(actual.size(), expected.size());
+        // Export rounding can merge neighboring X values. Match complete
+        // native centres instead of relying on a rounded sort order.
+        for (const auto& center : actual) {
+            const auto match = std::find_if(expected.begin(), expected.end(),
+                [&](const auto& reference) {
+                    return std::abs(center[0] - reference[0]) <= 0.00051
+                        && std::abs(center[1] - reference[1]) <= 0.00051;
+                });
+            ASSERT_NE(match, expected.end());
+            expected.erase(match);
+        }
+        EXPECT_TRUE(expected.empty());
+        EXPECT_TRUE(distinctFromOrigin);
+        delete score;
+    }
+}
+
+TEST_F(Mei_Tests, mei_export_articulation_centres_preserve_native_notehead_anchors) {
+    for (double authoredOffsetSp : {0.0, 0.65}) {
+        SCOPED_TRACE(authoredOffsetSp);
+        MasterScore* score = ScoreRW::readScore(MEI_DIR + u"artic-01.mscx", false);
+        ASSERT_TRUE(score);
+        score->scanElements([&](EngravingItem* item) {
+            if (item->isArticulation() && authoredOffsetSp != 0.0) {
+                item->setAutoplace(false);
+                item->setOffset(PointF(authoredOffsetSp * score->style().spatium(), 0.0));
+            }
+        });
+        score->setLayoutAll();
+        score->doLayout();
+        std::vector<std::array<double, 4>> expected;
+        bool coversSingleNote = false;
+        bool coversChord = false;
+        score->scanElements([&](EngravingItem* item) {
+            if (!item->isArticulation()) {
+                return;
+            }
+            const Articulation* articulation = toArticulation(item);
+            const ChordRest* cr = articulation->chordRest();
+            if (!cr || !cr->isChord()) {
+                return;
+            }
+            const Chord* chord = toChord(cr);
+            coversSingleNote |= chord->notes().size() == 1u;
+            coversChord |= chord->notes().size() > 1u;
+            RectF heads;
+            bool first = true;
+            for (const Note* note : chord->notes()) {
+                if (!note->visible()) {
+                    continue;
+                }
+                const RectF rendered = note->pageBoundingRect();
+                heads = first ? rendered : heads.united(rendered);
+                first = false;
+            }
+            const RectF bounds = articulation->pageBoundingRect();
+            expected.push_back({bounds.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - bounds.center().y() / DPI,
+                heads.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - heads.center().y() / DPI});
+        });
+        ASSERT_TRUE(coversSingleNote);
+        ASSERT_TRUE(coversChord);
+        ASSERT_FALSE(expected.empty());
+        std::string output;
+        ASSERT_TRUE(pmWriteMeiToString(score, true, output));
+        const auto tags = collectStartTags(output, "artic");
+        ASSERT_EQ(tags.size(), expected.size());
+        bool preservesAuthoredOffset = false;
+        for (const auto& tag : tags) {
+            const auto center = xmlAttributeValue(tag, "pm:artic-center");
+            const auto anchor = xmlAttributeValue(tag, "pm:artic-anchor-center");
+            ASSERT_TRUE(center.has_value());
+            ASSERT_TRUE(anchor.has_value()) << tag;
+            const auto c = parseCoordinates(*center);
+            const auto a = parseCoordinates(*anchor);
+            ASSERT_EQ(c.size(), 2u);
+            ASSERT_EQ(a.size(), 2u);
+            const auto match = std::find_if(expected.begin(), expected.end(),
+                [&](const auto& reference) {
+                    return std::abs(c[0] - reference[0]) <= 0.00051
+                        && std::abs(c[1] - reference[1]) <= 0.00051
+                        && std::abs(a[0] - reference[2]) <= 0.0000051
+                        && std::abs(a[1] - reference[3]) <= 0.0000051;
+                });
+            ASSERT_NE(match, expected.end()) << tag;
+            preservesAuthoredOffset |= std::abs(c[0] - a[0]) > 0.5 * score->style().spatium() / DPI;
+            expected.erase(match);
+        }
+        EXPECT_TRUE(expected.empty());
+        if (authoredOffsetSp != 0.0) {
+            EXPECT_TRUE(preservesAuthoredOffset);
+        }
+        delete score;
+    }
 }
 
 TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present) {
