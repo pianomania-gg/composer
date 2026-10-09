@@ -467,6 +467,29 @@ void PageLayout::layoutCrossStaffSlurs(LayoutContext& ctx, System* system)
             if (ecr && ecr->isChord()) {
                 ChordLayout::layoutArticulations3(toChord(ecr), slur, ctx);
             }
+        } else if (MScore::pianomaniaPrettifySlursFingerings) {
+            for (SpannerSegment* segment : slur->spannerSegments()) {
+                if (!segment || segment->system() != system || !segment->isSlurSegment()) {
+                    continue;
+                }
+                SlurSegment* slurSegment = toSlurSegment(segment);
+                if (!SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(slurSegment)) {
+                    continue;
+                }
+                SystemLayout::removeElementFromSkyline(slurSegment, system);
+                const staff_idx_t staffIdx = slurSegment->effectiveStaffIdx();
+                if (staffIdx != muse::nidx && staffIdx < system->staves().size() && slurSegment->addToSkyline()) {
+                    system->staff(staffIdx)->skyline().add(slurSegment->shape().translate(slurSegment->pos()));
+                }
+                ChordRest* scr = toChordRest(slur->startElement());
+                ChordRest* ecr = toChordRest(slur->endElement());
+                if (scr && scr->isChord()) {
+                    ChordLayout::layoutArticulations3(toChord(scr), slur, ctx);
+                }
+                if (ecr && ecr->isChord()) {
+                    ChordLayout::layoutArticulations3(toChord(ecr), slur, ctx);
+                }
+            }
         }
     }
 }

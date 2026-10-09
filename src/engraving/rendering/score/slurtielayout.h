@@ -67,6 +67,7 @@ public:
     static bool clearResidualPianomaniaAccidentalStaffText(
         SlurSegment* slurSeg, const Shape& segShapes, bool up, double spatium, const PointF& pp1, const PointF& p2,
         PointF& p3, PointF& p4, const muse::draw::Transform& toSystemCoordinates, double arcClearance);
+    static bool clearPageStagePianomaniaAccidentalStaffText(SlurSegment* slurSeg);
     static double noteOpticalCenterForTie(const Note* note, bool up);
     static void createSlurSegments(Slur* item, LayoutContext& ctx);
 

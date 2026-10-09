@@ -40,6 +40,7 @@
 #include "engraving/dom/dynamic.h"
 #include "engraving/dom/expression.h"
 #include "engraving/dom/fermata.h"
+#include "engraving/dom/factory.h"
 #include "engraving/editing/editdata.h"
 #include "engraving/dom/engravingitem.h"
 #include "engraving/dom/beam.h"
@@ -1182,6 +1183,17 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
         PointF control1 = fromStageCoordinates.map(stagePoints[1]);
         PointF control2 = fromStageCoordinates.map(stagePoints[2]);
         const PointF endPoint = fromStageCoordinates.map(stagePoints[3]);
+        System* positionedSystem = const_cast<System*>(collidingSystem);
+        const PointF positionedSystemPos = positionedSystem->pos();
+        positionedSystem->setPos(PointF());
+        EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        EXPECT_EQ(stageTransform.map(control1), stagePoints[1]);
+        EXPECT_EQ(stageTransform.map(control2), stagePoints[2]);
+        positionedSystem->setPos(positionedSystemPos);
+        control1 = fromStageCoordinates.map(stagePoints[1]);
+        control2 = fromStageCoordinates.map(stagePoints[2]);
         ASSERT_TRUE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
             collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
             control1, control2, stageTransform, 0.50 * stageSpatium));
@@ -1207,6 +1219,33 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsOrnamentAccidentalStaffText)
             control1, control2, stageTransform, 0.50 * stageSpatium));
         EXPECT_EQ(stageTransform.map(control1), stageCorrected[1]);
         EXPECT_EQ(stageTransform.map(control2), stageCorrected[2]);
+
+        Page* stagePage = collidingSystem->page();
+        ASSERT_TRUE(stagePage);
+        auto currentSystemIt = std::find(stagePage->systems().begin(), stagePage->systems().end(), collidingSystem);
+        ASSERT_NE(currentSystemIt, stagePage->systems().end());
+        double correctedTop = std::numeric_limits<double>::infinity();
+        for (int i = 0; i <= 4000; ++i) {
+            const double t = static_cast<double>(i) / 4000.0;
+            const double u = 1.0 - t;
+            const PointF point = stageCorrected[0] * (u * u * u) + stageCorrected[1] * (3.0 * u * u * t)
+                                 + stageCorrected[2] * (3.0 * u * t * t) + stageCorrected[3] * (t * t * t);
+            correctedTop = std::min(correctedTop, point.y());
+        }
+        ASSERT_TRUE(std::isfinite(correctedTop));
+        System* corridorBlocker = Factory::createSystem(stagePage);
+        const PointF pageTranslation = collidingPhrase->pagePos() - collidingPhrase->pos();
+        corridorBlocker->setPos(0.0, correctedTop + pageTranslation.y());
+        stagePage->systems().insert(currentSystemIt, corridorBlocker);
+        control1 = fromStageCoordinates.map(stagePoints[1]);
+        control2 = fromStageCoordinates.map(stagePoints[2]);
+        EXPECT_FALSE(mu::engraving::rendering::score::SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
+            collidingPhrase, stageShapes, true, stageSpatium, startPoint, endPoint,
+            control1, control2, stageTransform, 0.50 * stageSpatium));
+        EXPECT_EQ(stageTransform.map(control1), stagePoints[1]);
+        EXPECT_EQ(stageTransform.map(control2), stagePoints[2]);
+        stagePage->systems().erase(std::find(stagePage->systems().begin(), stagePage->systems().end(), corridorBlocker));
+        delete corridorBlocker;
 
         Shape unreachableShapes;
         unreachableShapes.add(syntheticAccidental.translated(PointF(0.0, -20.0 * stageSpatium)), collidingAccidental);

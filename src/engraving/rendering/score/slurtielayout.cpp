@@ -786,8 +786,14 @@ bool curveClearsShapeWindows(const std::array<PointF, 4>& points, const Shape& s
 
 bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF, 4>& points, double padding)
 {
-    const Page* page = segment && segment->system() ? segment->system()->page() : nullptr;
+    const System* system = segment ? segment->system() : nullptr;
+    const Page* page = system ? system->page() : nullptr;
     if (!page || !page->ldata() || page->ldata()->bbox().isNull()) {
+        return false;
+    }
+    const std::vector<System*>& systems = page->systems();
+    const auto systemIt = std::find(systems.cbegin(), systems.cend(), system);
+    if (systemIt == systems.cend()) {
         return false;
     }
     double minY = std::numeric_limits<double>::infinity();
@@ -800,7 +806,33 @@ bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF,
     const RectF curveBounds(points.front().x() + pageTranslation.x(), minY + pageTranslation.y(),
                             points.back().x() - points.front().x(), maxY - minY);
     const RectF pageBounds = page->ldata()->bbox().adjusted(padding, padding, -padding, -padding);
-    return pageBounds.contains(curveBounds.topLeft()) && pageBounds.contains(curveBounds.bottomRight());
+    if (!pageBounds.contains(curveBounds.topLeft()) || !pageBounds.contains(curveBounds.bottomRight())) {
+        return false;
+    }
+
+    const size_t systemIndex = static_cast<size_t>(std::distance(systems.cbegin(), systemIt));
+    if (systemIndex > 0) {
+        const System* previous = systems.at(systemIndex - 1);
+        if (!previous || !std::isfinite(previous->pos().y()) || !std::isfinite(previous->height())
+            || !std::isfinite(previous->minBottom())) {
+            return false;
+        }
+        const double corridorTop = previous->pos().y() + previous->height() + previous->minBottom() + padding;
+        if (curveBounds.top() < corridorTop) {
+            return false;
+        }
+    }
+    if (systemIndex + 1 < systems.size()) {
+        const System* next = systems.at(systemIndex + 1);
+        if (!next || !std::isfinite(next->pos().y()) || !std::isfinite(next->minTop())) {
+            return false;
+        }
+        const double corridorBottom = next->pos().y() - next->minTop() - padding;
+        if (curveBounds.bottom() > corridorBottom) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -874,6 +906,90 @@ bool SlurTieLayout::clearResidualPianomaniaAccidentalStaffText(
     }
     p3 = fromSystemCoordinates.map(accepted[1]);
     p4 = fromSystemCoordinates.map(accepted[2]);
+    return true;
+}
+
+bool SlurTieLayout::clearPageStagePianomaniaAccidentalStaffText(SlurSegment* slurSeg)
+{
+    if (!MScore::pianomaniaPrettifySlursFingerings || !slurSeg || !slurSeg->visible() || !slurSeg->autoplace()
+        || slurSeg->isEdited() || slurSeg->isEndPointsEdited() || !slurSeg->offset().isNull()) {
+        return false;
+    }
+    Slur* slur = slurSeg->slur();
+    System* system = slurSeg->system();
+    Page* page = system ? system->page() : nullptr;
+    if (!slur || !slur->visible() || !system || !page || slur->isCrossStaff() || slur->hasCrossBeams()
+        || std::find(page->systems().cbegin(), page->systems().cend(), system) == page->systems().cend()) {
+        return false;
+    }
+    ChordRest* startCR = slur->startCR();
+    ChordRest* endCR = slur->endCR();
+    if (!startCR || !endCR || slurSeg->effectiveStaffIdx() == muse::nidx
+        || slurSeg->effectiveStaffIdx() >= system->staves().size()) {
+        return false;
+    }
+
+    const PointF pp1 = slurSeg->ups(Grip::START).pos();
+    const PointF pp2 = slurSeg->ups(Grip::END).pos();
+    const PointF control1 = slurSeg->ups(Grip::BEZIER1).pos();
+    const PointF control2 = slurSeg->ups(Grip::BEZIER2).pos();
+    if (!std::isfinite(pp1.x()) || !std::isfinite(pp1.y()) || !std::isfinite(pp2.x()) || !std::isfinite(pp2.y())
+        || !std::isfinite(control1.x()) || !std::isfinite(control1.y())
+        || !std::isfinite(control2.x()) || !std::isfinite(control2.y()) || !(pp2.x() > pp1.x())) {
+        return false;
+    }
+
+    const double slurAngle = std::atan2(pp2.y() - pp1.y(), pp2.x() - pp1.x());
+    Transform toSlurCoordinates;
+    toSlurCoordinates.rotateRadians(-slurAngle);
+    toSlurCoordinates.translate(-pp1.x(), -pp1.y());
+    const Transform toSystemCoordinates = toSlurCoordinates.inverted();
+    const PointF p2 = toSlurCoordinates.map(pp2);
+    PointF p3 = toSlurCoordinates.map(control1);
+    PointF p4 = toSlurCoordinates.map(control2);
+    if (!(p2.x() > 0.0)) {
+        return false;
+    }
+
+    const double spatium = slurSeg->spatium();
+    Shape segShapes = getSegmentShapes(slurSeg, startCR, endCR, false);
+    addMinClearanceToShapes(segShapes, spatium, slur->up(), startCR, endCR);
+    const staff_idx_t targetStaff = slurSeg->effectiveStaffIdx();
+    const double targetStaffY = system->staff(targetStaff)->y();
+    for (SpannerSegment* other : system->spannerSegments()) {
+        if (!other || other == slurSeg || !other->isSlurSegment() || !other->visible() || other->system() != system
+            || other->effectiveStaffIdx() == muse::nidx || other->effectiveStaffIdx() >= system->staves().size()
+            || other->shape().empty()) {
+            continue;
+        }
+        const double staffDelta = system->staff(other->effectiveStaffIdx())->y() - targetStaffY;
+        segShapes.add(other->shape().translated(other->pos() + PointF(0.0, staffDelta)));
+    }
+    if (segShapes.empty()) {
+        return false;
+    }
+
+    const double spanSp = p2.x() / spatium;
+    const double arcClearance = (slur->up() ? 1.0 : -1.0) * computeArcClearance(spatium, spanSp, slurAngle);
+    if (!clearResidualPianomaniaAccidentalStaffText(slurSeg, segShapes, slur->up(), spatium, pp1, p2, p3, p4,
+                                                    toSystemCoordinates, arcClearance)) {
+        return false;
+    }
+
+    slurSeg->ups(Grip::BEZIER1).p = toSystemCoordinates.map(p3) - slurSeg->ups(Grip::BEZIER1).off;
+    slurSeg->ups(Grip::BEZIER2).p = toSystemCoordinates.map(p4) - slurSeg->ups(Grip::BEZIER2).off;
+    slurSeg->ups(Grip::DRAG).p = toSystemCoordinates.map(0.5 * p2);
+    slurSeg->ups(Grip::SHOULDER).p = toSystemCoordinates.map(0.5 * (p3 + p4));
+
+    const PointF thickness(0.0, slurSeg->ldata()->midThickness());
+    PainterPath path;
+    path.moveTo(PointF());
+    path.cubicTo(p3 - thickness, p4 - thickness, p2);
+    if (slur->styleType() == SlurStyleType::Solid) {
+        path.cubicTo(p4 + thickness, p3 + thickness, PointF());
+    }
+    slurSeg->mutldata()->path.set_value(toSystemCoordinates.map(path));
+    fillShape(slurSeg, spanSp);
     return true;
 }
 
