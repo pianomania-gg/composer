@@ -3148,6 +3148,67 @@ void TLayout::layoutHairpinSegment(HairpinSegment* item, LayoutContext& ctx)
         }
         double w  = item->absoluteFromSpatium(ctx.conf().styleS(Sid::hairpinLineWidth));
         item->setbbox(r.adjusted(-w * .5, -w * .5, w, w));
+
+        auto hasAutomaticEndpointOffset = [](const HairpinSegment* segment) {
+            const PointF endpointOffset = segment->getProperty(Pid::OFFSET2).value<PointF>();
+            return segment->propertyFlags(Pid::OFFSET2) != PropertyFlags::UNSTYLED
+                   && (endpointOffset.isNull() || MScore::pianomaniaForceNormalizeSlursFingerings);
+        };
+        if (MScore::pianomaniaPrettifySlursFingerings && item->visible() && item->autoplace()
+            && item->isStyled(Pid::OFFSET) && hasAutomaticEndpointOffset(item)
+            && type == HairpinType::DIM_HAIRPIN && item->isSingleBeginType()
+            && item->text()->empty() && item->endText()->empty()) {
+            EngravingItem* snappedBefore = ldata->itemSnappedBefore();
+            HairpinSegment* previous = snappedBefore && snappedBefore->isHairpinSegment()
+                                           ? toHairpinSegment(snappedBefore) : nullptr;
+            Hairpin* previousHairpin = previous ? previous->hairpin() : nullptr;
+            Hairpin* currentHairpin = item->hairpin();
+            const bool eligiblePair = previous && previousHairpin && currentHairpin->visible() && currentHairpin->autoplace()
+                                      && currentHairpin->isStyled(Pid::OFFSET)
+                                      && previous->visible() && previous->autoplace()
+                                      && previous->isStyled(Pid::OFFSET) && hasAutomaticEndpointOffset(previous)
+                                      && previousHairpin->visible() && previousHairpin->autoplace()
+                                      && previousHairpin->isStyled(Pid::OFFSET)
+                                      && previous->system() == item->system() && previous->isSingleEndType()
+                                      && previousHairpin->hairpinType() == HairpinType::CRESC_HAIRPIN
+                                      && !previousHairpin->isLineType()
+                                      && previous->text()->empty() && previous->endText()->empty()
+                                      && previousHairpin->snapToItemAfter() && currentHairpin->snapToItemBefore()
+                                      && previousHairpin->tick2() == currentHairpin->tick()
+                                      && previousHairpin->track() == currentHairpin->track()
+                                      && previousHairpin->placeAbove() == currentHairpin->placeAbove()
+                                      && previousHairpin->voiceAssignment() == currentHairpin->voiceAssignment()
+                                      && previous->ldata()->npoints >= 4 && ldata->npoints >= 4;
+            if (eligiblePair) {
+                const PointF previousPagePos = previous->pagePos();
+                const PointF currentPagePos = item->pagePos();
+                double previousMouthRight = previousPagePos.x() + previous->ldata()->points[0].x();
+                double currentMouthLeft = currentPagePos.x() + ldata->points[0].x();
+                for (size_t pointIndex = 1; pointIndex < 4; ++pointIndex) {
+                    previousMouthRight = std::max(previousMouthRight,
+                                                  previousPagePos.x() + previous->ldata()->points[pointIndex].x());
+                    currentMouthLeft = std::min(currentMouthLeft,
+                                                currentPagePos.x() + ldata->points[pointIndex].x());
+                }
+
+                const double missingClearance = 0.60 * item->spatium() - (currentMouthLeft - previousMouthRight);
+                const double correctedLength = item->pos2().x() - missingClearance;
+                if (missingClearance > 0.0 && correctedLength >= item->spatium()) {
+                    ldata->moveX(missingClearance);
+                    item->rxpos2() -= missingClearance;
+                    ldata->points[1].rx() -= missingClearance;
+                    ldata->points[3].rx() -= missingClearance;
+                    if (item->drawCircledTip()) {
+                        item->circledTip().rx() -= missingClearance;
+                    }
+                    ldata->joinedHairpin.clear();
+                    ldata->joinedHairpin << ldata->points[0] << ldata->points[1] << ldata->points[2];
+                    const RectF correctedBounds = RectF(ldata->points[0], ldata->points[1]).normalized()
+                                                  .united(RectF(ldata->points[2], ldata->points[3]).normalized());
+                    item->setbbox(correctedBounds.adjusted(-w * .5, -w * .5, w, w));
+                }
+            }
+        }
     }
 
     if (!item->explicitParent()) {

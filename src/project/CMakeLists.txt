@@ -69,6 +69,8 @@ target_sources(project PRIVATE
     internal/pianomaniaexport.h
     internal/composerpackage.cpp
     internal/composerpackage.h
+    internal/composerbackgrounddialog.cpp
+    internal/composerbackgrounddialog.h
     internal/composersession.cpp
     internal/composersession.h
     internal/projectactionscontroller.cpp
@@ -123,6 +125,7 @@ elseif (OS_IS_WIN)
 endif()
 
 target_link_libraries(project PRIVATE notation)
+muse_module_add_qrc(project resources/composer_backgrounds.qrc)
 
 # Pianomania coordinated export drives the MEI and MIDI exporters directly.
 target_link_libraries(project PRIVATE iex_midi iex_mei)

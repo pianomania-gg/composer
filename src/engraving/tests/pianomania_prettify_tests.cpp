@@ -48,6 +48,7 @@
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
 #include "engraving/dom/page.h"
+#include "engraving/dom/part.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/score.h"
 #include "engraving/dom/segment.h"
@@ -66,7 +67,10 @@
 #include "engraving/editing/undo.h"
 #include "engraving/pm/pmlayout.h"
 #include "engraving/pm/pmprettify.h"
+#include "engraving/infrastructure/mscwriter.h"
+#include "engraving/rw/mscsaver.h"
 #include "engraving/types/types.h"
+#include "io/file.h"
 
 #include "utils/scorerw.h"
 
@@ -789,10 +793,11 @@ void relayoutScore(Score* score)
     score->doLayout();
 }
 
-mu::engraving::pm::PmPrettifyResult applyPrettifyCommand(Score* score)
+mu::engraving::pm::PmPrettifyResult applyPrettifyCommand(
+    Score* score, const mu::engraving::pm::PmPrettifyOptions& options = {})
 {
     score->startCmd(TranslatableString::untranslatable("Pianomania prettify test"));
-    const mu::engraving::pm::PmPrettifyResult result = mu::engraving::pm::applyPianomaniaPrettify(score);
+    const mu::engraving::pm::PmPrettifyResult result = mu::engraving::pm::applyPianomaniaPrettify(score, options);
     score->endCmd(!result.changed || result.structuralAssignmentChanged);
     relayoutScore(score);
     return result;
@@ -1356,6 +1361,88 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringPlacementStaysWithinNoteheadC
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, detachedFingeringRescueClearsRealStaffBoundaryAndPersists)
+{
+    const String fixture = u"pianomania_prettify_data/detached-fingering-real-staff-boundary.mscx";
+    MasterScore* score = ScoreRW::readScore(fixture);
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    auto targetFingerings = [](Score* current) {
+        std::array<Fingering*, 2> result { nullptr, nullptr };
+        const std::vector<Fingering*> oneToFive = collectFingeringsByText(current, u"1-5");
+        if (oneToFive.size() == 1) {
+            result[1] = oneToFive.front();
+        }
+        for (Fingering* fingering : collectFingeringsByText(current, u"2")) {
+            const Note* note = fingering ? fingering->note() : nullptr;
+            const Chord* chord = note ? note->chord() : nullptr;
+            if (note && chord && note->pitch() == 60 && chord->voice() == 0 && fingering->tick() > Fraction(0, 1)) {
+                result[0] = fingering;
+                break;
+            }
+        }
+        return result;
+    };
+    auto expectRealStaffClearance = [](const std::array<Fingering*, 2>& fingerings) {
+        for (const Fingering* fingering : fingerings) {
+            ASSERT_TRUE(fingering);
+            ASSERT_TRUE(fingering->note());
+            ASSERT_TRUE(fingering->note()->chord());
+            const Chord* chord = fingering->note()->chord();
+            ASSERT_TRUE(chord->measure());
+            ASSERT_TRUE(chord->measure()->system());
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE);
+            const double staffTop = chord->measure()->pos().y()
+                                    + staffYInSystem(chord->measure()->system(), chord->vStaffIdx());
+            const double minimumClearance = 0.10 * fingering->spatium();
+            EXPECT_LE(fingeringSystemRect(fingering).bottom(), staffTop - minimumClearance + 1e-4)
+                << fingering->plainText().toStdString();
+        }
+    };
+
+    const auto first = applyPrettifyCommand(score);
+    EXPECT_TRUE(first.changed);
+    std::array<Fingering*, 2> fingerings = targetFingerings(score);
+    ASSERT_TRUE(fingerings[0]);
+    ASSERT_TRUE(fingerings[1]);
+    expectRealStaffClearance(fingerings);
+
+    SlurSegment* nearbySlur = firstSlurSegment(score);
+    ASSERT_TRUE(nearbySlur);
+    const RectF nearbySlurRect = nearbySlur->shape().bbox().translated(
+        nearbySlur->pos() + PointF(0.0, staffYInSystem(nearbySlur->system(), nearbySlur->vStaffIdx())));
+    EXPECT_LT(fingeringSystemRect(fingerings[1]).right(), nearbySlurRect.left());
+
+    const std::array<PointF, 2> acceptedPositions { fingerings[0]->pagePos(), fingerings[1]->pagePos() };
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    fingerings = targetFingerings(score);
+    expectRealStaffClearance(fingerings);
+    for (size_t i = 0; i < fingerings.size(); ++i) {
+        EXPECT_TRUE(pointNear(fingerings[i]->pagePos(), acceptedPositions[i], 0.02 * fingerings[i]->spatium()));
+    }
+
+    const std::string savedFileName = testing::TempDir() + "detached-fingering-real-staff-boundary-roundtrip.mscx";
+    const String savedPath = String::fromUtf8(savedFileName);
+    ASSERT_TRUE(ScoreRW::saveScore(score, savedPath));
+    MasterScore* reloaded = ScoreRW::readScore(savedPath, true);
+    ASSERT_TRUE(reloaded);
+    relayoutScore(reloaded);
+    fingerings = targetFingerings(reloaded);
+    expectRealStaffClearance(fingerings);
+    for (size_t i = 0; i < fingerings.size(); ++i) {
+        EXPECT_TRUE(pointNear(fingerings[i]->pagePos(), acceptedPositions[i], 0.02 * fingerings[i]->spatium()));
+    }
+    const auto reloadedRepeated = applyPrettifyCommand(reloaded);
+    EXPECT_FALSE(reloadedRepeated.changed);
+    expectRealStaffClearance(targetFingerings(reloaded));
+
+    delete reloaded;
+    std::remove(savedFileName.c_str());
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, prettifyButtonPersistsFingeringsAndTempoClearance)
 {
     struct PrettifyFlagsOff {
@@ -1906,6 +1993,331 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutPlacesLowerStaffFermataBelow
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, prettifyCompactsAutomaticFermataBesideCompoundFingeringStack)
+{
+    struct StackCase {
+        Fermata* fermata = nullptr;
+        Chord* chord = nullptr;
+        std::vector<Fingering*> fingerings;
+    };
+
+    auto stackCase = [](Score* current, int measureIndex, staff_idx_t staffIdx) {
+        StackCase result;
+        Measure* measure = current->firstMeasure();
+        for (int i = 0; measure && i < measureIndex; ++i) {
+            measure = measure->nextMeasure();
+        }
+        if (!measure) {
+            return result;
+        }
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            if (!segment->isChordRestType()) {
+                continue;
+            }
+            for (EngravingItem* annotation : segment->annotations()) {
+                if (annotation && annotation->isFermata() && annotation->vStaffIdx() == staffIdx) {
+                    result.fermata = toFermata(annotation);
+                }
+            }
+            for (EngravingItem* item : segment->elist()) {
+                if (!item || !item->isChord() || item->vStaffIdx() != staffIdx) {
+                    continue;
+                }
+                result.chord = toChord(item);
+                for (Note* note : result.chord->notes()) {
+                    for (EngravingItem* noteItem : note->el()) {
+                        if (noteItem && noteItem->isFingering()) {
+                            result.fingerings.push_back(toFingering(noteItem));
+                        }
+                    }
+                }
+            }
+        }
+        return result;
+    };
+    auto groupRect = [](const StackCase& value) {
+        RectF result;
+        for (const Fingering* fingering : value.fingerings) {
+            result.unite(fingering->pageBoundingRect());
+        }
+        return result;
+    };
+    auto pitches = [](const StackCase& value) {
+        std::vector<int> result;
+        for (const Fingering* fingering : value.fingerings) {
+            result.push_back(fingering->note()->pitch());
+        }
+        return result;
+    };
+    auto positions = [](const StackCase& value) {
+        std::vector<PointF> result;
+        for (const Fingering* fingering : value.fingerings) {
+            result.push_back(fingering->pos());
+        }
+        return result;
+    };
+    auto offsets = [](const StackCase& value) {
+        std::vector<PointF> result;
+        for (const Fingering* fingering : value.fingerings) {
+            result.push_back(fingering->offset());
+        }
+        return result;
+    };
+    auto offsetFlags = [](const StackCase& value) {
+        std::vector<PropertyFlags> result;
+        for (const Fingering* fingering : value.fingerings) {
+            result.push_back(fingering->propertyFlags(Pid::OFFSET));
+        }
+        return result;
+    };
+    auto expectPositionsNear = [](const StackCase& value, const std::vector<PointF>& expected) {
+        ASSERT_EQ(value.fingerings.size(), expected.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            const double tolerance = 0.02 * value.fingerings[i]->spatium();
+            EXPECT_NEAR(value.fingerings[i]->pos().x(), expected[i].x(), tolerance);
+            EXPECT_NEAR(value.fingerings[i]->pos().y(), expected[i].y(), tolerance);
+        }
+    };
+    auto eids = [](const StackCase& value) {
+        std::vector<EID> result;
+        result.push_back(value.fermata->eid());
+        result.push_back(value.chord->eid());
+        for (const Fingering* fingering : value.fingerings) {
+            result.push_back(fingering->eid());
+            result.push_back(fingering->note()->eid());
+        }
+        return result;
+    };
+    auto ensureEids = [](const StackCase& value) {
+        std::vector<EngravingObject*> objects { value.fermata, value.chord };
+        for (Fingering* fingering : value.fingerings) {
+            objects.push_back(fingering);
+            objects.push_back(fingering->note());
+        }
+        for (EngravingObject* object : objects) {
+            if (object && !object->eid().isValid()) {
+                object->assignNewEID();
+            }
+        }
+    };
+    auto expectSidePocket = [&](const StackCase& value, bool above) {
+        ASSERT_TRUE(value.fermata);
+        ASSERT_TRUE(value.chord);
+        ASSERT_GE(value.fingerings.size(), 2);
+        const RectF digits = groupRect(value);
+        const RectF fermata = value.fermata->pageBoundingRect();
+        const double clearance = 0.25 * value.fermata->spatium();
+        EXPECT_TRUE(digits.right() <= fermata.left() - clearance + 0.02
+                    || digits.left() >= fermata.right() + clearance - 0.02);
+        EXPECT_EQ(value.fermata->placeAbove(), above);
+        EXPECT_TRUE(value.fermata->autoplace());
+        EXPECT_TRUE(value.fermata->isStyled(Pid::OFFSET));
+        const System* system = value.fermata->segment()->system();
+        ASSERT_TRUE(system);
+        const double staffTop = system->pagePos().y() + system->staff(value.fermata->vStaffIdx())->y();
+        const double staffBottom = staffTop + value.fermata->staff()->staffHeight(value.fermata->tick());
+        const double staffGap = above ? staffTop - fermata.bottom() : fermata.top() - staffBottom;
+        EXPECT_GE(staffGap, 0.25 * value.fermata->spatium() - 0.02);
+        EXPECT_LE(staffGap, 1.0 * value.fermata->spatium() + 0.02);
+        for (const Fingering* fingering : value.fingerings) {
+            EXPECT_EQ(fingering->placement() == PlacementV::ABOVE, above);
+        }
+        const double horizontalAssociation = std::abs(digits.center().x() - value.chord->pageBoundingRect().center().x());
+        EXPECT_LE(horizontalAssociation, 3.0 * value.fermata->spatium() + 0.02);
+    };
+
+    const String fixture = u"pianomania_prettify_data/fingering-fermata-compound-stack.mscx";
+    MasterScore* score = ScoreRW::readScore(fixture);
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    StackCase upper = stackCase(score, 0, 0);
+    StackCase lower = stackCase(score, 0, 1);
+    StackCase upperSingle = stackCase(score, 1, 0);
+    StackCase lowerSingle = stackCase(score, 1, 1);
+    StackCase upperManual = stackCase(score, 2, 0);
+    StackCase lowerManual = stackCase(score, 2, 1);
+    StackCase upperOffset = stackCase(score, 3, 0);
+    StackCase lowerOffset = stackCase(score, 3, 1);
+    StackCase blocked = stackCase(score, 4, 0);
+    ASSERT_TRUE(upper.fermata);
+    ASSERT_TRUE(lower.fermata);
+    ASSERT_EQ(upper.fingerings.size(), 3);
+    ASSERT_EQ(lower.fingerings.size(), 3);
+    ASSERT_EQ(upperSingle.fingerings.size(), 1);
+    ASSERT_EQ(lowerSingle.fingerings.size(), 1);
+    ASSERT_EQ(blocked.fingerings.size(), 3);
+    ensureEids(upper);
+    ensureEids(lower);
+
+    const RectF originalUpperFermata = upper.fermata->pageBoundingRect();
+    const RectF originalLowerFermata = lower.fermata->pageBoundingRect();
+    const PointF originalUpperSingle = upperSingle.fingerings.front()->pos();
+    const PointF originalLowerSingle = lowerSingle.fingerings.front()->pos();
+    const PointF originalUpperManualOffset = upperManual.fermata->offset();
+    const PointF originalLowerManualOffset = lowerManual.fermata->offset();
+    const PointF originalUpperManualPosition = upperManual.fermata->pos();
+    const PointF originalLowerManualPosition = lowerManual.fermata->pos();
+    const PointF originalUpperOffset = upperOffset.fermata->offset();
+    const PointF originalLowerOffset = lowerOffset.fermata->offset();
+    const PointF originalUpperOffsetPosition = upperOffset.fermata->pos();
+    const PointF originalLowerOffsetPosition = lowerOffset.fermata->pos();
+    const PointF originalUpperFermataPosition = upper.fermata->pos();
+    const PointF originalLowerFermataPosition = lower.fermata->pos();
+    const std::vector<PointF> originalUpperPositions = positions(upper);
+    const std::vector<PointF> originalLowerPositions = positions(lower);
+    const std::vector<PointF> originalUpperOffsets = offsets(upper);
+    const std::vector<PointF> originalLowerOffsets = offsets(lower);
+    const std::vector<PropertyFlags> originalUpperOffsetFlags = offsetFlags(upper);
+    const std::vector<PropertyFlags> originalLowerOffsetFlags = offsetFlags(lower);
+    const bool originalUpperOffsetStyled = upper.fermata->isStyled(Pid::OFFSET);
+    const bool originalLowerOffsetStyled = lower.fermata->isStyled(Pid::OFFSET);
+    const PointF originalBlockedFermataPosition = blocked.fermata->pos();
+    const std::vector<PointF> originalBlockedPositions = positions(blocked);
+    const std::vector<int> upperPitches = pitches(upper);
+    const std::vector<int> lowerPitches = pitches(lower);
+    const std::vector<EID> upperEids = eids(upper);
+    const std::vector<EID> lowerEids = eids(lower);
+
+    const auto firstResult = applyPrettifyCommand(score);
+    EXPECT_TRUE(firstResult.changed);
+    upper = stackCase(score, 0, 0);
+    lower = stackCase(score, 0, 1);
+    upperSingle = stackCase(score, 1, 0);
+    lowerSingle = stackCase(score, 1, 1);
+    upperManual = stackCase(score, 2, 0);
+    lowerManual = stackCase(score, 2, 1);
+    upperOffset = stackCase(score, 3, 0);
+    lowerOffset = stackCase(score, 3, 1);
+    blocked = stackCase(score, 4, 0);
+    expectSidePocket(upper, true);
+    expectSidePocket(lower, false);
+    EXPECT_GT(upper.fermata->pageBoundingRect().bottom(), originalUpperFermata.bottom() + upper.fermata->spatium());
+    EXPECT_LT(lower.fermata->pageBoundingRect().top(), originalLowerFermata.top() - lower.fermata->spatium());
+    EXPECT_TRUE(pointNear(upperSingle.fingerings.front()->pos(), originalUpperSingle,
+                          0.02 * upperSingle.fingerings.front()->spatium()));
+    EXPECT_TRUE(pointNear(lowerSingle.fingerings.front()->pos(), originalLowerSingle,
+                          0.02 * lowerSingle.fingerings.front()->spatium()));
+    EXPECT_EQ(upperManual.fermata->offset(), originalUpperManualOffset);
+    EXPECT_EQ(lowerManual.fermata->offset(), originalLowerManualOffset);
+    EXPECT_FALSE(upperManual.fermata->autoplace());
+    EXPECT_FALSE(lowerManual.fermata->autoplace());
+    EXPECT_TRUE(pointNear(upperManual.fermata->pos(), originalUpperManualPosition,
+                          0.02 * upperManual.fermata->spatium()));
+    EXPECT_TRUE(pointNear(lowerManual.fermata->pos(), originalLowerManualPosition,
+                          0.02 * lowerManual.fermata->spatium()));
+    EXPECT_TRUE(upperOffset.fermata->autoplace());
+    EXPECT_TRUE(lowerOffset.fermata->autoplace());
+    EXPECT_FALSE(upperOffset.fermata->isStyled(Pid::OFFSET));
+    EXPECT_FALSE(lowerOffset.fermata->isStyled(Pid::OFFSET));
+    EXPECT_EQ(upperOffset.fermata->offset(), originalUpperOffset);
+    EXPECT_EQ(lowerOffset.fermata->offset(), originalLowerOffset);
+    EXPECT_TRUE(pointNear(upperOffset.fermata->pos(), originalUpperOffsetPosition,
+                          0.02 * upperOffset.fermata->spatium()));
+    EXPECT_TRUE(pointNear(lowerOffset.fermata->pos(), originalLowerOffsetPosition,
+                          0.02 * lowerOffset.fermata->spatium()));
+    for (size_t i = 0; i < blocked.fingerings.size(); ++i) {
+        EXPECT_NEAR(blocked.fingerings[i]->pos().x(), originalBlockedPositions[i].x(),
+                    0.02 * blocked.fingerings[i]->spatium());
+    }
+    // The final 32nd-note chord is bounded by the preceding stem/note and the
+    // real end barline/page edge. No horizontal candidate is safe, so retain
+    // the ordinary centered, collision-free vertical stack.
+    const RectF blockedDigits = groupRect(blocked);
+    const RectF blockedFermata = blocked.fermata->pageBoundingRect();
+    EXPECT_LT(blockedDigits.left(), blockedFermata.right());
+    EXPECT_GT(blockedDigits.right(), blockedFermata.left());
+    EXPECT_TRUE(blocked.fermata->autoplace());
+    const Page* blockedPage = blocked.fermata->page();
+    ASSERT_TRUE(blockedPage);
+    for (const Fingering* fingering : blocked.fingerings) {
+        const RectF pageRect = fingering->pageBoundingRect();
+        EXPECT_GE(pageRect.left(), 0.0);
+        EXPECT_GE(pageRect.top(), 0.0);
+        EXPECT_LE(pageRect.right(), blockedPage->width());
+        EXPECT_LE(pageRect.bottom(), blockedPage->height());
+    }
+    EXPECT_EQ(pitches(upper), upperPitches);
+    EXPECT_EQ(pitches(lower), lowerPitches);
+    EXPECT_EQ(eids(upper), upperEids);
+    EXPECT_EQ(eids(lower), lowerEids);
+    const std::vector<PointF> acceptedBlockedPositions = positions(blocked);
+    const PointF acceptedBlockedFermataPosition = blocked.fermata->pos();
+    const std::vector<PointF> acceptedUpperOffsets = offsets(upper);
+    const std::vector<PointF> acceptedLowerOffsets = offsets(lower);
+    const std::vector<PropertyFlags> acceptedUpperOffsetFlags = offsetFlags(upper);
+    const std::vector<PropertyFlags> acceptedLowerOffsetFlags = offsetFlags(lower);
+
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    upper = stackCase(score, 0, 0);
+    lower = stackCase(score, 0, 1);
+    blocked = stackCase(score, 4, 0);
+    expectSidePocket(upper, true);
+    expectSidePocket(lower, false);
+    expectPositionsNear(blocked, acceptedBlockedPositions);
+    EXPECT_TRUE(pointNear(blocked.fermata->pos(), acceptedBlockedFermataPosition,
+                          0.02 * blocked.fermata->spatium()));
+
+    EditData undoEditData;
+    score->undoStack()->undo(&undoEditData);
+    relayoutScore(score);
+    upper = stackCase(score, 0, 0);
+    lower = stackCase(score, 0, 1);
+    blocked = stackCase(score, 4, 0);
+    expectPositionsNear(upper, originalUpperPositions);
+    expectPositionsNear(lower, originalLowerPositions);
+    EXPECT_TRUE(pointNear(upper.fermata->pos(), originalUpperFermataPosition,
+                          0.02 * upper.fermata->spatium()));
+    EXPECT_TRUE(pointNear(lower.fermata->pos(), originalLowerFermataPosition,
+                          0.02 * lower.fermata->spatium()));
+    EXPECT_EQ(upper.fermata->isStyled(Pid::OFFSET), originalUpperOffsetStyled);
+    EXPECT_EQ(lower.fermata->isStyled(Pid::OFFSET), originalLowerOffsetStyled);
+    EXPECT_EQ(offsets(upper), originalUpperOffsets);
+    EXPECT_EQ(offsets(lower), originalLowerOffsets);
+    EXPECT_EQ(offsetFlags(upper), originalUpperOffsetFlags);
+    EXPECT_EQ(offsetFlags(lower), originalLowerOffsetFlags);
+    expectPositionsNear(blocked, originalBlockedPositions);
+    EXPECT_TRUE(pointNear(blocked.fermata->pos(), originalBlockedFermataPosition,
+                          0.02 * blocked.fermata->spatium()));
+
+    EditData redoEditData;
+    score->undoStack()->redo(&redoEditData);
+    relayoutScore(score);
+    upper = stackCase(score, 0, 0);
+    lower = stackCase(score, 0, 1);
+    blocked = stackCase(score, 4, 0);
+    expectSidePocket(upper, true);
+    expectSidePocket(lower, false);
+    expectPositionsNear(blocked, acceptedBlockedPositions);
+    EXPECT_TRUE(pointNear(blocked.fermata->pos(), acceptedBlockedFermataPosition,
+                          0.02 * blocked.fermata->spatium()));
+    EXPECT_EQ(offsets(upper), acceptedUpperOffsets);
+    EXPECT_EQ(offsets(lower), acceptedLowerOffsets);
+    EXPECT_EQ(offsetFlags(upper), acceptedUpperOffsetFlags);
+    EXPECT_EQ(offsetFlags(lower), acceptedLowerOffsetFlags);
+
+    const std::string savedFileName = testing::TempDir() + "fingering-fermata-compound-stack-roundtrip.mscx";
+    const String savedPath = String::fromUtf8(savedFileName);
+    ASSERT_TRUE(ScoreRW::saveScore(score, savedPath));
+    MasterScore* reloaded = ScoreRW::readScore(savedPath, true);
+    ASSERT_TRUE(reloaded);
+    relayoutScore(reloaded);
+    StackCase reloadedUpper = stackCase(reloaded, 0, 0);
+    StackCase reloadedLower = stackCase(reloaded, 0, 1);
+    expectSidePocket(reloadedUpper, true);
+    expectSidePocket(reloadedLower, false);
+    EXPECT_EQ(pitches(reloadedUpper), upperPitches);
+    EXPECT_EQ(pitches(reloadedLower), lowerPitches);
+    EXPECT_EQ(eids(reloadedUpper), upperEids);
+    EXPECT_EQ(eids(reloadedLower), lowerEids);
+    EXPECT_FALSE(applyPrettifyCommand(reloaded).changed);
+
+    delete reloaded;
+    std::remove(savedFileName.c_str());
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutSplitsGlyphDynamicIntoDynamicAndExpression)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
@@ -2087,4 +2499,489 @@ TEST_F(Engraving_PianomaniaPrettifyTests, stemSideAccentClearsSlurTakingOffAtIts
     EXPECT_TRUE(sawStaccatissimo);
 
     delete score;
+}
+
+// Test value: Keeps an unsnapped automatic wedge on the final staff in a
+// readable upper lane of a compact grand staff while preserving the ordinary
+// centered and authored-manual layout paths.
+TEST_F(Engraving_PianomaniaPrettifyTests, prettifyBiasesFinalStaffWedgeTowardUpperLane)
+{
+    constexpr const char* targetHairpinEid = "WgiBdP/Vtz_g367TZXT7DJ";
+    auto findTarget = [&](MasterScore* score) -> Hairpin* {
+        for (const auto& pair : score->spanner()) {
+            Spanner* spanner = pair.second;
+            if (spanner && spanner->isHairpin() && spanner->eid().toStdString() == targetHairpinEid) {
+                return toHairpin(spanner);
+            }
+        }
+        return nullptr;
+    };
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+    Hairpin* hairpin = findTarget(score);
+    ASSERT_TRUE(hairpin);
+    ASSERT_EQ(hairpin->spannerSegments().size(), 2);
+    const Fraction startTick = hairpin->tick();
+    const Fraction endTick = hairpin->tick2();
+    const EID startEid = hairpin->startElement()->eid();
+    const EID endEid = hairpin->endElement()->eid();
+
+    std::vector<PointF> baselinePagePositions;
+    std::vector<RectF> baselineShapes;
+    for (SpannerSegment* segment : hairpin->spannerSegments()) {
+        segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
+        segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
+        segment->setAutoplace(true);
+        segment->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::STYLED);
+    }
+    relayoutScore(score);
+    for (SpannerSegment* segment : hairpin->spannerSegments()) {
+        baselinePagePositions.push_back(segment->pagePos());
+        baselineShapes.push_back(segment->ldata()->shape().bbox());
+    }
+
+    const bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    MScore::pianomaniaPrettifySlursFingerings = true;
+    relayoutScore(score);
+    MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+
+    ASSERT_EQ(hairpin->spannerSegments().size(), 2);
+    for (size_t i = 0; i < hairpin->spannerSegments().size(); ++i) {
+        SpannerSegment* segment = hairpin->segmentAt(static_cast<int>(i));
+        ASSERT_TRUE(segment);
+        EXPECT_TRUE(segment->placeAbove());
+        EXPECT_EQ(segment->staff(), segment->part()->staves().back());
+        EXPECT_TRUE(segment->autoplace());
+        EXPECT_EQ(segment->ldata()->itemSnappedBefore(), nullptr);
+        EXPECT_EQ(segment->ldata()->itemSnappedAfter(), nullptr);
+        const double upwardMove = baselinePagePositions[i].y() - segment->pagePos().y();
+        EXPECT_GT(upwardMove, 0.25 * segment->spatium());
+        EXPECT_LT(upwardMove, 1.10 * segment->spatium());
+        EXPECT_TRUE(pointNear(baselineShapes[i].topLeft(), segment->ldata()->shape().bbox().topLeft(), 0.01));
+        EXPECT_TRUE(pointNear(baselineShapes[i].bottomRight(), segment->ldata()->shape().bbox().bottomRight(), 0.01));
+    }
+    EXPECT_EQ(hairpin->tick(), startTick);
+    EXPECT_EQ(hairpin->tick2(), endTick);
+    EXPECT_EQ(hairpin->startElement()->eid(), startEid);
+    EXPECT_EQ(hairpin->endElement()->eid(), endEid);
+    delete score;
+
+    MasterScore* persisted = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
+    ASSERT_TRUE(persisted);
+    mu::engraving::pm::applyPianomaniaAutoLayout(persisted);
+    relayoutScore(persisted);
+    Hairpin* persistedHairpin = findTarget(persisted);
+    ASSERT_TRUE(persistedHairpin);
+    EXPECT_TRUE(applyPrettifyCommand(persisted).changed);
+
+    std::vector<PointF> offsets;
+    std::vector<PropertyFlags> offsetFlags;
+    std::vector<PointF> pagePositions;
+    for (SpannerSegment* segment : persistedHairpin->spannerSegments()) {
+        offsets.push_back(segment->offset());
+        offsetFlags.push_back(segment->propertyFlags(Pid::OFFSET));
+        pagePositions.push_back(segment->pagePos());
+    }
+    relayoutScore(persisted);
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
+        EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
+        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+        EXPECT_TRUE(pointNear(segment->pagePos(), pagePositions[i], 0.02 * segment->spatium()));
+    }
+
+    applyPrettifyCommand(persisted);
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        SpannerSegment* segment = persistedHairpin->segmentAt(static_cast<int>(i));
+        EXPECT_TRUE(pointNear(segment->offset(), offsets[i], 0.01));
+        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+    }
+
+    const std::string savedFileName = testing::TempDir() + "compact-grandstaff-hairpin-lane-roundtrip.mscz";
+    const String savedPath = String::fromUtf8(savedFileName);
+    muse::io::File savedFile(savedPath);
+    ASSERT_TRUE(savedFile.open(muse::io::IODevice::WriteOnly));
+    MscWriter::Params writerParams;
+    writerParams.device = &savedFile;
+    writerParams.filePath = savedPath;
+    writerParams.mode = MscIoMode::Zip;
+    MscWriter writer(writerParams);
+    ASSERT_TRUE(writer.open());
+    MscSaver saver(persisted->iocContext());
+    ASSERT_TRUE(saver.writeMscz(persisted, writer, false));
+    writer.close();
+    ASSERT_FALSE(writer.hasError());
+    savedFile.close();
+    MasterScore* reloaded = ScoreRW::readScore(savedPath, true);
+    ASSERT_TRUE(reloaded);
+    relayoutScore(reloaded);
+    Hairpin* reloadedHairpin = findTarget(reloaded);
+    ASSERT_TRUE(reloadedHairpin);
+    ASSERT_EQ(reloadedHairpin->spannerSegments().size(), offsets.size());
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+        EXPECT_NEAR(segment->spatium(), persistedHairpin->spatium(), 0.01);
+        EXPECT_NEAR(segment->offset().x() / segment->spatium(),
+                    offsets[i].x() / persistedHairpin->spatium(), 0.01);
+        EXPECT_NEAR(segment->offset().y() / segment->spatium(),
+                    offsets[i].y() / persistedHairpin->spatium(), 0.01);
+        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), offsetFlags[i]);
+    }
+    EXPECT_EQ(reloadedHairpin->tick(), startTick);
+    EXPECT_EQ(reloadedHairpin->tick2(), endTick);
+    EXPECT_EQ(reloadedHairpin->startElement()->eid(), startEid);
+    EXPECT_EQ(reloadedHairpin->endElement()->eid(), endEid);
+
+    applyPrettifyCommand(reloaded);
+    std::vector<PointF> reloadedOffsets;
+    std::vector<PointF> reloadedPositions;
+    std::vector<RectF> reloadedShapes;
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+        reloadedOffsets.push_back(segment->offset());
+        reloadedPositions.push_back(segment->pos());
+        reloadedShapes.push_back(segment->ldata()->shape().bbox());
+    }
+    applyPrettifyCommand(reloaded);
+    for (size_t i = 0; i < reloadedOffsets.size(); ++i) {
+        SpannerSegment* segment = reloadedHairpin->segmentAt(static_cast<int>(i));
+        EXPECT_TRUE(pointNear(segment->offset(), reloadedOffsets[i], 0.01 * segment->spatium()));
+        EXPECT_NEAR(segment->pos().x() / segment->spatium(), reloadedPositions[i].x() / segment->spatium(), 0.01);
+        EXPECT_NEAR(segment->pos().y() / segment->spatium(), reloadedPositions[i].y() / segment->spatium(), 0.01);
+        EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().topLeft(), reloadedShapes[i].topLeft(), 0.01));
+        EXPECT_TRUE(pointNear(segment->ldata()->shape().bbox().bottomRight(), reloadedShapes[i].bottomRight(), 0.01));
+    }
+
+    delete reloaded;
+    delete persisted;
+    std::remove(savedFileName.c_str());
+
+    enum class ControlKind { CenterOff, AutoplaceOff, ManualOffset };
+    for (ControlKind kind : { ControlKind::CenterOff, ControlKind::AutoplaceOff, ControlKind::ManualOffset }) {
+        MasterScore* control = ScoreRW::readScore(u"pianomania_prettify_data/compact-grandstaff-hairpin-lane.mscx");
+        ASSERT_TRUE(control);
+        mu::engraving::pm::applyPianomaniaAutoLayout(control);
+        relayoutScore(control);
+        Hairpin* controlHairpin = findTarget(control);
+        ASSERT_TRUE(controlHairpin);
+        ASSERT_EQ(controlHairpin->spannerSegments().size(), 2);
+
+        if (kind == ControlKind::CenterOff) {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+                segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
+                segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
+            }
+            controlHairpin->setProperty(Pid::CENTER_BETWEEN_STAVES, AutoOnOff::OFF);
+        } else if (kind == ControlKind::AutoplaceOff) {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+                segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
+                segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
+            }
+            controlHairpin->setAutoplace(false);
+        } else {
+            for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+                segment->setOffset(segment->propertyDefault(Pid::OFFSET).value<PointF>());
+                segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
+            }
+        }
+        relayoutScore(control);
+
+        std::vector<PointF> controlOffsets;
+        std::vector<PropertyFlags> controlOffsetFlags;
+        for (SpannerSegment* segment : controlHairpin->spannerSegments()) {
+            controlOffsets.push_back(segment->offset());
+            controlOffsetFlags.push_back(segment->propertyFlags(Pid::OFFSET));
+        }
+        if (kind == ControlKind::ManualOffset) {
+            ASSERT_TRUE(std::any_of(controlOffsetFlags.begin(), controlOffsetFlags.end(),
+                                    [](PropertyFlags flags) { return flags != PropertyFlags::STYLED; }));
+        }
+        const bool previousControlPrettify = MScore::pianomaniaPrettifySlursFingerings;
+        MScore::pianomaniaPrettifySlursFingerings = true;
+        relayoutScore(control);
+        MScore::pianomaniaPrettifySlursFingerings = previousControlPrettify;
+        for (size_t i = 0; i < controlOffsets.size(); ++i) {
+            SpannerSegment* segment = controlHairpin->segmentAt(static_cast<int>(i));
+            EXPECT_TRUE(pointNear(segment->offset(), controlOffsets[i], 0.01));
+            EXPECT_EQ(segment->propertyFlags(Pid::OFFSET), controlOffsetFlags[i]);
+        }
+        if (kind == ControlKind::CenterOff) {
+            EXPECT_EQ(controlHairpin->centerBetweenStaves(), AutoOnOff::OFF);
+        } else if (kind == ControlKind::AutoplaceOff) {
+            EXPECT_FALSE(controlHairpin->autoplace());
+        }
+        delete control;
+    }
+}
+
+namespace {
+
+double graphicalHairpinLeft(const HairpinSegment* segment)
+{
+    const PointF pagePos = segment->pagePos();
+    double result = pagePos.x() + segment->ldata()->points[0].x();
+    for (size_t i = 1; i < 4; ++i) {
+        result = std::min(result, pagePos.x() + segment->ldata()->points[i].x());
+    }
+    return result;
+}
+
+double graphicalHairpinRight(const HairpinSegment* segment)
+{
+    const PointF pagePos = segment->pagePos();
+    double result = pagePos.x() + segment->ldata()->points[0].x();
+    for (size_t i = 1; i < 4; ++i) {
+        result = std::max(result, pagePos.x() + segment->ldata()->points[i].x());
+    }
+    return result;
+}
+
+std::vector<Hairpin*> hairpinsInTickOrder(Score* score)
+{
+    std::vector<Hairpin*> result;
+    for (const auto& pair : score->spanner()) {
+        if (pair.second && pair.second->isHairpin()) {
+            result.push_back(toHairpin(pair.second));
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const Hairpin* a, const Hairpin* b) {
+        return a->tick() < b->tick();
+    });
+    return result;
+}
+
+struct HairpinLineSnapshot
+{
+    PointF position;
+    PointF endOffset;
+    std::array<PointF, 4> points;
+};
+
+HairpinLineSnapshot captureHairpinLine(const HairpinSegment* segment)
+{
+    return HairpinLineSnapshot {
+        segment->pos(), segment->pos2(),
+        { segment->ldata()->points[0], segment->ldata()->points[1],
+          segment->ldata()->points[2], segment->ldata()->points[3] }
+    };
+}
+
+void expectHairpinLineEqual(const HairpinLineSnapshot& expected, const HairpinLineSnapshot& actual)
+{
+    EXPECT_EQ(actual.position, expected.position);
+    EXPECT_EQ(actual.endOffset, expected.endOffset);
+    EXPECT_EQ(actual.points, expected.points);
+}
+
+} // namespace
+
+// Test value: Keeps the reported automatic Grieg crescendo-to-diminuendo
+// mouth visibly separated under the coordinated export layout flags without
+// changing its far endpoint, while manual, same-type, unsnapped, and authored
+// offset pairs remain untouched.
+TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpinMouths)
+{
+    const String fixture = u"pianomania_prettify_data/snapped-facing-hairpins.mscx";
+    auto targetPair = [](MasterScore* score) {
+        std::vector<Hairpin*> hairpins = hairpinsInTickOrder(score);
+        EXPECT_EQ(hairpins.size(), 2u);
+        return hairpins;
+    };
+    auto segments = [](const std::vector<Hairpin*>& hairpins) {
+        std::array<HairpinSegment*, 2> result { nullptr, nullptr };
+        if (hairpins.size() == 2) {
+            result[0] = toHairpinSegment(hairpins[0]->frontSegment());
+            result[1] = toHairpinSegment(hairpins[1]->frontSegment());
+        }
+        return result;
+    };
+    auto gapSp = [](const std::array<HairpinSegment*, 2>& pair) {
+        return (graphicalHairpinLeft(pair[1]) - graphicalHairpinRight(pair[0])) / pair[1]->spatium();
+    };
+
+    auto reportedGriegPair = [](MasterScore* score) {
+        std::vector<Hairpin*> result;
+        Hairpin* crescendo = nullptr;
+        Hairpin* diminuendo = nullptr;
+        for (Hairpin* hairpin : hairpinsInTickOrder(score)) {
+            if (hairpin->hairpinType() == HairpinType::CRESC_HAIRPIN
+                && hairpin->tick().ticks() == 8160 && hairpin->tick2().ticks() == 8280) {
+                EXPECT_EQ(crescendo, nullptr);
+                crescendo = hairpin;
+            } else if (hairpin->hairpinType() == HairpinType::DIM_HAIRPIN
+                       && hairpin->tick().ticks() == 8280) {
+                EXPECT_EQ(diminuendo, nullptr);
+                diminuendo = hairpin;
+            }
+        }
+        if (crescendo && diminuendo) {
+            result = { crescendo, diminuendo };
+        }
+        return result;
+    };
+
+    auto makeAutomaticPair = [](const std::vector<Hairpin*>& hairpins) {
+        for (Hairpin* hairpin : hairpins) {
+            ASSERT_TRUE(hairpin);
+            hairpin->setAutoplace(true);
+            static_cast<EngravingItem*>(hairpin)->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::STYLED);
+            HairpinSegment* segment = toHairpinSegment(hairpin->frontSegment());
+            ASSERT_TRUE(segment);
+            segment->setAutoplace(true);
+            static_cast<EngravingItem*>(segment)->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::STYLED);
+            static_cast<EngravingItem*>(segment)->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
+            segment->setProperty(Pid::OFFSET2, PointF());
+            static_cast<EngravingItem*>(segment)->setPropertyFlags(Pid::OFFSET2, PropertyFlags::NOSTYLE);
+        }
+    };
+
+    const String reportedFixture = u"pianomania_prettify_data/grieg-op12-no1-facing-hairpins.mscz";
+    MasterScore* score = ScoreRW::readScore(reportedFixture);
+    ASSERT_TRUE(score);
+    const bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    const bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+    MScore::pianomaniaPrettifySlursFingerings = false;
+    MScore::pianomaniaForceNormalizeSlursFingerings = true;
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+    std::vector<Hairpin*> hairpins = reportedGriegPair(score);
+    ASSERT_EQ(hairpins.size(), 2u);
+    ASSERT_EQ(hairpins[0]->tick2(), hairpins[1]->tick());
+    std::array<HairpinSegment*, 2> pair = segments(hairpins);
+    ASSERT_TRUE(pair[0] && pair[1]);
+    EXPECT_NEAR(gapSp(pair), 0.30, 0.001);
+    const double ordinaryFarEndX = graphicalHairpinRight(pair[1]);
+    delete score;
+
+    score = ScoreRW::readScore(reportedFixture);
+    ASSERT_TRUE(score);
+    MScore::pianomaniaPrettifySlursFingerings = true;
+    MScore::pianomaniaForceNormalizeSlursFingerings = true;
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+    hairpins = reportedGriegPair(score);
+    pair = segments(hairpins);
+    ASSERT_TRUE(pair[0] && pair[1]);
+    EXPECT_TRUE(hairpins[0]->snapToItemAfter());
+    EXPECT_TRUE(hairpins[1]->snapToItemBefore());
+    EXPECT_EQ(pair[0]->ldata()->itemSnappedAfter(), pair[1]);
+    EXPECT_EQ(pair[1]->ldata()->itemSnappedBefore(), pair[0]);
+    for (HairpinSegment* segment : pair) {
+        EXPECT_TRUE(segment->visible());
+        EXPECT_TRUE(segment->autoplace());
+        EXPECT_TRUE(segment->isStyled(Pid::OFFSET));
+        EXPECT_FALSE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+        EXPECT_EQ(segment->propertyFlags(Pid::OFFSET2), PropertyFlags::NOSTYLE);
+    }
+    EXPECT_GE(gapSp(pair), 0.60 - 0.001);
+    EXPECT_NEAR(graphicalHairpinRight(pair[1]), ordinaryFarEndX, 0.01);
+    const HairpinLineSnapshot flagsOnCrescendo = captureHairpinLine(pair[0]);
+    const HairpinLineSnapshot flagsOnDiminuendo = captureHairpinLine(pair[1]);
+    relayoutScore(score);
+    pair = segments(reportedGriegPair(score));
+    expectHairpinLineEqual(flagsOnCrescendo, captureHairpinLine(pair[0]));
+    expectHairpinLineEqual(flagsOnDiminuendo, captureHairpinLine(pair[1]));
+    EXPECT_GE(gapSp(pair), 0.60 - 0.001);
+    EXPECT_NEAR(graphicalHairpinRight(pair[1]), ordinaryFarEndX, 0.01);
+    MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+    MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+    delete score;
+
+    enum class ExcludedPair { Manual, SameType, CrescendoUnsnapped, DiminuendoUnsnapped };
+    for (ExcludedPair control : { ExcludedPair::Manual, ExcludedPair::SameType,
+                                  ExcludedPair::CrescendoUnsnapped, ExcludedPair::DiminuendoUnsnapped }) {
+        MasterScore* excluded = ScoreRW::readScore(fixture);
+        ASSERT_TRUE(excluded);
+        mu::engraving::pm::applyPianomaniaAutoLayout(excluded);
+        std::vector<Hairpin*> excludedHairpins = targetPair(excluded);
+        makeAutomaticPair(excludedHairpins);
+        if (control == ExcludedPair::Manual) {
+            for (Hairpin* hairpin : excludedHairpins) {
+                HairpinSegment* segment = toHairpinSegment(hairpin->frontSegment());
+                ASSERT_TRUE(segment);
+                segment->setAutoplace(false);
+                static_cast<EngravingItem*>(segment)->setPropertyFlags(Pid::AUTOPLACE, PropertyFlags::UNSTYLED);
+            }
+        }
+        ASSERT_EQ(excludedHairpins.size(), 2u);
+        if (control == ExcludedPair::SameType) {
+            excludedHairpins[1]->setHairpinType(HairpinType::CRESC_HAIRPIN);
+        } else if (control == ExcludedPair::CrescendoUnsnapped) {
+            excludedHairpins[0]->setSnapToItemAfter(false);
+        } else if (control == ExcludedPair::DiminuendoUnsnapped) {
+            excludedHairpins[1]->setSnapToItemBefore(false);
+        }
+        relayoutScore(excluded);
+        std::array<HairpinSegment*, 2> excludedPair = segments(excludedHairpins);
+        ASSERT_TRUE(excludedPair[0] && excludedPair[1]);
+        if (control == ExcludedPair::Manual) {
+            EXPECT_FALSE(excludedPair[0]->autoplace());
+            EXPECT_FALSE(excludedPair[1]->autoplace());
+        }
+        const HairpinLineSnapshot beforeCrescendo = captureHairpinLine(excludedPair[0]);
+        const HairpinLineSnapshot beforeSecond = captureHairpinLine(excludedPair[1]);
+        const bool previousControlPrettify = MScore::pianomaniaPrettifySlursFingerings;
+        MScore::pianomaniaPrettifySlursFingerings = true;
+        relayoutScore(excluded);
+        MScore::pianomaniaPrettifySlursFingerings = previousControlPrettify;
+        expectHairpinLineEqual(beforeCrescendo, captureHairpinLine(excludedPair[0]));
+        expectHairpinLineEqual(beforeSecond, captureHairpinLine(excludedPair[1]));
+        delete excluded;
+    }
+
+    enum class PublicControl { AuthoredOffset, AuthoredOffset2, AuthoredZeroOffset2, ParentAutoplaceOff };
+    for (PublicControl control : { PublicControl::AuthoredOffset, PublicControl::AuthoredOffset2,
+                                   PublicControl::AuthoredZeroOffset2,
+                                   PublicControl::ParentAutoplaceOff }) {
+        MasterScore* excluded = ScoreRW::readScore(fixture);
+        ASSERT_TRUE(excluded);
+        mu::engraving::pm::applyPianomaniaAutoLayout(excluded);
+        relayoutScore(excluded);
+        std::vector<Hairpin*> excludedHairpins = targetPair(excluded);
+        ASSERT_EQ(excludedHairpins.size(), 2u);
+        makeAutomaticPair(excludedHairpins);
+        std::array<HairpinSegment*, 2> excludedPair = segments(excludedHairpins);
+        ASSERT_TRUE(excludedPair[0] && excludedPair[1]);
+        if (control == PublicControl::AuthoredOffset) {
+            excludedPair[1]->setOffset(excludedPair[1]->offset() + PointF(0.2 * excludedPair[1]->spatium(), 0.0));
+            static_cast<EngravingItem*>(excludedPair[1])->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
+        } else if (control == PublicControl::AuthoredOffset2) {
+            const PointF offset2 = excludedPair[1]->getProperty(Pid::OFFSET2).value<PointF>();
+            excludedPair[1]->setProperty(Pid::OFFSET2, offset2 + PointF(-0.2 * excludedPair[1]->spatium(), 0.0));
+            static_cast<EngravingItem*>(excludedPair[1])->setPropertyFlags(Pid::OFFSET2, PropertyFlags::UNSTYLED);
+        } else if (control == PublicControl::AuthoredZeroOffset2) {
+            excludedPair[1]->setProperty(Pid::OFFSET2, PointF());
+            static_cast<EngravingItem*>(excludedPair[1])->setPropertyFlags(Pid::OFFSET2, PropertyFlags::UNSTYLED);
+        } else {
+            excludedHairpins[0]->setAutoplace(false);
+            excludedHairpins[1]->setAutoplace(false);
+        }
+        relayoutScore(excluded);
+        excludedPair = segments(excludedHairpins);
+        const HairpinLineSnapshot beforeCrescendo = captureHairpinLine(excludedPair[0]);
+        const HairpinLineSnapshot beforeDiminuendo = captureHairpinLine(excludedPair[1]);
+        const PointF beforeOffset = excludedPair[1]->offset();
+        const PropertyFlags beforeOffsetFlags = excludedPair[1]->propertyFlags(Pid::OFFSET);
+        const PointF beforeOffset2 = excludedPair[1]->getProperty(Pid::OFFSET2).value<PointF>();
+        const PropertyFlags beforeOffset2Flags = excludedPair[1]->propertyFlags(Pid::OFFSET2);
+        mu::engraving::pm::PmPrettifyOptions options;
+        options.forceNormalizeManual = false;
+        applyPrettifyCommand(excluded, options);
+        excludedPair = segments(targetPair(excluded));
+        expectHairpinLineEqual(beforeCrescendo, captureHairpinLine(excludedPair[0]));
+        expectHairpinLineEqual(beforeDiminuendo, captureHairpinLine(excludedPair[1]));
+        EXPECT_EQ(excludedPair[1]->offset(), beforeOffset);
+        EXPECT_EQ(excludedPair[1]->propertyFlags(Pid::OFFSET), beforeOffsetFlags);
+        EXPECT_EQ(excludedPair[1]->getProperty(Pid::OFFSET2).value<PointF>(), beforeOffset2);
+        EXPECT_EQ(excludedPair[1]->propertyFlags(Pid::OFFSET2), beforeOffset2Flags);
+        if (control == PublicControl::ParentAutoplaceOff) {
+            EXPECT_FALSE(excludedHairpins[0]->autoplace());
+            EXPECT_FALSE(excludedHairpins[1]->autoplace());
+        }
+        delete excluded;
+    }
+    MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
 }
