@@ -92,14 +92,14 @@ static double toDouble_helper(const char* str, bool* ok)
 static void ltrim_helper(std::u16string& s)
 {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](char16_t ch) {
-        return !std::isspace(ch);
+        return !Char::isSpace(ch);
     }));
 }
 
 static void rtrim_helper(std::u16string& s)
 {
     s.erase(std::find_if(s.rbegin(), s.rend(), [](char16_t ch) {
-        return !std::isspace(ch);
+        return !Char::isSpace(ch);
     }).base(), s.end());
 }
 
@@ -139,11 +139,20 @@ bool Char::isLetter(char16_t c)
 
 bool Char::isSpace(char16_t c)
 {
-    //! TODO
 #ifndef NO_QT_SUPPORT
     return QChar::isSpace(c);
 #else
-    return std::isspace(static_cast<unsigned char>(c));
+    return (c >= u'\u0009' && c <= u'\u000D')
+           || c == u'\u0020'
+           || c == u'\u0085'
+           || c == u'\u00A0'
+           || c == u'\u1680'
+           || (c >= u'\u2000' && c <= u'\u200A')
+           || c == u'\u2028'
+           || c == u'\u2029'
+           || c == u'\u202F'
+           || c == u'\u205F'
+           || c == u'\u3000';
 #endif
 }
 
