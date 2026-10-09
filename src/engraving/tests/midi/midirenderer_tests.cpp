@@ -22,6 +22,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include "utils/scorerw.h"
 #include "engraving/compat/midi/compatmidirender.h"
 #include "engraving/rw/mscloader.h"
@@ -265,6 +267,84 @@ TEST_F(MidiRenderer_Tests, invisibleOneGuitarNoteUsesOrnamentNoteOffVelocity)
     EXPECT_EQ(noteOffIt->second.type(), EventType::ME_NOTEOFF);
     EXPECT_EQ(noteOffIt->second.pitch(), 59);
     EXPECT_EQ(noteOffIt->second.velo(), ornamentNoteOffVelocity);
+}
+
+TEST_F(MidiRenderer_Tests, explicitTrillPlaybackPreservesRepeatedAnchorAndOrnamentOwnership)
+{
+    constexpr int mfVolume = 80;
+    constexpr int ornamentNoteOffVelocity = 127;
+
+    EventsHolder events = renderMidiEvents(u"pianomania_user_trill_repeated_anchor.mscx");
+
+    ASSERT_EQ(events.size(), 1);
+    ASSERT_EQ(events[DEFAULT_CHANNEL].size(), 8);
+
+    const std::array<int, 4> starts { 0, 120, 240, 360 };
+    const std::array<int, 4> ends { 119, 239, 359, 479 };
+    const std::array<int, 4> pitches { 60, 62, 60, 60 };
+    const std::array<int, 4> noteOffVelocities { NOTE_OFF_VOLUME, ornamentNoteOffVelocity,
+                                                 ornamentNoteOffVelocity, ornamentNoteOffVelocity };
+
+    for (size_t i = 0; i < starts.size(); ++i) {
+        auto noteOn = events[DEFAULT_CHANNEL].find(starts[i]);
+        ASSERT_NE(noteOn, events[DEFAULT_CHANNEL].end());
+        EXPECT_EQ(noteOn->second.type(), EventType::ME_NOTEON);
+        EXPECT_EQ(noteOn->second.pitch(), pitches[i]);
+        EXPECT_EQ(noteOn->second.velo(), mfVolume);
+
+        auto noteOff = events[DEFAULT_CHANNEL].find(ends[i]);
+        ASSERT_NE(noteOff, events[DEFAULT_CHANNEL].end());
+        EXPECT_EQ(noteOff->second.type(), EventType::ME_NOTEOFF);
+        EXPECT_EQ(noteOff->second.pitch(), pitches[i]);
+        EXPECT_EQ(noteOff->second.velo(), noteOffVelocities[i]);
+    }
+}
+
+TEST_F(MidiRenderer_Tests, autoTrillPlaybackStillUsesGameplayNormalization)
+{
+    constexpr int mfVolume = 80;
+    constexpr int ornamentNoteOffVelocity = 127;
+
+    MasterScore* score = ScoreRW::readScore(MIDIRENDERER_TESTS_DIR + u"pianomania_user_trill_repeated_anchor.mscx");
+    ASSERT_TRUE(score);
+
+    Segment* segment = score->firstSegment(SegmentType::ChordRest);
+    ASSERT_TRUE(segment);
+    EngravingItem* item = segment->element(DEFAULT_CHANNEL);
+    ASSERT_TRUE(item);
+    ASSERT_TRUE(item->isChord());
+    Chord* chord = toChord(item);
+    ASSERT_EQ(chord->playEventType(), PlayEventType::User);
+    chord->setPlayEventType(PlayEventType::Auto);
+
+    EventsHolder events;
+    CompatMidiRendererInternal::Context ctx;
+    CompatMidiRender::renderScore(score, events, ctx, true);
+    delete score;
+
+    ASSERT_EQ(events.size(), 1);
+    ASSERT_EQ(events[DEFAULT_CHANNEL].size(), 10);
+
+    const std::array<int, 5> starts { 0, 100, 180, 272, 350 };
+    const std::array<int, 5> ends { 99, 177, 271, 348, 477 };
+    const std::array<int, 5> pitches { 60, 62, 60, 62, 60 };
+    const std::array<int, 5> noteOffVelocities { NOTE_OFF_VOLUME, ornamentNoteOffVelocity,
+                                                 ornamentNoteOffVelocity, ornamentNoteOffVelocity,
+                                                 ornamentNoteOffVelocity };
+
+    for (size_t i = 0; i < starts.size(); ++i) {
+        auto noteOn = events[DEFAULT_CHANNEL].find(starts[i]);
+        ASSERT_NE(noteOn, events[DEFAULT_CHANNEL].end());
+        EXPECT_EQ(noteOn->second.type(), EventType::ME_NOTEON);
+        EXPECT_EQ(noteOn->second.pitch(), pitches[i]);
+        EXPECT_EQ(noteOn->second.velo(), mfVolume);
+
+        auto noteOff = events[DEFAULT_CHANNEL].find(ends[i]);
+        ASSERT_NE(noteOff, events[DEFAULT_CHANNEL].end());
+        EXPECT_EQ(noteOff->second.type(), EventType::ME_NOTEOFF);
+        EXPECT_EQ(noteOff->second.pitch(), pitches[i]);
+        EXPECT_EQ(noteOff->second.velo(), noteOffVelocities[i]);
+    }
 }
 
 TEST_F(MidiRenderer_Tests, onePercussionNote)

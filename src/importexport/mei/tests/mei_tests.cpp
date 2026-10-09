@@ -40,6 +40,8 @@
 #include "engraving/tests/utils/scorecomp.h"
 
 #include "engraving/dom/masterscore.h"
+#include "engraving/dom/articulation.h"
+#include "engraving/dom/accidental.h"
 #include "engraving/dom/excerpt.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
@@ -47,6 +49,7 @@
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
 #include "engraving/dom/hairpin.h"
+#include "engraving/dom/keysig.h"
 #include "engraving/dom/line.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
@@ -54,11 +57,16 @@
 #include "engraving/dom/pedal.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/segment.h"
+#include "engraving/dom/slur.h"
 #include "engraving/dom/spanner.h"
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stafftext.h"
 #include "engraving/dom/system.h"
+#include "engraving/dom/volta.h"
 #include "engraving/dom/tuplet.h"
+#include "engraving/dom/trill.h"
+#include "engraving/iengravingfont.h"
+#include "engraving/types/symnames.h"
 
 #include "modularity/ioc.h"
 #include "importexport/mei/imeiconfiguration.h"
@@ -974,6 +982,17 @@ size_t countSegments(const std::string& segments)
 {
     return segments.empty() ? 0u : static_cast<size_t>(std::count(segments.begin(), segments.end(), ';')) + 1u;
 }
+
+std::vector<double> parseCoordinates(const std::string& value)
+{
+    std::vector<double> coordinates;
+    std::stringstream stream(value);
+    std::string coordinate;
+    while (std::getline(stream, coordinate, ',')) {
+        coordinates.push_back(std::strtod(coordinate.c_str(), nullptr));
+    }
+    return coordinates;
+}
 } // namespace
 
 TEST_F(Mei_Tests, mei_export_omits_spanner_segments_without_a_score_page) {
@@ -1049,6 +1068,165 @@ TEST_F(Mei_Tests, mei_export_omits_spanner_segments_without_a_score_page) {
                   lastSegment.substr(lastSegment.find(',', lastSegment.find(',') + 1))) << tags[0];
         delete score;
     }
+}
+
+TEST_F(Mei_Tests, mei_export_slur_uses_only_owned_endpoint_system_segments) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"slur-01.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Slur* slur = nullptr;
+    std::vector<Spanner*> otherSlurs;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isSlur()) {
+            continue;
+        }
+        Slur* candidateSlur = toSlur(candidate);
+        const ChordRest* start = candidateSlur->startCR();
+        const ChordRest* end = candidateSlur->endCR();
+        const System* startSystem = start && start->measure() ? start->measure()->system() : nullptr;
+        const System* endSystem = end && end->measure() ? end->measure()->system() : nullptr;
+        if (!slur && startSystem && startSystem == endSystem && candidateSlur->nsegments() == 1) {
+            slur = candidateSlur;
+        } else {
+            otherSlurs.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(slur);
+    for (Spanner* other : otherSlurs) {
+        score->removeSpanner(other);
+    }
+
+    const ChordRest* endAnchor = slur->endCR();
+    ASSERT_TRUE(endAnchor);
+    System* endpointSystem = endAnchor->measure()->system();
+    ASSERT_TRUE(endpointSystem);
+    Page* endpointPage = endpointSystem->page();
+    ASSERT_TRUE(endpointPage);
+    const size_t legitimateSegmentCount = slur->nsegments();
+
+    // A recycled System can retain a real Page pointer after Page::systems()
+    // has stopped owning it.
+    System* recycledSystem = Factory::createSystem(endpointPage);
+    recycledSystem->moveToPage(endpointPage);
+    ASSERT_EQ(recycledSystem->page(), endpointPage);
+    ASSERT_EQ(std::find(endpointPage->systems().cbegin(), endpointPage->systems().cend(), recycledSystem),
+              endpointPage->systems().cend());
+    SlurSegment* recycledSegment = new SlurSegment(recycledSystem);
+    recycledSegment->setSystem(recycledSystem);
+    recycledSegment->setPos(PointF(500.0, 500.0));
+    slur->add(recycledSegment);
+
+    // This initialized System is genuinely page-owned, but follows both
+    // musical endpoints and therefore cannot own part of this slur.
+    System* outsideSystem = Factory::createSystem(endpointPage);
+    outsideSystem->adjustStavesNumber(score->nstaves());
+    endpointPage->appendSystem(outsideSystem);
+    ASSERT_EQ(outsideSystem->page(), endpointPage);
+    SlurSegment* outsideSegment = new SlurSegment(outsideSystem);
+    outsideSegment->setSystem(outsideSystem);
+    outsideSegment->setPos(PointF(600.0, 600.0));
+    slur->add(outsideSegment);
+    ASSERT_EQ(slur->nsegments(), legitimateSegmentCount + 2u);
+
+    const String outputName = u"pianomania-slur-owned-endpoint-systems.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const std::vector<std::string> tags =
+        collectStartTags(readTestTextFile(outputName), "slur");
+    ASSERT_EQ(tags.size(), 1u);
+    const std::optional<std::string> bezier = xmlAttributeValue(tags.front(), "pm:bezier");
+    const std::optional<std::string> extent = xmlAttributeValue(tags.front(), "pm:x1y1x2y2");
+    ASSERT_TRUE(bezier.has_value()) << tags.front();
+    ASSERT_TRUE(extent.has_value()) << tags.front();
+    EXPECT_EQ(countSegments(*bezier), legitimateSegmentCount) << tags.front();
+
+    const size_t lastSeparator = bezier->rfind(';');
+    const std::string firstCurve = bezier->substr(0, bezier->find(';'));
+    const std::string lastCurve =
+        lastSeparator == std::string::npos ? *bezier : bezier->substr(lastSeparator + 1);
+    const std::vector<double> firstCoordinates = parseCoordinates(firstCurve);
+    const std::vector<double> lastCoordinates = parseCoordinates(lastCurve);
+    const std::vector<double> extentCoordinates = parseCoordinates(*extent);
+    ASSERT_EQ(firstCoordinates.size(), 8u);
+    ASSERT_EQ(lastCoordinates.size(), 8u);
+    ASSERT_EQ(extentCoordinates.size(), 4u);
+    EXPECT_NEAR(extentCoordinates[0], firstCoordinates[0], 0.001);
+    EXPECT_NEAR(extentCoordinates[1], firstCoordinates[1], 0.001);
+    EXPECT_NEAR(extentCoordinates[2], lastCoordinates[6], 0.001);
+    EXPECT_NEAR(extentCoordinates[3], lastCoordinates[7], 0.001);
+    delete recycledSystem;
+    delete score;
+}
+
+TEST_F(Mei_Tests, mei_export_keeps_legitimate_multi_system_slur_segments) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"slur-02.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Slur* slur = nullptr;
+    std::vector<Spanner*> otherSlurs;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isSlur()) {
+            continue;
+        }
+        Slur* candidateSlur = toSlur(candidate);
+        const ChordRest* start = candidateSlur->startCR();
+        const ChordRest* end = candidateSlur->endCR();
+        const System* startSystem = start && start->measure() ? start->measure()->system() : nullptr;
+        const System* endSystem = end && end->measure() ? end->measure()->system() : nullptr;
+        if (!slur && startSystem && endSystem && startSystem != endSystem
+            && candidateSlur->nsegments() >= 2) {
+            slur = candidateSlur;
+        } else {
+            otherSlurs.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(slur);
+    for (Spanner* other : otherSlurs) {
+        score->removeSpanner(other);
+    }
+    const size_t segmentCount = slur->nsegments();
+
+    const String outputName = u"pianomania-legitimate-multi-system-slur.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const std::vector<std::string> tags =
+        collectStartTags(readTestTextFile(outputName), "slur");
+    ASSERT_EQ(tags.size(), 1u);
+    const std::optional<std::string> bezier = xmlAttributeValue(tags.front(), "pm:bezier");
+    const std::optional<std::string> extent = xmlAttributeValue(tags.front(), "pm:x1y1x2y2");
+    ASSERT_TRUE(bezier.has_value()) << tags.front();
+    ASSERT_TRUE(extent.has_value()) << tags.front();
+    EXPECT_EQ(countSegments(*bezier), segmentCount) << tags.front();
+
+    const size_t lastSeparator = bezier->rfind(';');
+    const std::string firstCurve = bezier->substr(0, bezier->find(';'));
+    const std::string lastCurve =
+        lastSeparator == std::string::npos ? *bezier : bezier->substr(lastSeparator + 1);
+    const std::vector<double> firstCoordinates = parseCoordinates(firstCurve);
+    const std::vector<double> lastCoordinates = parseCoordinates(lastCurve);
+    const std::vector<double> extentCoordinates = parseCoordinates(*extent);
+    ASSERT_EQ(firstCoordinates.size(), 8u);
+    ASSERT_EQ(lastCoordinates.size(), 8u);
+    ASSERT_EQ(extentCoordinates.size(), 4u);
+    EXPECT_NEAR(extentCoordinates[0], firstCoordinates[0], 0.001);
+    EXPECT_NEAR(extentCoordinates[1], firstCoordinates[1], 0.001);
+    EXPECT_NEAR(extentCoordinates[2], lastCoordinates[6], 0.001);
+    EXPECT_NEAR(extentCoordinates[3], lastCoordinates[7], 0.001);
+    delete score;
 }
 
 TEST_F(Mei_Tests, mei_export_hairpins_ending_without_onset_bind_end_element) {
@@ -1276,6 +1454,204 @@ TEST_F(Mei_Tests, mei_gracenote_02) {
 TEST_F(Mei_Tests, mei_hairpin_01) {
     meiReadTest("hairpin-01");
 }
+
+TEST_F(Mei_Tests, mei_export_wedge_keeps_only_owned_endpoint_system_geometry) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Hairpin* hairpin = nullptr;
+    std::vector<Spanner*> others;
+    for (const auto& entry : score->spannerMap().map()) {
+        Spanner* candidate = entry.second;
+        if (!candidate || !candidate->isHairpin()) {
+            continue;
+        }
+        Hairpin* wedge = toHairpin(candidate);
+        if (!hairpin && !wedge->isLineType() && !wedge->segmentsEmpty()) {
+            hairpin = wedge;
+        } else {
+            others.push_back(candidate);
+        }
+    }
+    ASSERT_TRUE(hairpin);
+    for (Spanner* other : others) {
+        score->removeSpanner(other);
+    }
+    const size_t legitimateCount = hairpin->spannerSegments().size();
+    const String baselineName = u"pianomania-wedge-owned-baseline.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, baselineName, exportFunc));
+    const auto baselineTags = collectStartTags(readTestTextFile(baselineName), "hairpin");
+    ASSERT_EQ(baselineTags.size(), 1u);
+
+    Page* page = hairpin->frontSegment()->system()->page();
+    ASSERT_TRUE(page);
+    System* recycled = Factory::createSystem(page);
+    recycled->moveToPage(page);
+    ASSERT_EQ(recycled->page(), page);
+    ASSERT_EQ(std::find(page->systems().cbegin(), page->systems().cend(), recycled),
+              page->systems().cend());
+    System* outside = Factory::createSystem(score->pages().back());
+    outside->adjustStavesNumber(score->nstaves());
+    score->pages().back()->appendSystem(outside);
+    const auto* original = toHairpinSegment(hairpin->frontSegment());
+    for (System* invalidSystem : {recycled, outside}) {
+        auto* ghost = toHairpinSegment(hairpin->createLineSegment(invalidSystem));
+        ghost->setSystem(invalidSystem);
+        ghost->setPos(PointF(600.0, 600.0));
+        ghost->setPos2(PointF(160.0, 0.0));
+        ghost->mutldata()->points = original->ldata()->points;
+        ghost->mutldata()->npoints = original->ldata()->npoints;
+        hairpin->add(ghost);
+    }
+    ASSERT_EQ(hairpin->spannerSegments().size(), legitimateCount + 2u);
+    const String outputName = u"pianomania-wedge-owned-systems.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    const auto tags = collectStartTags(readTestTextFile(outputName), "hairpin");
+    ASSERT_EQ(tags.size(), 1u);
+    for (const char* attribute : {"pm:segments", "pm:hairpin-lines", "pm:x1y1x2y2"}) {
+        const auto baseline = xmlAttributeValue(baselineTags.front(), attribute);
+        const auto actual = xmlAttributeValue(tags.front(), attribute);
+        ASSERT_TRUE(baseline.has_value()) << attribute;
+        ASSERT_TRUE(actual.has_value()) << attribute;
+        EXPECT_EQ(*actual, *baseline) << attribute;
+    }
+    delete recycled;
+    delete score;
+}
+
+TEST_F(Mei_Tests, mei_export_articulation_centres_match_native_rendered_bounds) {
+    for (const String fixture : {u"artic-01.mscx"}) {
+        SCOPED_TRACE(fixture.toStdString());
+        MasterScore* score = ScoreRW::readScore(MEI_DIR + fixture, false);
+        ASSERT_TRUE(score);
+        score->setLayoutAll();
+        score->doLayout();
+        std::vector<std::array<double, 2>> expected;
+        score->scanElements([&](EngravingItem* item) {
+            if (!item->isArticulation()) {
+                return;
+            }
+            const RectF bounds = item->pageBoundingRect();
+            expected.push_back({bounds.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - bounds.center().y() / DPI});
+        });
+        ASSERT_FALSE(expected.empty());
+        std::string output;
+        ASSERT_TRUE(pmWriteMeiToString(score, true, output));
+        std::vector<std::array<double, 2>> actual;
+        bool distinctFromOrigin = false;
+        for (const auto& tag : collectStartTags(output, "artic")) {
+            const auto center = xmlAttributeValue(tag, "pm:artic-center");
+            ASSERT_TRUE(center.has_value()) << tag;
+            const auto coordinates = parseCoordinates(*center);
+            ASSERT_EQ(coordinates.size(), 2u);
+            actual.push_back({coordinates[0], coordinates[1]});
+            distinctFromOrigin |= center != xmlAttributeValue(tag, "pm:xy");
+        }
+        ASSERT_EQ(actual.size(), expected.size());
+        // Export rounding can merge neighboring X values. Match complete
+        // native centres instead of relying on a rounded sort order.
+        for (const auto& center : actual) {
+            const auto match = std::find_if(expected.begin(), expected.end(),
+                [&](const auto& reference) {
+                    return std::abs(center[0] - reference[0]) <= 0.00051
+                        && std::abs(center[1] - reference[1]) <= 0.00051;
+                });
+            ASSERT_NE(match, expected.end());
+            expected.erase(match);
+        }
+        EXPECT_TRUE(expected.empty());
+        EXPECT_TRUE(distinctFromOrigin);
+        delete score;
+    }
+}
+
+TEST_F(Mei_Tests, mei_export_articulation_centres_preserve_native_notehead_anchors) {
+    for (double authoredOffsetSp : {0.0, 0.65}) {
+        SCOPED_TRACE(authoredOffsetSp);
+        MasterScore* score = ScoreRW::readScore(MEI_DIR + u"artic-01.mscx", false);
+        ASSERT_TRUE(score);
+        score->scanElements([&](EngravingItem* item) {
+            if (item->isArticulation() && authoredOffsetSp != 0.0) {
+                item->setAutoplace(false);
+                item->setOffset(PointF(authoredOffsetSp * score->style().spatium(), 0.0));
+            }
+        });
+        score->setLayoutAll();
+        score->doLayout();
+        std::vector<std::array<double, 4>> expected;
+        bool coversSingleNote = false;
+        bool coversChord = false;
+        score->scanElements([&](EngravingItem* item) {
+            if (!item->isArticulation()) {
+                return;
+            }
+            const Articulation* articulation = toArticulation(item);
+            const ChordRest* cr = articulation->chordRest();
+            if (!cr || !cr->isChord()) {
+                return;
+            }
+            const Chord* chord = toChord(cr);
+            coversSingleNote |= chord->notes().size() == 1u;
+            coversChord |= chord->notes().size() > 1u;
+            RectF heads;
+            bool first = true;
+            for (const Note* note : chord->notes()) {
+                if (!note->visible()) {
+                    continue;
+                }
+                const RectF rendered = note->pageBoundingRect();
+                heads = first ? rendered : heads.united(rendered);
+                first = false;
+            }
+            const RectF bounds = articulation->pageBoundingRect();
+            expected.push_back({bounds.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - bounds.center().y() / DPI,
+                heads.center().x() / DPI,
+                score->style().styleD(Sid::pageHeight) - heads.center().y() / DPI});
+        });
+        ASSERT_TRUE(coversSingleNote);
+        ASSERT_TRUE(coversChord);
+        ASSERT_FALSE(expected.empty());
+        std::string output;
+        ASSERT_TRUE(pmWriteMeiToString(score, true, output));
+        const auto tags = collectStartTags(output, "artic");
+        ASSERT_EQ(tags.size(), expected.size());
+        bool preservesAuthoredOffset = false;
+        for (const auto& tag : tags) {
+            const auto center = xmlAttributeValue(tag, "pm:artic-center");
+            const auto anchor = xmlAttributeValue(tag, "pm:artic-anchor-center");
+            ASSERT_TRUE(center.has_value());
+            ASSERT_TRUE(anchor.has_value()) << tag;
+            const auto c = parseCoordinates(*center);
+            const auto a = parseCoordinates(*anchor);
+            ASSERT_EQ(c.size(), 2u);
+            ASSERT_EQ(a.size(), 2u);
+            const auto match = std::find_if(expected.begin(), expected.end(),
+                [&](const auto& reference) {
+                    return std::abs(c[0] - reference[0]) <= 0.00051
+                        && std::abs(c[1] - reference[1]) <= 0.00051
+                        && std::abs(a[0] - reference[2]) <= 0.0000051
+                        && std::abs(a[1] - reference[3]) <= 0.0000051;
+                });
+            ASSERT_NE(match, expected.end()) << tag;
+            preservesAuthoredOffset |= std::abs(c[0] - a[0]) > 0.5 * score->style().spatium() / DPI;
+            expected.erase(match);
+        }
+        EXPECT_TRUE(expected.empty());
+        if (authoredOffsetSp != 0.0) {
+            EXPECT_TRUE(preservesAuthoredOffset);
+        }
+        delete score;
+    }
+}
+
 
 TEST_F(Mei_Tests, mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present) {
     auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
@@ -2229,4 +2605,291 @@ TEST_F(Mei_Tests, mei_tuplet_02) {
 TEST_F(Mei_Tests, mei_tuplet_03) {
     meiReadTest("tuplet-03");
 }
+
+// MEI ending labels are display text, not MuseScore rich-text markup.
+TEST_F(Mei_Tests, mei_ending_label_exports_plain_display_text) {
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"ending-01.mscx", false);
+    ASSERT_TRUE(score);
+    size_t count = 0;
+    for (const auto& entry : score->spannerMap().map()) {
+        if (entry.second->isVolta()) {
+            toVolta(entry.second)->setText(u"<font face=\"Times New Roman\"></font><b>1.</b>");
+            ++count;
+        }
+    }
+    ASSERT_GT(count, 0u);
+    score->setLayoutAll();
+    score->doLayout();
+    const String outputName = u"pianomania-ending-label.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, [](Score* value, const muse::io::path_t& path) -> Err {
+        MeiWriter writer;
+        return writer.writeScore(value, path);
+    }));
+    delete score;
+    const auto endings = collectStartTags(readTestTextFile(outputName), "ending");
+    ASSERT_FALSE(endings.empty());
+    for (const auto& ending : endings) {
+        EXPECT_EQ(xmlAttributeValue(ending, "label"), "1.");
+    }
+}
+
+TEST_F(Mei_Tests, pianomania_staff_centered_dynamic_clears_ledger_accidental) {
+    // A Practice export must not move a staff-centred dynamic through an
+    // accidental protruding into the grand-staff gap after normal autoplace.
+    PianomaniaPrettifyFlagScope flags(true, true);
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false));
+    ASSERT_TRUE(score);
+    Segment* segment = score->firstSegment(SegmentType::ChordRest);
+    ASSERT_TRUE(segment);
+    Chord* chord = toChord(segment->element(0));
+    ASSERT_TRUE(chord);
+    Note* note = chord->upNote();
+    ASSERT_TRUE(note);
+    note->setPitch(54, 20, 20); // F-sharp in the lower ledger region of the treble staff.
+    Dynamic* dynamic = Factory::createDynamic(segment, true);
+    dynamic->setTrack(0);
+    dynamic->setDynamicType(DynamicType::P);
+    dynamic->setCenterBetweenStaves(AutoOnOff::ON);
+    dynamic->setVoiceAssignment(VoiceAssignment::ALL_VOICE_IN_INSTRUMENT);
+    segment->add(dynamic);
+    score->style().set(Sid::dynamicsHairpinsAutoCenterOnGrandStaff, true);
+    score->setLayoutAll();
+    score->doLayout();
+    ASSERT_TRUE(note->accidental());
+    // Align the horizontal attack column while retaining normal vertical
+    // autoplace, as a left-offset dynamic beside a ledger accidental does.
+    dynamic->setOffset(dynamic->offset() + PointF(note->accidental()->pageBoundingRect().center().x() - dynamic->pageBoundingRect().center().x(), 0.0));
+    score->setLayoutAll();
+    score->doLayout();
+    const RectF accidentalBounds = note->accidental()->pageBoundingRect();
+    const RectF dynamicBounds = dynamic->pageBoundingRect();
+    ASSERT_LT(dynamicBounds.left(), accidentalBounds.right());
+    ASSERT_GT(dynamicBounds.right(), accidentalBounds.left());
+    EXPECT_GE(dynamicBounds.top() - accidentalBounds.bottom(), dynamic->minDistance().toMM(dynamic->spatium()) - 0.02 * dynamic->spatium());
+}
+
+
+namespace {
+const String PRACTICE_GEOMETRY_FIXTURE = u"pianomania-ornament-cue-keysig-geometry.mscx";
+
+MasterScore* readLaidOutPracticeGeometryFixture()
+{
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + PRACTICE_GEOMETRY_FIXTURE, false);
+    if (score) {
+        score->setLayoutAll();
+        score->doLayout();
+    }
+    return score;
+}
+
+std::string exportPracticeGeometryFixture(MasterScore* score, const String& outputName)
+{
+    auto exportFunc = [](Score* current, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(current, path);
+    };
+    EXPECT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    return readTestTextFile(outputName);
+}
+
+std::array<double, 2> pageInches(const Score* score, const PointF& pagePoint)
+{
+    return { pagePoint.x() / DPI, score->style().styleD(Sid::pageHeight) - pagePoint.y() / DPI };
+}
+
+std::vector<double> parseNumbers(const std::string& value)
+{
+    std::vector<double> numbers;
+    std::string item;
+    for (char ch : value + ",") {
+        if (ch == ',' || ch == ';') {
+            numbers.push_back(std::strtod(item.c_str(), nullptr));
+            item.clear();
+        } else {
+            item += ch;
+        }
+    }
+    return numbers;
+}
+
+std::string expectedKeySigSymbols(const KeySig* keySig)
+{
+    std::string symbols;
+    for (const KeySym& keySym : keySig->ldata()->keySymbols) {
+        if (!symbols.empty()) {
+            symbols += ' ';
+        }
+        const muse::AsciiStringView name = SymNames::nameForSymId(keySym.sym);
+        char xPos[32];
+        std::snprintf(xPos, sizeof(xPos), "%.3f", keySym.xPos);
+        symbols += std::string(name.ascii(), name.size()) + ":" + xPos + ":" + std::to_string(keySym.line);
+    }
+    return symbols;
+}
+}
+
+// Test value: A trill line exports what it draws: the "tr" glyph centre and the
+// wavy line, not the never-drawn helper ornament; plain ornaments export
+// their glyph centre.
+TEST_F(Mei_Tests, mei_export_trill_and_ornaments_carry_drawn_glyph_geometry) {
+    MasterScore* score = readLaidOutPracticeGeometryFixture();
+    ASSERT_TRUE(score);
+
+    const Trill* trill = nullptr;
+    for (const auto& entry : score->spannerMap().map()) {
+        if (entry.second && entry.second->isTrill()) {
+            trill = toTrill(entry.second);
+        }
+    }
+    ASSERT_TRUE(trill);
+    ASSERT_EQ(trill->nsegments(), 1u);
+    const TrillSegment* segment = toTrillSegment(trill->frontSegment());
+    const SymIdList& symbols = segment->symbols();
+    ASSERT_GE(symbols.size(), 2u);
+    EXPECT_EQ(symbols.front(), SymId::ornamentTrill);
+    const RectF glyph = segment->symBbox(symbols.front()).translated(segment->pagePos());
+    const SymIdList wavySymbols(symbols.begin() + 1, symbols.end());
+    const double penX = score->engravingFont()->advance(symbols.front(), segment->magS());
+    const RectF wavy = segment->symBbox(wavySymbols).translated(segment->pagePos() + PointF(penX, 0.0));
+    const auto glyphCenter = pageInches(score, glyph.center());
+    const auto wavyStart = pageInches(score, PointF(wavy.left(), wavy.center().y()));
+    const auto wavyEnd = pageInches(score, PointF(wavy.right(), wavy.center().y()));
+    const Note* trillNote = toChord(trill->startElement())->notes().front();
+    const double expectedYOffset = (trillNote->pagePos().y() - glyph.center().y()) / trillNote->spatium();
+
+    std::vector<std::array<double, 2>> ornaments;
+    for (Segment* seg = score->firstSegment(SegmentType::ChordRest); seg; seg = seg->next1(SegmentType::ChordRest)) {
+        const EngravingItem* item = seg->element(0);
+        if (!item || !item->isChord()) {
+            continue;
+        }
+        for (const Articulation* articulation : toChord(item)->articulations()) {
+            if (articulation->isOrnament()) {
+                const RectF bounds = articulation->symBbox(articulation->symId()).translated(articulation->pagePos());
+                ornaments.push_back(pageInches(score, bounds.center()));
+            }
+        }
+    }
+    ASSERT_EQ(ornaments.size(), 2u);
+
+    const std::string mei = exportPracticeGeometryFixture(score, u"pianomania-ornament-geometry.test.mei");
+    delete score;
+
+    std::vector<std::string> trillTags;
+    for (const std::string& tag : collectStartTags(mei, "trill ")) {
+        if (xmlAttributeValue(tag, "extender") == "true") {
+            trillTags.push_back(tag);
+        }
+    }
+    ASSERT_EQ(trillTags.size(), 1u);
+    const std::string& tag = trillTags.front();
+    const std::vector<double> xy = parseNumbers(xmlAttributeValue(tag, "pm:xy").value_or(""));
+    ASSERT_EQ(xy.size(), 2u) << tag;
+    EXPECT_NEAR(xy[0], glyphCenter[0], 0.0006) << tag;
+    EXPECT_NEAR(xy[1], glyphCenter[1], 0.0006) << tag;
+    const std::vector<double> line = parseNumbers(xmlAttributeValue(tag, "pm:x1y1x2y2").value_or(""));
+    ASSERT_EQ(line.size(), 4u) << tag;
+    EXPECT_NEAR(line[0], wavyStart[0], 0.0006);
+    EXPECT_NEAR(line[1], wavyStart[1], 0.0006);
+    EXPECT_NEAR(line[2], wavyEnd[0], 0.0006);
+    EXPECT_NEAR(line[3], wavyEnd[1], 0.0006);
+    EXPECT_GT(line[0], xy[0]);
+    EXPECT_GT(line[2], line[0]);
+    EXPECT_EQ(xmlAttributeValue(tag, "pm:segments"), xmlAttributeValue(tag, "pm:x1y1x2y2"));
+    EXPECT_NEAR(xmlAttributeDouble(tag, "yOffset").value_or(-99.0), expectedYOffset, 0.051) << tag;
+
+    std::vector<std::string> ornamentTags = collectStartTags(mei, "mordent ");
+    ASSERT_EQ(ornamentTags.size(), ornaments.size());
+    for (size_t i = 0; i < ornamentTags.size(); ++i) {
+        const std::vector<double> ornamentXY = parseNumbers(xmlAttributeValue(ornamentTags[i], "pm:xy").value_or(""));
+        ASSERT_EQ(ornamentXY.size(), 2u) << ornamentTags[i];
+        EXPECT_NEAR(ornamentXY[0], ornaments[i][0], 0.0006) << ornamentTags[i];
+        EXPECT_NEAR(ornamentXY[1], ornaments[i][1], 0.0006) << ornamentTags[i];
+        EXPECT_TRUE(xmlAttributeValue(ornamentTags[i], "yOffset").has_value());
+    }
+}
+
+// Test value: Small (cue-size) notes, chords and rests are marked @cue so the
+// Practice renderer draws them, and their accidentals, at cue size.
+TEST_F(Mei_Tests, mei_export_small_notes_chords_and_rests_are_cue) {
+    MasterScore* score = readLaidOutPracticeGeometryFixture();
+    ASSERT_TRUE(score);
+    const std::string mei = exportPracticeGeometryFixture(score, u"pianomania-cue.test.mei");
+    delete score;
+
+    size_t cueNotes = 0;
+    size_t plainNotes = 0;
+    for (const std::string& tag : collectStartTags(mei, "note ")) {
+        if (xmlAttributeValue(tag, "cue") == "true") {
+            ++cueNotes;
+        } else {
+            EXPECT_FALSE(xmlAttributeValue(tag, "cue").has_value()) << tag;
+            ++plainNotes;
+        }
+    }
+    EXPECT_EQ(cueNotes, 4u);
+    EXPECT_EQ(plainNotes, 4u);
+
+    const std::vector<std::string> chords = collectStartTags(mei, "chord ");
+    ASSERT_EQ(chords.size(), 1u);
+    EXPECT_EQ(xmlAttributeValue(chords.front(), "cue"), "true");
+
+    size_t cueRests = 0;
+    for (const std::string& tag : collectStartTags(mei, "rest ")) {
+        cueRests += xmlAttributeValue(tag, "cue") == "true" ? 1 : 0;
+    }
+    EXPECT_EQ(cueRests, 1u);
+}
+
+// Test value: Key signatures export the symbols MuseScore laid out, including
+// the cancellation naturals of a system-end courtesy key change.
+TEST_F(Mei_Tests, mei_export_key_signature_symbols_match_layout) {
+    MasterScore* score = readLaidOutPracticeGeometryFixture();
+    ASSERT_TRUE(score);
+
+    Measure* first = score->firstMeasure();
+    ASSERT_TRUE(first && first->nextMeasure());
+    ASSERT_NE(first->system(), first->nextMeasure()->system());
+    const Segment* announce = first->findSegmentR(SegmentType::KeySigAnnounce, first->ticks());
+    ASSERT_TRUE(announce);
+    const std::string courtesyTop = expectedKeySigSymbols(toKeySig(announce->element(0)));
+    const std::string courtesyBottom = expectedKeySigSymbols(toKeySig(announce->element(VOICES)));
+    const Segment* initial = first->findSegment(SegmentType::KeySig, first->tick());
+    ASSERT_TRUE(initial);
+    const std::string initialTop = expectedKeySigSymbols(toKeySig(initial->element(0)));
+    const Segment* change = first->nextMeasure()->findSegment(SegmentType::KeySig, first->nextMeasure()->tick());
+    ASSERT_TRUE(change);
+    const std::string changeTop = expectedKeySigSymbols(toKeySig(change->element(0)));
+
+    const std::string mei = exportPracticeGeometryFixture(score, u"pianomania-keysig-symbols.test.mei");
+    delete score;
+
+    EXPECT_EQ(std::count(courtesyTop.begin(), courtesyTop.end(), ' ') + 1, 8);
+    EXPECT_NE(courtesyTop.find("accidentalNatural:0.000:"), std::string::npos);
+    EXPECT_NE(courtesyTop.find("accidentalFlat:"), std::string::npos);
+
+    const std::vector<std::string> trailers = collectStartTags(mei, "systemTrailer");
+    ASSERT_EQ(trailers.size(), 1u);
+    EXPECT_EQ(xmlAttributeValue(trailers.front(), "pm:keysig-symbols-top"), courtesyTop);
+    EXPECT_EQ(xmlAttributeValue(trailers.front(), "pm:keysig-symbols-bottom"), courtesyBottom);
+
+    bool sawInitial = false;
+    for (const std::string& tag : collectStartTags(mei, "staffDef ")) {
+        if (xmlAttributeValue(tag, "n") == "1" && xmlAttributeValue(tag, "keysig") == "4s") {
+            EXPECT_EQ(xmlAttributeValue(tag, "pm:keysig-symbols"), initialTop) << tag;
+            sawInitial = true;
+        }
+    }
+    EXPECT_TRUE(sawInitial);
+
+    bool sawChange = false;
+    for (const std::string& tag : collectStartTags(mei, "scoreDef ")) {
+        if (xmlAttributeValue(tag, "keysig") == "4f") {
+            EXPECT_EQ(xmlAttributeValue(tag, "pm:keysig-symbols-top"), changeTop) << tag;
+            sawChange = true;
+        }
+    }
+    EXPECT_TRUE(sawChange);
+}
+
 }

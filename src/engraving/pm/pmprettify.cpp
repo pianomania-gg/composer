@@ -14,15 +14,18 @@
 #include "log.h"
 
 #include "../dom/engravingitem.h"
+#include "../dom/expression.h"
 #include "../dom/fingering.h"
 #include "../dom/hairpin.h"
 #include "../dom/measure.h"
 #include "../dom/mscore.h"
 #include "../dom/page.h"
+#include "../dom/part.h"
 #include "../dom/score.h"
 #include "../dom/slur.h"
 #include "../dom/spanner.h"
 #include "../dom/system.h"
+#include "../dom/tempotext.h"
 
 using namespace mu::engraving;
 using namespace mu::engraving::pm;
@@ -61,12 +64,25 @@ struct PianomaniaFingeringTarget
 
 // The transient hairpin-over-slur lift (liftPianomaniaHairpinChainsClearOfSlurs)
 // only exists while the prettify layout flag is on; the replay layout needs the
-// lift persisted as a segment offset. Only y is persisted: x is anchor-driven.
+// lift persisted as a segment offset. X remains anchor-driven.
 struct PianomaniaHairpinSegmentTarget
 {
     Hairpin* hairpin = nullptr;
     size_t segmentIndex = 0;
     double posY = 0.0;
+    bool replayEligible = false;
+};
+
+struct PianomaniaTempoTextTarget
+{
+    TempoText* tempoText = nullptr;
+    PointF pos;
+};
+
+struct PianomaniaExpressionTarget
+{
+    Expression* expression = nullptr;
+    PointF pos;
 };
 
 struct PianomaniaPrettifyTargets
@@ -74,6 +90,8 @@ struct PianomaniaPrettifyTargets
     std::vector<PianomaniaSlurSegmentTarget> slurSegments;
     std::vector<PianomaniaFingeringTarget> fingerings;
     std::vector<PianomaniaHairpinSegmentTarget> hairpinSegments;
+    std::vector<PianomaniaTempoTextTarget> tempoTexts;
+    std::vector<PianomaniaExpressionTarget> expressions;
 };
 
 struct PianomaniaSlurSnapshotEntry
@@ -116,6 +134,32 @@ struct PianomaniaHairpinSnapshotEntry
     size_t segmentIndex = 0;
     PointF offset;
     PropertyFlags offsetFlags = PropertyFlags::STYLED;
+    PointF offset2;
+    PropertyFlags offset2Flags = PropertyFlags::STYLED;
+    OffsetChange offsetChanged = OffsetChange::NONE;
+    PointF changedPos;
+    double spatium = 1.0;
+};
+
+struct PianomaniaTempoTextSnapshotEntry
+{
+    TempoText* tempoText = nullptr;
+    PointF offset;
+    PropertyFlags offsetFlags = PropertyFlags::STYLED;
+    bool autoplace = true;
+    PropertyFlags autoplaceFlags = PropertyFlags::STYLED;
+    OffsetChange offsetChanged = OffsetChange::NONE;
+    PointF changedPos;
+    double spatium = 1.0;
+};
+
+struct PianomaniaExpressionSnapshotEntry
+{
+    Expression* expression = nullptr;
+    PointF offset;
+    PropertyFlags offsetFlags = PropertyFlags::STYLED;
+    bool autoplace = true;
+    PropertyFlags autoplaceFlags = PropertyFlags::STYLED;
     OffsetChange offsetChanged = OffsetChange::NONE;
     PointF changedPos;
     double spatium = 1.0;
@@ -126,6 +170,8 @@ struct PianomaniaPrettifySnapshot
     std::vector<PianomaniaSlurSnapshotEntry> slurSegments;
     std::vector<PianomaniaFingeringSnapshotEntry> fingerings;
     std::vector<PianomaniaHairpinSnapshotEntry> hairpinSegments;
+    std::vector<PianomaniaTempoTextSnapshotEntry> tempoTexts;
+    std::vector<PianomaniaExpressionSnapshotEntry> expressions;
 };
 
 struct PianomaniaStructuralAssignment
@@ -245,7 +291,32 @@ PianomaniaPrettifyTargets collectPianomaniaPrettifyTargets(Score* score)
             if (!segment) {
                 continue;
             }
-            targets.hairpinSegments.push_back(PianomaniaHairpinSegmentTarget { hairpin, i, segment->pos().y() });
+            const bool replayEligible = segment->autoplace() && segment->isStyled(Pid::OFFSET)
+                                        && hairpin->autoplace() && !hairpin->isLineType()
+                                        && hairpin->centerBetweenStaves() != AutoOnOff::OFF
+                                        && segment->placeAbove() && segment->part()
+                                        && segment->part()->nstaves() > 1
+                                        && segment->staff() == segment->part()->staves().back()
+                                        && !segment->ldata()->itemSnappedBefore() && !segment->ldata()->itemSnappedAfter();
+            targets.hairpinSegments.push_back(PianomaniaHairpinSegmentTarget {
+                hairpin, i, segment->pos().y(), replayEligible
+            });
+        }
+    }
+
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            for (EngravingItem* annotation : segment->annotations()) {
+                if (annotation && annotation->isTempoText()) {
+                    targets.tempoTexts.push_back(PianomaniaTempoTextTarget { toTempoText(annotation), annotation->pos() });
+                } else if (annotation && annotation->isExpression()) {
+                    Expression* expression = toExpression(annotation);
+                    if (expression->visible() && expression->autoplace() && expression->isStyled(Pid::OFFSET)
+                        && !expression->snappedDynamic()) {
+                        targets.expressions.push_back(PianomaniaExpressionTarget { expression, expression->pos() });
+                    }
+                }
+            }
         }
     }
 
@@ -315,10 +386,47 @@ PianomaniaPrettifySnapshot collectPianomaniaPrettifySnapshot(Score* score)
             entry.segmentIndex = i;
             entry.offset = segment->offset();
             entry.offsetFlags = segment->propertyFlags(Pid::OFFSET);
+            entry.offset2 = segment->getProperty(Pid::OFFSET2).value<PointF>();
+            entry.offset2Flags = segment->propertyFlags(Pid::OFFSET2);
             entry.offsetChanged = segment->ldata()->offsetChanged();
             entry.changedPos = segment->ldata()->autoplace.changedPos;
             entry.spatium = std::max(1.0, segment->spatium());
             snapshot.hairpinSegments.push_back(entry);
+        }
+    }
+
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            for (EngravingItem* annotation : segment->annotations()) {
+                if (!annotation || !annotation->isTempoText()) {
+                    if (!annotation || !annotation->isExpression()) {
+                        continue;
+                    }
+                    Expression* expression = toExpression(annotation);
+                    snapshot.expressions.push_back(PianomaniaExpressionSnapshotEntry {
+                        expression,
+                        expression->offset(),
+                        expression->propertyFlags(Pid::OFFSET),
+                        expression->autoplace(),
+                        expression->propertyFlags(Pid::AUTOPLACE),
+                        expression->ldata()->offsetChanged(),
+                        expression->ldata()->autoplace.changedPos,
+                        std::max(1.0, expression->spatium())
+                    });
+                    continue;
+                }
+                TempoText* tempoText = toTempoText(annotation);
+                snapshot.tempoTexts.push_back(PianomaniaTempoTextSnapshotEntry {
+                    tempoText,
+                    tempoText->offset(),
+                    tempoText->propertyFlags(Pid::OFFSET),
+                    tempoText->autoplace(),
+                    tempoText->propertyFlags(Pid::AUTOPLACE),
+                    tempoText->ldata()->offsetChanged(),
+                    tempoText->ldata()->autoplace.changedPos,
+                    std::max(1.0, tempoText->spatium())
+                });
+            }
         }
     }
 
@@ -333,7 +441,9 @@ bool pointNear(const PointF& a, const PointF& b, double tolerance)
 bool snapshotsEquivalent(const PianomaniaPrettifySnapshot& a, const PianomaniaPrettifySnapshot& b)
 {
     if (a.slurSegments.size() != b.slurSegments.size() || a.fingerings.size() != b.fingerings.size()
-        || a.hairpinSegments.size() != b.hairpinSegments.size()) {
+        || a.hairpinSegments.size() != b.hairpinSegments.size()
+        || a.tempoTexts.size() != b.tempoTexts.size()
+        || a.expressions.size() != b.expressions.size()) {
         return false;
     }
 
@@ -391,6 +501,38 @@ bool snapshotsEquivalent(const PianomaniaPrettifySnapshot& a, const PianomaniaPr
         if (left.hairpin != right.hairpin
             || left.segmentIndex != right.segmentIndex
             || left.offsetFlags != right.offsetFlags
+            || left.offset2Flags != right.offset2Flags
+            || left.offsetChanged != right.offsetChanged
+            || !pointNear(left.offset, right.offset, tolerance)
+            || !pointNear(left.offset2, right.offset2, tolerance)
+            || !pointNear(left.changedPos, right.changedPos, tolerance)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < a.tempoTexts.size(); ++i) {
+        const PianomaniaTempoTextSnapshotEntry& left = a.tempoTexts[i];
+        const PianomaniaTempoTextSnapshotEntry& right = b.tempoTexts[i];
+        const double tolerance = PIANOMANIA_PRETTIFY_SNAPSHOT_TOLERANCE_SP * left.spatium;
+        if (left.tempoText != right.tempoText
+            || left.offsetFlags != right.offsetFlags
+            || left.autoplace != right.autoplace
+            || left.autoplaceFlags != right.autoplaceFlags
+            || left.offsetChanged != right.offsetChanged
+            || !pointNear(left.offset, right.offset, tolerance)
+            || !pointNear(left.changedPos, right.changedPos, tolerance)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < a.expressions.size(); ++i) {
+        const PianomaniaExpressionSnapshotEntry& left = a.expressions[i];
+        const PianomaniaExpressionSnapshotEntry& right = b.expressions[i];
+        const double tolerance = PIANOMANIA_PRETTIFY_SNAPSHOT_TOLERANCE_SP * left.spatium;
+        if (left.expression != right.expression
+            || left.offsetFlags != right.offsetFlags
+            || left.autoplace != right.autoplace
+            || left.autoplaceFlags != right.autoplaceFlags
             || left.offsetChanged != right.offsetChanged
             || !pointNear(left.offset, right.offset, tolerance)
             || !pointNear(left.changedPos, right.changedPos, tolerance)) {
@@ -460,8 +602,38 @@ void restorePianomaniaPrettifySnapshot(const PianomaniaPrettifySnapshot& snapsho
 
         segment->setProperty(Pid::OFFSET, entry.offset);
         segment->setPropertyFlags(Pid::OFFSET, entry.offsetFlags);
+        segment->setProperty(Pid::OFFSET2, entry.offset2);
+        segment->setPropertyFlags(Pid::OFFSET2, entry.offset2Flags);
         segment->mutldata()->autoplace.offsetChanged = entry.offsetChanged;
         segment->mutldata()->autoplace.changedPos = entry.changedPos;
+    }
+
+    for (const PianomaniaTempoTextSnapshotEntry& entry : snapshot.tempoTexts) {
+        TempoText* tempoText = entry.tempoText;
+        if (!tempoText) {
+            continue;
+        }
+
+        tempoText->setProperty(Pid::OFFSET, entry.offset);
+        tempoText->setPropertyFlags(Pid::OFFSET, entry.offsetFlags);
+        tempoText->setProperty(Pid::AUTOPLACE, entry.autoplace);
+        tempoText->setPropertyFlags(Pid::AUTOPLACE, entry.autoplaceFlags);
+        tempoText->mutldata()->autoplace.offsetChanged = entry.offsetChanged;
+        tempoText->mutldata()->autoplace.changedPos = entry.changedPos;
+    }
+
+    for (const PianomaniaExpressionSnapshotEntry& entry : snapshot.expressions) {
+        Expression* expression = entry.expression;
+        if (!expression) {
+            continue;
+        }
+
+        expression->setProperty(Pid::OFFSET, entry.offset);
+        expression->setPropertyFlags(Pid::OFFSET, entry.offsetFlags);
+        expression->setProperty(Pid::AUTOPLACE, entry.autoplace);
+        expression->setPropertyFlags(Pid::AUTOPLACE, entry.autoplaceFlags);
+        expression->mutldata()->autoplace.offsetChanged = entry.offsetChanged;
+        expression->mutldata()->autoplace.changedPos = entry.changedPos;
     }
 }
 
@@ -606,6 +778,7 @@ void neutralizePianomaniaPrettifyProperties(Score* score, const PmPrettifyOption
                 }
                 if (!segment->offset().isNull() || segment->propertyFlags(Pid::OFFSET) != PropertyFlags::STYLED) {
                     segment->undoChangeProperty(Pid::OFFSET, hairpin->propertyDefault(Pid::OFFSET), PropertyFlags::STYLED);
+                    segment->setOffsetChanged(false);
                 }
             }
         }
@@ -749,9 +922,46 @@ bool applyPianomaniaPrettifyTargetDeltas(const PianomaniaPrettifyTargets& target
         // Replay converges because autoplaceSpannerSegment only ever pushes a
         // segment away from the staff: an away-from-staff offset is preserved
         // verbatim by the next layout.
-        segment->undoChangeProperty(Pid::OFFSET, segment->offset() + PointF(0.0, deltaY), PropertyFlags::UNSTYLED);
+        segment->undoChangeProperty(Pid::OFFSET, segment->offset() + PointF(0.0, deltaY),
+                                    PropertyFlags::UNSTYLED);
         segment->setOffsetChanged(false);
         changed = changed || std::abs(deltaY) > PIANOMANIA_PRETTIFY_CONVERGENCE_SP * sp;
+    }
+
+    for (const PianomaniaTempoTextTarget& target : targets.tempoTexts) {
+        TempoText* tempoText = target.tempoText;
+        if (!tempoText) {
+            continue;
+        }
+
+        const PointF delta = target.pos - tempoText->pos();
+        const double sp = tempoText->spatium();
+        if (std::hypot(delta.x(), delta.y()) <= PIANOMANIA_PRETTIFY_CONVERGENCE_SP * sp) {
+            continue;
+        }
+
+        static_cast<EngravingItem*>(tempoText)->undoChangeProperty(Pid::OFFSET, tempoText->offset() + delta,
+                                                                  PropertyFlags::UNSTYLED);
+        tempoText->setOffsetChanged(false);
+        changed = true;
+    }
+
+    for (const PianomaniaExpressionTarget& target : targets.expressions) {
+        Expression* expression = target.expression;
+        if (!expression) {
+            continue;
+        }
+
+        const PointF delta = target.pos - expression->pos();
+        const double sp = expression->spatium();
+        if (std::hypot(delta.x(), delta.y()) <= PIANOMANIA_PRETTIFY_CONVERGENCE_SP * sp) {
+            continue;
+        }
+
+        static_cast<EngravingItem*>(expression)->undoChangeProperty(Pid::OFFSET, expression->offset() + delta,
+                                                                    PropertyFlags::UNSTYLED);
+        expression->setOffsetChanged(false);
+        changed = true;
     }
 
     return changed;
@@ -812,10 +1022,80 @@ PmPrettifyResult mu::engraving::pm::applyPianomaniaPrettify(Score* score, const 
     MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
 
     restorePianomaniaPrettifySnapshot(neutralSnapshot);
+    std::vector<PianomaniaHairpinSegmentTarget> hairpinTargets;
+    std::vector<PianomaniaHairpinSegmentTarget> ordinaryHairpinTargets;
+    for (const PianomaniaHairpinSegmentTarget& target : prettifyTargets.hairpinSegments) {
+        (target.replayEligible ? hairpinTargets : ordinaryHairpinTargets).push_back(target);
+    }
+    prettifyTargets.hairpinSegments = std::move(ordinaryHairpinTargets);
     applyPianomaniaPrettifyTargetPlacements(prettifyTargets);
     score->setLayoutAll();
     score->doLayout();
     applyPianomaniaPrettifyTargets(score, prettifyTargets);
+
+    if (!hairpinTargets.empty()) {
+        // Hairpins are laid out before some other Prettify-owned obstacles. Derive
+        // their persistent offset only after those obstacle properties have been
+        // replayed, using paired ordinary/flags-on layouts of the same settled
+        // score. This keeps the replay in one coordinate frame and avoids iterative
+        // segment-offset rebasing across repeated Prettify commands.
+        const PianomaniaPrettifySnapshot settledSnapshot = collectPianomaniaPrettifySnapshot(score);
+        std::vector<double> naturalY(hairpinTargets.size(), 0.0);
+        std::vector<double> prettifiedY(hairpinTargets.size(), 0.0);
+        for (const PianomaniaHairpinSegmentTarget& target : hairpinTargets) {
+            if (!target.replayEligible || !target.hairpin || target.segmentIndex >= target.hairpin->nsegments()) {
+                continue;
+            }
+            SpannerSegment* segment = target.hairpin->segmentAt(static_cast<int>(target.segmentIndex));
+            segment->setProperty(Pid::OFFSET, target.hairpin->propertyDefault(Pid::OFFSET));
+            segment->setPropertyFlags(Pid::OFFSET, PropertyFlags::STYLED);
+            segment->setOffsetChanged(false);
+        }
+        score->setLayoutAll();
+        score->doLayout();
+        for (size_t i = 0; i < hairpinTargets.size(); ++i) {
+            const PianomaniaHairpinSegmentTarget& target = hairpinTargets[i];
+            if (target.replayEligible && target.hairpin && target.segmentIndex < target.hairpin->nsegments()) {
+                naturalY[i] = target.hairpin->segmentAt(static_cast<int>(target.segmentIndex))->pos().y();
+            }
+        }
+        MScore::pianomaniaPrettifySlursFingerings = true;
+        score->setLayoutAll();
+        score->doLayout();
+        for (size_t i = 0; i < hairpinTargets.size(); ++i) {
+            const PianomaniaHairpinSegmentTarget& target = hairpinTargets[i];
+            if (target.replayEligible && target.hairpin && target.segmentIndex < target.hairpin->nsegments()) {
+                prettifiedY[i] = target.hairpin->segmentAt(static_cast<int>(target.segmentIndex))->pos().y();
+            }
+        }
+        MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+        restorePianomaniaPrettifySnapshot(settledSnapshot);
+        // The paired measurement layouts leave transient segment positions in
+        // the flags-on frame. Settle the restored properties in the ordinary
+        // frame before recording the persistent delta, otherwise each later
+        // Prettify command can rebase the same offset onto that transient pose.
+        score->setLayoutAll();
+        score->doLayout();
+        for (size_t i = 0; i < hairpinTargets.size(); ++i) {
+            const PianomaniaHairpinSegmentTarget& target = hairpinTargets[i];
+            if (!target.replayEligible || !target.hairpin || target.segmentIndex >= target.hairpin->nsegments()) {
+                continue;
+            }
+            SpannerSegment* segment = target.hairpin->segmentAt(static_cast<int>(target.segmentIndex));
+            const double measuredDeltaY = prettifiedY[i] - naturalY[i];
+            const double deltaY = measuredDeltaY < 0.0
+                                  ? -std::min(0.30 * segment->spatium(), -measuredDeltaY)
+                                  : 0.0;
+            if (std::abs(deltaY) > PIANOMANIA_PRETTIFY_CONVERGENCE_SP * segment->spatium()) {
+                segment->undoChangeProperty(Pid::OFFSET,
+                                            target.hairpin->propertyDefault(Pid::OFFSET).value<PointF>() + PointF(0.0, deltaY),
+                                            PropertyFlags::UNSTYLED);
+                segment->setOffsetChanged(false);
+            }
+        }
+        score->setLayoutAll();
+        score->doLayout();
+    }
 
     const PianomaniaStructuralAssignment structureAfter = pianomaniaStructuralAssignment(score);
     result.structuralAssignmentChanged = !structuralAssignmentsEquivalent(structureBefore, structureAfter);

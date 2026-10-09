@@ -56,6 +56,7 @@
 #include "engraving/dom/harppedaldiagram.h"
 #include "engraving/dom/instrument.h"
 #include "engraving/dom/jump.h"
+#include "engraving/iengravingfont.h"
 #include "engraving/infrastructure/eid.h"
 #include "engraving/dom/keysig.h"
 #include "engraving/dom/laissezvib.h"
@@ -92,6 +93,7 @@
 #include "engraving/rendering/score/systemlayout.h"
 #include "engraving/rendering/score/paint.h"
 #include "engraving/style/style.h"
+#include "engraving/types/symnames.h"
 
 #include "thirdparty/libmei/cmn.h"
 #include "thirdparty/libmei/fingering.h"
@@ -414,6 +416,79 @@ const ChordRest *findExportedRubatoBoundaryAnchor(const Measure *measure,
   return nullptr;
 }
 
+static std::optional<size_t> placedScoreSystemIndex(const Score *score,
+                                                    const System *system) {
+  if (!score || !system) {
+    return std::nullopt;
+  }
+
+  size_t systemIndex = 0;
+  for (const Page *page : score->pages()) {
+    for (const System *pageSystem : page->systems()) {
+      if (pageSystem == system) {
+        // Page::systems is the ownership source. A stale parent Page pointer
+        // cannot make coordinates from a recycled System valid.
+        return system->page() == page ? std::optional<size_t>(systemIndex)
+                                     : std::nullopt;
+      }
+      ++systemIndex;
+    }
+  }
+  return std::nullopt;
+}
+
+struct PlacedHairpinSegment {
+  const HairpinSegment *segment = nullptr;
+  size_t systemIndex = 0;
+};
+
+static std::vector<const HairpinSegment *>
+placedHairpinSegmentsInEndpointRange(const Hairpin *hairpin) {
+  if (!hairpin || !hairpin->score()) {
+    return {};
+  }
+  const Score *score = hairpin->score();
+  Spanner *mutableHairpin = const_cast<Hairpin *>(hairpin);
+  const ChordRest *startAnchor =
+      findExportedSpannerEndpointAnchor(mutableHairpin, true);
+  const ChordRest *endAnchor =
+      findExportedSpannerEndpointAnchor(mutableHairpin, false);
+  const System *startSystem = startAnchor && startAnchor->measure()
+                                  ? startAnchor->measure()->system() : nullptr;
+  const System *endSystem = endAnchor && endAnchor->measure()
+                                ? endAnchor->measure()->system() : nullptr;
+  const auto startIndex = placedScoreSystemIndex(score, startSystem);
+  const auto endIndex = placedScoreSystemIndex(score, endSystem);
+  if (!startIndex.has_value() || !endIndex.has_value() || *startIndex > *endIndex) {
+    LOGE() << "MeiExporter::writeHairpin cannot resolve its endpoint system range";
+    return {};
+  }
+
+  std::vector<PlacedHairpinSegment> accepted;
+  for (const SpannerSegment *segment : hairpin->spannerSegments()) {
+    if (!segment || !segment->isHairpinSegment()) {
+      continue;
+    }
+    const auto index = placedScoreSystemIndex(score, segment->system());
+    if (!index.has_value() || *index < *startIndex || *index > *endIndex) {
+      LOGW() << "MeiExporter::writeHairpin excludes a segment outside its owned endpoint systems";
+      continue;
+    }
+    accepted.push_back({toHairpinSegment(segment), *index});
+  }
+  std::stable_sort(accepted.begin(), accepted.end(),
+                   [](const PlacedHairpinSegment &left,
+                      const PlacedHairpinSegment &right) {
+                     return left.systemIndex < right.systemIndex;
+                   });
+  std::vector<const HairpinSegment *> segments;
+  segments.reserve(accepted.size());
+  for (const PlacedHairpinSegment &entry : accepted) {
+    segments.push_back(entry.segment);
+  }
+  return segments;
+}
+
 std::optional<std::pair<const HairpinSegment *, const System *>>
 resolvedHairpinLayout(const Hairpin *hairpin) {
   if (!hairpin || hairpin->segmentsEmpty()) {
@@ -558,6 +633,37 @@ void MeiExporter::appendCenteredPmPosition(pugi::xml_node node,
   const std::string xyStr = xStr + std::string(",") + yStr;
 
   node.append_attribute("pm:xy") = xyStr.c_str();
+}
+
+/**
+ * Pianomania: the symbols a key signature draws, exactly as laid out
+ * (cancellation naturals included): "<SymIdName>:<xPos>:<line>" entries,
+ * space separated. xPos is in spatium units from the key signature's own
+ * origin (its exported x); line counts half staff spaces down from the top
+ * staff line.
+ */
+std::string MeiExporter::formatKeySigSymbols(const KeySig *keySig) const {
+  std::string symbols;
+  if (!keySig) {
+    return symbols;
+  }
+  for (const KeySym &keySym : keySig->ldata()->keySymbols) {
+    if (!symbols.empty()) {
+      symbols += ' ';
+    }
+    const AsciiStringView name = SymNames::nameForSymId(keySym.sym);
+    symbols += std::string(name.ascii(), name.size()) + ":" +
+               formatDecimalStr(keySym.xPos, 3) + ":" + std::to_string(keySym.line);
+  }
+  return symbols;
+}
+
+void MeiExporter::appendKeySigSymbols(pugi::xml_node node, const char *attributeName,
+                                      const KeySig *keySig) const {
+  const std::string symbols = formatKeySigSymbols(keySig);
+  if (!symbols.empty()) {
+    node.append_attribute(attributeName) = symbols.c_str();
+  }
 }
 
 MeiExporter::TupletDrawnVisibility
@@ -1484,6 +1590,7 @@ bool MeiExporter::writeScoreDef() {
           scoreDefRoot.append_attribute("pm:keysig-xy-top") = xy.c_str();
           // Back-compat alias
           scoreDefRoot.append_attribute("pm:keysig-xy") = xy.c_str();
+          appendKeySigSymbols(scoreDefRoot, "pm:keysig-symbols-top", ksTop);
         }
         if (ksBottom && ksBottom->key() != Key::C) {
           PointF p = ksBottom->pagePos();
@@ -1492,6 +1599,7 @@ bool MeiExporter::writeScoreDef() {
           std::string xy = formatDecimalStr(xIn, 3) + std::string(",") +
                            formatDecimalStr(yIn, 3);
           scoreDefRoot.append_attribute("pm:keysig-xy-bottom") = xy.c_str();
+          appendKeySigSymbols(scoreDefRoot, "pm:keysig-symbols-bottom", ksBottom);
         }
       }
     }
@@ -1707,6 +1815,8 @@ bool MeiExporter::writeScoreDefChange() {
   std::string pmTimeXYBottom;
   std::string pmKeyXYTop;
   std::string pmKeyXYBottom;
+  std::string pmKeySymbolsTop;
+  std::string pmKeySymbolsBottom;
 
   // Single timesig change
   if (scoreDefTimeSig) {
@@ -1754,6 +1864,7 @@ bool MeiExporter::writeScoreDefChange() {
       double yIn = toBottomLeftInches(p.y());
       pmKeyXYTop = formatDecimalStr(xIn, 3) + std::string(",") +
                    formatDecimalStr(yIn, 3);
+      pmKeySymbolsTop = formatKeySigSymbols(ksTop);
     }
     if (ksBottom) {
       PointF p = ksBottom->pagePos();
@@ -1761,6 +1872,7 @@ bool MeiExporter::writeScoreDefChange() {
       double yIn = toBottomLeftInches(p.y());
       pmKeyXYBottom = formatDecimalStr(xIn, 3) + std::string(",") +
                       formatDecimalStr(yIn, 3);
+      pmKeySymbolsBottom = formatKeySigSymbols(ksBottom);
     }
   }
   // Otherwise, add staffGrp/staffDef
@@ -1774,6 +1886,7 @@ bool MeiExporter::writeScoreDefChange() {
       libmei::StaffDef meiStaffDef;
       std::string staffTimeXY;
       std::string staffKeyXY;
+      std::string staffKeySymbols;
       if (!scoreDefTimeSig && m_timeSig) {
         const TimeSig *timeSig = dynamic_cast<const TimeSig *>(
             m_timeSig->element(staff2track(staff)));
@@ -1801,6 +1914,7 @@ bool MeiExporter::writeScoreDefChange() {
           double yIn = toBottomLeftInches(p.y());
           staffKeyXY = formatDecimalStr(xIn, 3) + std::string(",") +
                        formatDecimalStr(yIn, 3);
+          staffKeySymbols = formatKeySigSymbols(keySig);
         }
       }
       meiStaffDef.SetN(static_cast<int>(staff + 1));
@@ -1812,6 +1926,9 @@ bool MeiExporter::writeScoreDefChange() {
       }
       if (!staffKeyXY.empty()) {
         staffDefNode.append_attribute("pm:keysig-xy") = staffKeyXY.c_str();
+      }
+      if (!staffKeySymbols.empty()) {
+        staffDefNode.append_attribute("pm:keysig-symbols") = staffKeySymbols.c_str();
       }
     }
   }
@@ -1836,6 +1953,12 @@ bool MeiExporter::writeScoreDefChange() {
   if (!pmKeyXYBottom.empty()) {
     scoreDefNode.append_attribute("pm:keysig-xy-bottom") =
         pmKeyXYBottom.c_str();
+  }
+  if (!pmKeySymbolsTop.empty()) {
+    scoreDefNode.append_attribute("pm:keysig-symbols-top") = pmKeySymbolsTop.c_str();
+  }
+  if (!pmKeySymbolsBottom.empty()) {
+    scoreDefNode.append_attribute("pm:keysig-symbols-bottom") = pmKeySymbolsBottom.c_str();
   }
 
   return true;
@@ -1907,6 +2030,7 @@ bool MeiExporter::writeStaffDef(const Staff *staff, const Measure *measure,
   // Pianomania coordinate vectors for initial staffDef context (inches)
   std::string pmTimeXY;
   std::string pmKeyXY;
+  std::string pmKeySymbols;
 
   if (isPart) {
     this->writeLabel(staffDefNode, part);
@@ -1970,6 +2094,7 @@ bool MeiExporter::writeStaffDef(const Staff *staff, const Measure *measure,
           double yIn = toBottomLeftInches(p.y());
           pmKeyXY = formatDecimalStr(xIn, 3) + std::string(",") +
                     formatDecimalStr(yIn, 3);
+          pmKeySymbols = formatKeySigSymbols(keySig);
           break;
         }
       }
@@ -1985,6 +2110,9 @@ bool MeiExporter::writeStaffDef(const Staff *staff, const Measure *measure,
   }
   if (!pmKeyXY.empty()) {
     staffDefNode.append_attribute("pm:keysig-xy") = pmKeyXY.c_str();
+  }
+  if (!pmKeySymbols.empty()) {
+    staffDefNode.append_attribute("pm:keysig-symbols") = pmKeySymbols.c_str();
   }
 
   return true;
@@ -2203,6 +2331,20 @@ bool MeiExporter::writeSystemTrailer(const Measure *measure) {
     }
     // keep x-position attribute name as-is
     stNode.append_attribute("keySig-x") = formatDecimalStr(keyX, 3).c_str();
+    // Pianomania: the courtesy key signature as drawn, cancellation naturals
+    // included, for the top and bottom staff of the grand staff.
+    const char *symbolAttributes[] = { "pm:keysig-symbols-top", "pm:keysig-symbols-bottom" };
+    size_t exportedStaff = 0;
+    for (size_t staffIdx = 0; staffIdx < m_score->nstaves() && exportedStaff < 2; ++staffIdx) {
+      if (!shouldExportStaff(m_score->staff(staffIdx))) {
+        continue;
+      }
+      const EngravingItem *element = keySeg->element(staff2track(staffIdx));
+      if (element && element->isKeySig() && element->visible()) {
+        appendKeySigSymbols(stNode, symbolAttributes[exportedStaff], toKeySig(element));
+      }
+      ++exportedStaff;
+    }
   }
   if (hasTimeSig) {
     // Write MEI-like meter attributes
@@ -2819,6 +2961,29 @@ bool MeiExporter::writeArtic(const Articulation *articulation) {
                         formatDecimalStr(ay, 3);
   articNode.append_attribute("pm:xy") = articXY.c_str();
 
+  // A page-space centre is independent of the source font's drawing bearings.
+  if (const auto center = getCenteredInchesFor(articulation); center.has_value()) {
+    const std::string value = formatDecimalStr(center->first, 3) + "," +
+                              formatDecimalStr(center->second, 3);
+    articNode.append_attribute("pm:artic-center") = value.c_str();
+  }
+
+  if (articulationBelongsToChord) {
+    // Preserve the authored horizontal offset from the rendered notehead group
+    // when the Practice display font has different notehead metrics.
+    std::optional<RectF> headBounds;
+    for (const Note *note : visibleNotes(toChord(cr))) {
+      const RectF bounds = note->symBbox(note->noteHead()).translated(note->pagePos());
+      headBounds = headBounds.has_value() ? headBounds->united(bounds) : bounds;
+    }
+    if (headBounds.has_value()) {
+      const PointF anchor = headBounds->center();
+      const std::string value = formatDecimalStr(anchor.x() / DPI, 5) + "," +
+                                formatDecimalStr(toBottomLeftInches(anchor.y()), 5);
+      articNode.append_attribute("pm:artic-anchor-center") = value.c_str();
+    }
+  }
+
   return true;
 }
 
@@ -3062,6 +3227,13 @@ bool MeiExporter::writeChord(const Chord *chord, const Staff *staff) {
     if (chord->dots()) {
       meiChord.SetDots(chord->dots());
     }
+    // Pianomania: a small (cue-size) chord is spaced and drawn at cue size.
+    const bool cueChord = chord->isSmall()
+                          || std::all_of(notesToExport.cbegin(), notesToExport.cend(),
+                                         [](const Note *note) { return note->isSmall(); });
+    if (cueChord) {
+      meiChord.SetCue(libmei::BOOLEAN_true);
+    }
     this->writeBeamTypeAtt(chord, meiChord);
     this->writeStaffIdentAtt(chord, staff, meiChord);
     this->writeStemAtt(chord, meiChord);
@@ -3292,6 +3464,11 @@ bool MeiExporter::writeNote(const Note *note, const Chord *chord,
   }
 
   Convert::colorToMEI(note, meiNote);
+  // Pianomania: a small note (or a note of a small chord) is drawn at cue
+  // size, accidental included.
+  if (note->isSmall() || chord->isSmall()) {
+    meiNote.SetCue(libmei::BOOLEAN_true);
+  }
   std::string xmlId = this->getXmlIdFor(note, 'n');
   meiNote.Write(m_currentNode, xmlId);
   m_noteXmlIdCache[note] = xmlId;
@@ -3442,6 +3619,9 @@ bool MeiExporter::writeRest(const Rest *rest, const Staff *staff) {
     pugi::xml_node mRestNode = m_currentNode.append_child();
     libmei::MRest meiMRest;
     Convert::colorToMEI(rest, meiMRest);
+    if (rest->isSmall()) {
+      meiMRest.SetCue(libmei::BOOLEAN_true);
+    }
     std::string xmlId = this->getXmlIdFor(rest, 'm');
     meiMRest.Write(mRestNode, xmlId);
     this->fillControlEventMap(xmlId, rest);
@@ -3484,6 +3664,9 @@ bool MeiExporter::writeRest(const Rest *rest, const Staff *staff) {
     }
     if (rest->visible()) {
       Convert::colorToMEI(rest, meiRest);
+    }
+    if (rest->isSmall()) {
+      meiRest.SetCue(libmei::BOOLEAN_true);
     }
     this->writeBeamTypeAtt(rest, meiRest);
     this->writeStaffIdentAtt(rest, staff, meiRest);
@@ -4008,12 +4191,12 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
     return this->writeDir(dynamic_cast<const TextLineBase *>(hairpin), startid);
   }
 
-  const auto layout = resolvedHairpinLayout(hairpin);
-  if (!layout.has_value()) {
+  const auto placedSegments = placedHairpinSegmentsInEndpointRange(hairpin);
+  if (placedSegments.empty()) {
     return false;
   }
-  const HairpinSegment *firstSegment = layout->first;
-  const System *hairpinSystem = layout->second;
+  const HairpinSegment *firstSegment = placedSegments.front();
+  const System *hairpinSystem = firstSegment->system();
 
   pugi::xml_node hairpinNode = m_currentNode.append_child();
   libmei::Hairpin meiHairpin = Convert::hairpinToMEI(hairpin);
@@ -4022,7 +4205,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
   // First write all MEI attributes (including xml:id).
   meiHairpin.Write(hairpinNode, this->getXmlIdFor(hairpin, 'h'));
 
-  const double yPos = getHairpinYOffset(hairpin);
+  const double yPos = getHairpinYOffset(hairpin, firstSegment);
   hairpinNode.append_attribute("yOffset") = formatDecimalStr(yPos, 1);
 
   const bool centered = engraving::rendering::score::SystemLayout::
@@ -4037,9 +4220,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
       return std::pair<double, double>(x, y);
     };
 
-    const HairpinSegment *lastSegment = hairpin->backSegment()
-                                             ? toHairpinSegment(hairpin->backSegment())
-                                             : nullptr;
+    const HairpinSegment *lastSegment = placedSegments.back();
 
     if (firstSegment && lastSegment) {
       auto [x1, y1] = makePoint(firstSegment->pagePos());
@@ -4072,7 +4253,7 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
                            formatDecimalStr(y2, 3);
       };
 
-      for (const SpannerSegment *seg : hairpin->spannerSegments()) {
+      for (const SpannerSegment *seg : placedSegments) {
         const HairpinSegment *hairpinSeg = seg->isHairpinSegment()
                                               ? toHairpinSegment(seg)
                                               : nullptr;
@@ -4296,6 +4477,13 @@ bool MeiExporter::writeOrnament(const Ornament *ornament,
 
   double yOffset = getOrnamentYOffset(ornament);
   ornamentNode.append_attribute("yOffset") = formatDecimalStr(yOffset, 1).c_str();
+
+  // Pianomania: the centre of the drawn ornament glyph, so Practice can place
+  // it exactly instead of re-deriving it from yOffset.
+  const RectF glyph = ornament->symBbox(ornament->symId()).translated(ornament->pagePos());
+  const std::string glyphXY = formatDecimalStr(glyph.center().x() / DPI, 3) + "," +
+                              formatDecimalStr(toBottomLeftInches(glyph.center().y()), 3);
+  ornamentNode.append_attribute("pm:xy") = glyphXY.c_str();
 
   return true;
 }
@@ -5024,6 +5212,68 @@ MeiExporter::collectTieContextNotes(const Tie *tie) const {
  * Write a slur.
  */
 
+struct PlacedSlurSegment {
+  const SlurSegment *segment = nullptr;
+  size_t systemIndex = 0;
+};
+
+static std::vector<const SlurSegment *>
+placedSlurSegmentsInEndpointRange(const Score *score, const Slur *slur) {
+  if (!score || !slur) {
+    return {};
+  }
+
+  Spanner *mutableSlur = const_cast<Slur *>(slur);
+  const ChordRest *startAnchor =
+      findExportedSpannerEndpointAnchor(mutableSlur, true);
+  const ChordRest *endAnchor =
+      findExportedSpannerEndpointAnchor(mutableSlur, false);
+  const System *startSystem =
+      startAnchor && startAnchor->measure() ? startAnchor->measure()->system()
+                                            : nullptr;
+  const System *endSystem =
+      endAnchor && endAnchor->measure() ? endAnchor->measure()->system()
+                                        : nullptr;
+  const std::optional<size_t> startIndex =
+      placedScoreSystemIndex(score, startSystem);
+  const std::optional<size_t> endIndex =
+      placedScoreSystemIndex(score, endSystem);
+  if (!startIndex.has_value() || !endIndex.has_value() ||
+      *startIndex > *endIndex) {
+    LOGE() << "MeiExporter::writeSlur cannot resolve the slur endpoint system range";
+    return {};
+  }
+
+  std::vector<PlacedSlurSegment> accepted;
+  for (size_t i = 0; i < slur->nsegments(); ++i) {
+    const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
+    const std::optional<size_t> segmentIndex =
+        placedScoreSystemIndex(score, segment ? segment->system() : nullptr);
+    if (!segmentIndex.has_value()) {
+      LOGW() << "MeiExporter::writeSlur excludes a slur segment without an owning score system";
+      continue;
+    }
+    if (*segmentIndex < *startIndex || *segmentIndex > *endIndex) {
+      LOGW() << "MeiExporter::writeSlur excludes a slur segment outside its endpoint system range";
+      continue;
+    }
+    accepted.push_back({segment, *segmentIndex});
+  }
+
+  std::stable_sort(accepted.begin(), accepted.end(),
+                   [](const PlacedSlurSegment &left,
+                      const PlacedSlurSegment &right) {
+                     return left.systemIndex < right.systemIndex;
+                   });
+
+  std::vector<const SlurSegment *> segments;
+  segments.reserve(accepted.size());
+  for (const PlacedSlurSegment &entry : accepted) {
+    segments.push_back(entry.segment);
+  }
+  return segments;
+}
+
 bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
   IF_ASSERT_FAILED(slur) { return false; }
 
@@ -5050,41 +5300,10 @@ bool MeiExporter::writeSlur(const Slur *slur, const std::string &startid) {
 
   std::vector<const SlurSegment *> exportSegments;
   if (!slur->segmentsEmpty()) {
-    const ChordRest *startCR = dynamic_cast<const ChordRest *>(slur->startElement());
-    const ChordRest *endCR = dynamic_cast<const ChordRest *>(slur->endElement());
-    const Page *startPage = startCR && startCR->measure() && startCR->measure()->system()
-                                ? startCR->measure()->system()->page()
-                                : nullptr;
-    const Page *endPage = endCR && endCR->measure() && endCR->measure()->system()
-                              ? endCR->measure()->system()->page()
-                              : nullptr;
-    const std::vector<Page *> &scorePages = m_score->pages();
-    auto startPageIt = std::find(scorePages.cbegin(), scorePages.cend(), startPage);
-    auto endPageIt = std::find(scorePages.cbegin(), scorePages.cend(), endPage);
-    if (!startPage || !endPage || startPageIt == scorePages.cend()
-        || endPageIt == scorePages.cend() || startPageIt > endPageIt) {
-      LOGE() << "MeiExporter::writeSlur cannot resolve the slur endpoint page range";
-      return false;
-    }
-
-    for (size_t i = 0; i < slur->nsegments(); ++i) {
-      const SlurSegment *segment = slur->segmentAt(static_cast<int>(i));
-      const System *segmentSystem = segment ? segment->system() : nullptr;
-      const Page *segmentPage = segmentSystem ? segmentSystem->page() : nullptr;
-      auto segmentPageIt = std::find(scorePages.cbegin(), scorePages.cend(), segmentPage);
-      if (!segmentPage || segmentPageIt == scorePages.cend()) {
-        LOGW() << "MeiExporter::writeSlur excludes a slur segment without an owning score page";
-        continue;
-      }
-      if (segmentPageIt < startPageIt || segmentPageIt > endPageIt) {
-        LOGW() << "MeiExporter::writeSlur excludes a slur segment outside its endpoint page range";
-        continue;
-      }
-      exportSegments.push_back(segment);
-    }
+    exportSegments = placedSlurSegmentsInEndpointRange(m_score, slur);
 
     if (exportSegments.empty()) {
-      LOGE() << "MeiExporter::writeSlur found no segments inside the slur endpoint page range";
+      LOGE() << "MeiExporter::writeSlur found no segments inside the slur endpoint system range";
       return false;
     }
   }
@@ -5418,9 +5637,64 @@ bool MeiExporter::writeTrill(const Trill *trill, const std::string &startid) {
 
   meiTrill.Write(trillNode, this->getXmlIdFor(trill, 't'));
 
-  if (ornament) {
-    double yOffset = getOrnamentYOffset(ornament);
-    trillNode.append_attribute("yOffset") = formatDecimalStr(yOffset, 1).c_str();
+  // Pianomania: the geometry the trill segments draw. The first segment
+  // starts with its own glyph (the "tr" of an ordinary trill) followed by the
+  // wavy line; later segments draw only the wavy line. trill->ornament() is a
+  // layout helper that is never drawn, so it does not carry this geometry.
+  const std::vector<const SpannerSegment *> placed = segmentsOnScorePages(trill);
+  std::vector<RectF> wavyLines;
+  for (const SpannerSegment *spannerSegment : placed) {
+    if (!spannerSegment->isTrillSegment()) {
+      continue;
+    }
+    const TrillSegment *segment = static_cast<const TrillSegment *>(spannerSegment);
+    const SymIdList &symbols = segment->symbols();
+    if (symbols.empty()) {
+      continue;
+    }
+    const PointF origin = segment->pagePos();
+    const bool drawsStartGlyph = segment == placed.front() && segment->isSingleBeginType();
+    if (drawsStartGlyph) {
+      const RectF glyph = segment->symBbox(symbols.front()).translated(origin);
+      const EngravingItem *startItem = trill->startElement();
+      const ChordRest *anchor = startItem && startItem->isChordRest() ? toChordRest(startItem) : nullptr;
+      const double yOffset = getOrnamentYOffsetFor(anchor, glyph.center().y());
+      trillNode.append_attribute("yOffset") = formatDecimalStr(yOffset, 1).c_str();
+      const std::string glyphXY = formatDecimalStr(glyph.center().x() / DPI, 3) + "," +
+                                  formatDecimalStr(toBottomLeftInches(glyph.center().y()), 3);
+      trillNode.append_attribute("pm:xy") = glyphXY.c_str();
+    }
+    const SymIdList wavySymbols(symbols.begin() + (drawsStartGlyph ? 1 : 0), symbols.end());
+    if (wavySymbols.empty()) {
+      continue;
+    }
+    const double penX = drawsStartGlyph
+                        ? segment->score()->engravingFont()->advance(symbols.front(), segment->magS())
+                        : 0.0;
+    wavyLines.push_back(segment->symBbox(wavySymbols).translated(origin + PointF(penX, 0.0)));
+  }
+
+  if (!wavyLines.empty()) {
+    auto formatLine = [this](const RectF &line) {
+      const std::string y = formatDecimalStr(toBottomLeftInches(line.center().y()), 3);
+      return formatDecimalStr(line.left() / DPI, 3) + "," + y + "," +
+             formatDecimalStr(line.right() / DPI, 3) + "," + y;
+    };
+    const RectF &first = wavyLines.front();
+    const RectF &last = wavyLines.back();
+    const std::string extent = formatDecimalStr(first.left() / DPI, 3) + "," +
+                               formatDecimalStr(toBottomLeftInches(first.center().y()), 3) + "," +
+                               formatDecimalStr(last.right() / DPI, 3) + "," +
+                               formatDecimalStr(toBottomLeftInches(last.center().y()), 3);
+    trillNode.append_attribute("pm:x1y1x2y2") = extent.c_str();
+    std::string segments;
+    for (const RectF &line : wavyLines) {
+      if (!segments.empty()) {
+        segments += ";";
+      }
+      segments += formatLine(line);
+    }
+    trillNode.append_attribute("pm:segments") = segments.c_str();
   }
 
   // Add the node to the map of open control events
@@ -6202,7 +6476,18 @@ double MeiExporter::getOrnamentYOffset(const Ornament *ornament) const {
     return 0.0;
   }
 
-  const ChordRest *anchor = ornament->chordRest();
+  RectF symbolBbox = ornament->symBbox(ornament->symId());
+  symbolBbox = symbolBbox.translated(-0.5 * symbolBbox.width(), 0.0);
+
+  const double ornamentCenterY =
+      ornament->pagePos().y() + symbolBbox.y() + (symbolBbox.height() / 2.0);
+
+  return getOrnamentYOffsetFor(ornament->chordRest(), ornamentCenterY);
+}
+
+// Staff spaces from the anchor chord's first exported note up to a page y.
+double MeiExporter::getOrnamentYOffsetFor(const ChordRest *anchor,
+                                          double glyphCenterPageY) const {
   if (!anchor) {
     return 0.0;
   }
@@ -6231,13 +6516,7 @@ double MeiExporter::getOrnamentYOffset(const Ornament *ornament) const {
     }
   }
 
-  RectF symbolBbox = ornament->symBbox(ornament->symId());
-  symbolBbox = symbolBbox.translated(-0.5 * symbolBbox.width(), 0.0);
-
-  const double ornamentCenterY =
-      ornament->pagePos().y() + symbolBbox.y() + (symbolBbox.height() / 2.0);
-
-  return -(ornamentCenterY - anchorY) / lineDist;
+  return -(glyphCenterPageY - anchorY) / lineDist;
 }
 
 // Calculate y-position in staff spaces relative to the bottom edge of the
@@ -6405,7 +6684,8 @@ double MeiExporter::getFermataYOffset(const Fermata *fermata) {
 // y-position in staff spaces relative to bottom note. Returns a "yOffset"
 // double to the hairpin equal to number of staff spaces between the hairpin and
 // the bottom note of the note/chord.
-double MeiExporter::getHairpinYOffset(const Hairpin *hairpin) {
+double MeiExporter::getHairpinYOffset(
+    const Hairpin *hairpin, const HairpinSegment *firstSegment) {
   if (!hairpin) {
     return 0.0;
   }
@@ -6416,7 +6696,8 @@ double MeiExporter::getHairpinYOffset(const Hairpin *hairpin) {
   // Get the first segment of the hairpin spanner, which contains the actual
   // rendered position after layout and collision detection (same approach as
   // ottava)
-  const SpannerSegment *segment = hairpin->spannerSegments().front();
+  const SpannerSegment *segment =
+      firstSegment ? firstSegment : hairpin->spannerSegments().front();
 
   // Get hairpin's Y position in PAGE coordinates (same as anchor lines use)
   double hairpinY = segment->pagePos().y();

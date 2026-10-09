@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<museScore version="4.70">
+  <Score>
+    <Division>480</Division>
+    <Style><spatium>1.74978</spatium></Style>
+    <metaTag name="workTitle">Pianomania Fingering Fermata Compound Stack</metaTag>
+    <Part id="1">
+      <Staff id="1"><StaffType group="pitched"><name>stdNormal</name></StaffType><bracket type="1" span="2" col="0" visible="1"/><barLineSpan>1</barLineSpan></Staff>
+      <Staff id="2"><StaffType group="pitched"><name>stdNormal</name></StaffType></Staff>
+      <trackName>Piano</trackName>
+      <Instrument id="piano"><longName>Piano</longName><trackName>Acoustic Grand Piano</trackName><instrumentId>keyboard.piano</instrumentId><Channel></Channel></Instrument>
+    </Part>
+    <Staff id="1">
+      <Measure><voice>
+          <Clef><concertClefType>G</concertClefType><transposingClefType>G</transposingClefType><isHeader>1</isHeader></Clef>
+          <TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig>
+          <Fermata><subtype>fermataAbove</subtype></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>1</text></Fingering><pitch>59</pitch><tpc>19</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>2</text></Fingering><pitch>62</pitch><tpc>16</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>5</text></Fingering><pitch>67</pitch><tpc>15</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataAbove</subtype></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>3</text></Fingering><pitch>67</pitch><tpc>15</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataAbove</subtype><offset x="0.4" y="-2.2"/><autoplace>0</autoplace></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>1</text></Fingering><pitch>60</pitch><tpc>14</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>2</text></Fingering><pitch>64</pitch><tpc>18</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>4</text></Fingering><pitch>69</pitch><tpc>17</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataAbove</subtype><offset x="0.6" y="-1.4"/></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>1</text></Fingering><pitch>60</pitch><tpc>14</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>3</text></Fingering><pitch>64</pitch><tpc>18</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>5</text></Fingering><pitch>69</pitch><tpc>17</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Rest><durationType>half</durationType></Rest>
+          <Rest><durationType>quarter</durationType></Rest>
+          <Rest><durationType>eighth</durationType></Rest>
+          <Rest><durationType>16th</durationType></Rest>
+          <Chord><durationType>32nd</durationType><StemDirection>up</StemDirection><Note><pitch>72</pitch><tpc>14</tpc></Note></Chord>
+          <Fermata><subtype>fermataAbove</subtype></Fermata>
+          <Chord><durationType>32nd</durationType><StemDirection>up</StemDirection>
+            <Note><Fingering><text>1</text></Fingering><pitch>72</pitch><tpc>14</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>3</text></Fingering><pitch>76</pitch><tpc>18</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+            <Note><Fingering><text>5</text></Fingering><pitch>79</pitch><tpc>15</tpc><pianomaniaHand>2</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+    </Staff>
+    <Staff id="2">
+      <Measure><voice>
+          <Clef><concertClefType>F</concertClefType><transposingClefType>F</transposingClefType><isHeader>1</isHeader></Clef>
+          <TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig>
+          <Fermata><subtype>fermataBelow</subtype><placement>below</placement></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>5</text><placement>below</placement></Fingering><pitch>43</pitch><tpc>15</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+            <Note><Fingering><text>2</text><placement>below</placement></Fingering><pitch>47</pitch><tpc>19</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+            <Note><Fingering><text>1</text><placement>below</placement></Fingering><pitch>52</pitch><tpc>14</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataBelow</subtype><placement>below</placement></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>4</text><placement>below</placement></Fingering><pitch>43</pitch><tpc>15</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataBelow</subtype><offset x="-0.4" y="2.2"/><autoplace>0</autoplace><placement>below</placement></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><pitch>43</pitch><tpc>15</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice>
+          <Fermata><subtype>fermataBelow</subtype><offset x="-0.6" y="1.4"/><placement>below</placement></Fermata>
+          <Chord><durationType>whole</durationType>
+            <Note><Fingering><text>5</text><placement>below</placement></Fingering><pitch>43</pitch><tpc>15</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+            <Note><Fingering><text>3</text><placement>below</placement></Fingering><pitch>47</pitch><tpc>19</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+            <Note><Fingering><text>1</text><placement>below</placement></Fingering><pitch>52</pitch><tpc>14</tpc><pianomaniaHand>1</pianomaniaHand></Note>
+          </Chord>
+        </voice>
+      </Measure>
+      <Measure><voice><Rest><durationType>whole</durationType></Rest></voice></Measure>
+    </Staff>
+  </Score>
+</museScore>
