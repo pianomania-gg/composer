@@ -1788,6 +1788,82 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringPlacementStaysWithinNoteheadC
     delete score;
 }
 
+// Test value: Moonlight m29/m46/m57. A beamed lower-voice digit stranded
+// across the staff body (above the upper voice's rests) or past its own beam
+// is seated in the stem-side pocket instead: just under its notehead, beside
+// the down-stem, clear of the beam and off the staff lines. Every digit of a
+// beam moves together, and the seat survives a second Prettify.
+TEST_F(Engraving_PianomaniaPrettifyTests, strandedBeamedDigitsNestleInStemSidePocket)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-stem-side-nestle.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    const StructuralAssignment structure = captureStructuralAssignment(score);
+    const PrettifySnapshot original = capturePrettifySnapshot(score);
+    ASSERT_EQ(original.fingerings.size(), 6);
+    std::vector<const Note*> owners;
+    for (const FingeringSnapshotEntry& entry : original.fingerings) {
+        owners.push_back(entry.fingering->note());
+    }
+
+    auto assertNestled = [&]() {
+        EXPECT_EQ(structure, captureStructuralAssignment(score));
+        for (size_t i = 0; i < original.fingerings.size(); ++i) {
+            const Fingering* fingering = original.fingerings[i].fingering;
+            const std::string label = fingering->plainText().toStdString();
+            ASSERT_EQ(fingering->note(), owners[i]) << label;
+            const Chord* chord = fingering->note()->chord();
+            const Beam* beam = chord->beam();
+            const Stem* stem = chord->stem();
+            ASSERT_TRUE(beam && stem) << label;
+            ASSERT_FALSE(chord->up()) << label;
+            const Measure* measure = chord->measure();
+            const System* system = measure->system();
+            const double sp = fingering->spatium();
+            const double staffTop = staffYInSystem(system, chord->vStaffIdx());
+            const double staffBottom = staffTop + chord->staff()->staffHeight(chord->tick());
+
+            EXPECT_EQ(fingering->placement(), PlacementV::BELOW) << label;
+            const RectF digitRect = fingeringSystemRect(fingering);
+            const RectF noteRect = noteSystemRect(fingering->note());
+            const RectF stemRect = stem->ldata()->bbox().translated(
+                PointF(0.0, staffTop) + stem->pos() + chord->pos() + chord->segment()->pos() + measure->pos());
+
+            // Just under its own notehead, off the staff lines.
+            EXPECT_GE(digitRect.top(), noteRect.bottom() + 0.15 * sp - 1e-3) << label;
+            EXPECT_LE(digitRect.top() - noteRect.bottom(), 1.5 * sp + 1e-3) << label;
+            EXPECT_GE(digitRect.top(), staffBottom + 0.1 * sp - 1e-3) << label;
+            // Beside the down-stem rather than under it, still under the notehead.
+            EXPECT_GE(digitRect.left(), stemRect.right() + 0.25 * sp - 1e-3) << label;
+            EXPECT_LT(digitRect.left(), noteRect.right()) << label;
+            // Above the drawn beam band with structural clearance.
+            const PointF beamOrigin = beam->pagePos() - system->pagePos();
+            for (const BeamSegment* beamSegment : beam->beamSegments()) {
+                const PointF start = beamSegment->line.p1() + beamOrigin;
+                const PointF end = beamSegment->line.p2() + beamOrigin;
+                for (double x : { digitRect.left(), digitRect.center().x(), digitRect.right() }) {
+                    if (x < std::min(start.x(), end.x()) || x > std::max(start.x(), end.x())) {
+                        continue;
+                    }
+                    const double centerY = start.y() + (end.y() - start.y()) * (x - start.x()) / (end.x() - start.x());
+                    EXPECT_GE(centerY - 0.5 * beam->beamWidth(), digitRect.bottom() + 0.25 * sp - 1e-3) << label;
+                }
+            }
+        }
+    };
+
+    const auto result = applyPrettifyCommand(score);
+    EXPECT_TRUE(result.changed);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+    assertNestled();
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    assertNestled();
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, detachedFingeringRescueClearsRealStaffBoundaryAndPersists)
 {
     const String fixture = u"pianomania_prettify_data/detached-fingering-real-staff-boundary.mscx";
