@@ -92,6 +92,8 @@ std::unordered_map<Sid, PropertyValue> mu::engraving::pm::pianomaniaStyleValues(
         // A tuplet number is taller than a staff space, so inside the staff it
         // always crosses a line. Keep numbers and brackets outside the staff.
         { Sid::tupletOutOfStaff, true },
+        // Key changes print only the new key; naturals appear only when returning to C major / A minor.
+        { Sid::keySigNaturals, int(KeySigNatural::NONE) },
 
         { Sid::akkoladeDistance, Spatium(6.5) },
         { Sid::staffDistance, Spatium(6.5) },
