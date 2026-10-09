@@ -32,6 +32,7 @@
 
 #include <QFontDatabase>
 
+#include "engraving/dom/accidental.h"
 #include "engraving/dom/articulation.h"
 #include "engraving/dom/barline.h"
 #include "engraving/dom/bracketItem.h"
@@ -50,6 +51,7 @@
 #include "engraving/dom/measure.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/ottava.h"
 #include "engraving/dom/page.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/rest.h"
@@ -1786,6 +1788,82 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringPlacementStaysWithinNoteheadC
     delete score;
 }
 
+// Test value: Moonlight m29/m46/m57. A beamed lower-voice digit stranded
+// across the staff body (above the upper voice's rests) or past its own beam
+// is seated in the stem-side pocket instead: just under its notehead, beside
+// the down-stem, clear of the beam and off the staff lines. Every digit of a
+// beam moves together, and the seat survives a second Prettify.
+TEST_F(Engraving_PianomaniaPrettifyTests, strandedBeamedDigitsNestleInStemSidePocket)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-stem-side-nestle.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    const StructuralAssignment structure = captureStructuralAssignment(score);
+    const PrettifySnapshot original = capturePrettifySnapshot(score);
+    ASSERT_EQ(original.fingerings.size(), 6);
+    std::vector<const Note*> owners;
+    for (const FingeringSnapshotEntry& entry : original.fingerings) {
+        owners.push_back(entry.fingering->note());
+    }
+
+    auto assertNestled = [&]() {
+        EXPECT_EQ(structure, captureStructuralAssignment(score));
+        for (size_t i = 0; i < original.fingerings.size(); ++i) {
+            const Fingering* fingering = original.fingerings[i].fingering;
+            const std::string label = fingering->plainText().toStdString();
+            ASSERT_EQ(fingering->note(), owners[i]) << label;
+            const Chord* chord = fingering->note()->chord();
+            const Beam* beam = chord->beam();
+            const Stem* stem = chord->stem();
+            ASSERT_TRUE(beam && stem) << label;
+            ASSERT_FALSE(chord->up()) << label;
+            const Measure* measure = chord->measure();
+            const System* system = measure->system();
+            const double sp = fingering->spatium();
+            const double staffTop = staffYInSystem(system, chord->vStaffIdx());
+            const double staffBottom = staffTop + chord->staff()->staffHeight(chord->tick());
+
+            EXPECT_EQ(fingering->placement(), PlacementV::BELOW) << label;
+            const RectF digitRect = fingeringSystemRect(fingering);
+            const RectF noteRect = noteSystemRect(fingering->note());
+            const RectF stemRect = stem->ldata()->bbox().translated(
+                PointF(0.0, staffTop) + stem->pos() + chord->pos() + chord->segment()->pos() + measure->pos());
+
+            // Just under its own notehead, off the staff lines.
+            EXPECT_GE(digitRect.top(), noteRect.bottom() + 0.15 * sp - 1e-3) << label;
+            EXPECT_LE(digitRect.top() - noteRect.bottom(), 1.5 * sp + 1e-3) << label;
+            EXPECT_GE(digitRect.top(), staffBottom + 0.1 * sp - 1e-3) << label;
+            // Beside the down-stem rather than under it, still under the notehead.
+            EXPECT_GE(digitRect.left(), stemRect.right() + 0.25 * sp - 1e-3) << label;
+            EXPECT_LT(digitRect.left(), noteRect.right()) << label;
+            // Above the drawn beam band with structural clearance.
+            const PointF beamOrigin = beam->pagePos() - system->pagePos();
+            for (const BeamSegment* beamSegment : beam->beamSegments()) {
+                const PointF start = beamSegment->line.p1() + beamOrigin;
+                const PointF end = beamSegment->line.p2() + beamOrigin;
+                for (double x : { digitRect.left(), digitRect.center().x(), digitRect.right() }) {
+                    if (x < std::min(start.x(), end.x()) || x > std::max(start.x(), end.x())) {
+                        continue;
+                    }
+                    const double centerY = start.y() + (end.y() - start.y()) * (x - start.x()) / (end.x() - start.x());
+                    EXPECT_GE(centerY - 0.5 * beam->beamWidth(), digitRect.bottom() + 0.25 * sp - 1e-3) << label;
+                }
+            }
+        }
+    };
+
+    const auto result = applyPrettifyCommand(score);
+    EXPECT_TRUE(result.changed);
+    EXPECT_FALSE(result.structuralAssignmentChanged);
+    assertNestled();
+    const auto repeated = applyPrettifyCommand(score);
+    EXPECT_FALSE(repeated.changed);
+    assertNestled();
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, detachedFingeringRescueClearsRealStaffBoundaryAndPersists)
 {
     const String fixture = u"pianomania_prettify_data/detached-fingering-real-staff-boundary.mscx";
@@ -3378,6 +3456,21 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
         }
     };
 
+    // The reported pair was 0.3sp apart only because the source's dragged end
+    // grips survived Auto Layout. Auto Layout now resets them, so recreate the
+    // tight mouths with an automatic end offset to give Prettify a pair to
+    // separate.
+    constexpr double reportedGapSp = 0.30;
+    auto tightenReportedPair = [&](MasterScore* score, std::array<HairpinSegment*, 2>& pair) {
+        for (HairpinSegment* segment : pair) {
+            EXPECT_TRUE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+        }
+        const double naturalGapSp = gapSp(pair);
+        EXPECT_GE(naturalGapSp, 0.60 - 0.001);
+        pair[0]->setProperty(Pid::OFFSET2, PointF((naturalGapSp - reportedGapSp) * pair[0]->spatium(), 0.0));
+        relayoutScore(score);
+    };
+
     const String reportedFixture = u"pianomania_prettify_data/grieg-op12-no1-facing-hairpins.mscz";
     MasterScore* score = ScoreRW::readScore(reportedFixture);
     ASSERT_TRUE(score);
@@ -3392,7 +3485,9 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     ASSERT_EQ(hairpins[0]->tick2(), hairpins[1]->tick());
     std::array<HairpinSegment*, 2> pair = segments(hairpins);
     ASSERT_TRUE(pair[0] && pair[1]);
-    EXPECT_NEAR(gapSp(pair), 0.30, 0.001);
+    tightenReportedPair(score, pair);
+    pair = segments(reportedGriegPair(score));
+    EXPECT_NEAR(gapSp(pair), reportedGapSp, 0.001);
     const double ordinaryFarEndX = graphicalHairpinRight(pair[1]);
     delete score;
 
@@ -3402,6 +3497,9 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
     MScore::pianomaniaForceNormalizeSlursFingerings = true;
     mu::engraving::pm::applyPianomaniaAutoLayout(score);
     relayoutScore(score);
+    pair = segments(reportedGriegPair(score));
+    ASSERT_TRUE(pair[0] && pair[1]);
+    tightenReportedPair(score, pair);
     mu::engraving::pm::PmPrettifyOptions reportedOptions;
     reportedOptions.forceNormalizeManual = true;
     applyPrettifyCommand(score, reportedOptions);
@@ -3524,4 +3622,341 @@ TEST_F(Engraving_PianomaniaPrettifyTests, prettifySeparatesAutomaticFacingHairpi
         delete excluded;
     }
     MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+}
+
+namespace {
+// The flags the Practice exporter lays out with.
+struct PracticeExportFlags {
+    bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+
+    PracticeExportFlags()
+    {
+        MScore::pianomaniaPrettifySlursFingerings = true;
+        MScore::pianomaniaForceNormalizeSlursFingerings = true;
+    }
+
+    ~PracticeExportFlags()
+    {
+        MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+        MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+    }
+};
+
+MasterScore* readAutoLaidOut(const String& fixture)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/" + fixture);
+    if (score) {
+        mu::engraving::pm::applyPianomaniaAutoLayout(score);
+        relayoutScore(score);
+    }
+    return score;
+}
+
+std::vector<Chord*> collectChords(Score* score)
+{
+    std::vector<Chord*> chords;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(SegmentType::ChordRest); segment; segment = segment->next(SegmentType::ChordRest)) {
+            for (EngravingItem* item : segment->elist()) {
+                if (item && item->isChord()) {
+                    chords.push_back(toChord(item));
+                }
+            }
+        }
+    }
+    return chords;
+}
+
+std::vector<RectF> crossStaffBeamPageRects(Score* score)
+{
+    std::set<const Beam*> beams;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->beam() && chord->beam()->cross()) {
+            beams.insert(chord->beam());
+        }
+    }
+    std::vector<RectF> rects;
+    for (const Beam* beam : beams) {
+        for (const RectF& rect : beam->shape().translated(beam->pagePos()).toRects()) {
+            rects.push_back(rect);
+        }
+    }
+    return rects;
+}
+
+// Noteheads and accidentals of one staff (cross-staff notes count where they are drawn).
+std::vector<RectF> notePageRects(Score* score, staff_idx_t vStaffIdx)
+{
+    std::vector<RectF> rects;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->vStaffIdx() != vStaffIdx) {
+            continue;
+        }
+        for (Note* note : chord->notes()) {
+            rects.push_back(note->pageBoundingRect());
+            if (note->accidental() && note->accidental()->visible()) {
+                rects.push_back(note->accidental()->pageBoundingRect());
+            }
+        }
+    }
+    return rects;
+}
+
+double staffLinePageY(const System* system, staff_idx_t staffIdx, int line, const Fraction& tick)
+{
+    const Staff* staff = system->score()->staff(staffIdx);
+    return system->pagePos().y() + system->staff(staffIdx)->y() + line * staff->lineDistance(tick) * staff->spatium(tick);
+}
+
+std::vector<PointF> hairpinPagePoints(const HairpinSegment* segment)
+{
+    std::vector<PointF> points;
+    for (size_t i = 0; i < 4; ++i) {
+        points.push_back(segment->pagePos() + segment->ldata()->points[i]);
+    }
+    return points;
+}
+}
+
+// Test value: Auto Layout returns a hairpin end grip dragged before the last
+// note of its span, and a dragged ottava hook, to their automatic placement.
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutResetsDraggedLineEndsAndOttavaHooks)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/line-end-and-ottava-hook-normalization.mscx");
+    ASSERT_TRUE(score);
+    std::vector<Hairpin*> hairpins = collectHairpins(score);
+    ASSERT_EQ(hairpins.size(), 1u);
+    Hairpin* hairpin = hairpins.front();
+    Ottava* ottava = nullptr;
+    for (const auto& pair : score->spanner()) {
+        if (pair.second && pair.second->isOttava()) {
+            ottava = toOttava(pair.second);
+        }
+    }
+    ASSERT_TRUE(ottava);
+    ASSERT_FALSE(hairpin->spannerSegments().empty());
+    EXPECT_FALSE(hairpin->frontSegment()->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+    EXPECT_EQ(ottava->propertyFlags(Pid::END_HOOK_HEIGHT), PropertyFlags::UNSTYLED);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    HairpinSegment* segment = toHairpinSegment(hairpin->frontSegment());
+    ASSERT_TRUE(segment);
+    EXPECT_TRUE(segment->getProperty(Pid::OFFSET2).value<PointF>().isNull());
+    const Measure* first = score->firstMeasure();
+    double lastNoteRight = -std::numeric_limits<double>::max();
+    for (Chord* chord : collectChords(score)) {
+        if (chord->measure() == first && chord->staffIdx() == 0) {
+            for (Note* note : chord->notes()) {
+                lastNoteRight = std::max(lastNoteRight, note->pageBoundingRect().right());
+            }
+        }
+    }
+    const Segment* endBarline = first->findSegment(SegmentType::EndBarLine, first->endTick());
+    ASSERT_TRUE(endBarline);
+    EXPECT_GT(graphicalHairpinRight(segment), lastNoteRight);
+    EXPECT_LT(graphicalHairpinRight(segment), endBarline->pageX());
+
+    EXPECT_TRUE(ottava->isStyled(Pid::END_HOOK_HEIGHT));
+    EXPECT_EQ(ottava->getProperty(Pid::END_HOOK_HEIGHT), ottava->propertyDefault(Pid::END_HOOK_HEIGHT));
+    EXPECT_EQ(ottava->getProperty(Pid::BEGIN_HOOK_HEIGHT), ottava->propertyDefault(Pid::BEGIN_HOOK_HEIGHT));
+
+    delete score;
+}
+
+// Test value: A staccato on the stem side of a beamed note centres on the
+// notehead (Gurlitt Op. 101 No. 8), not halfway towards the stem.
+TEST_F(Engraving_PianomaniaPrettifyTests, stemSideStaccatosCentreOnTheirNoteheads)
+{
+    MasterScore* score = readAutoLaidOut(u"stem-side-staccatos-under-beams.mscx");
+    ASSERT_TRUE(score);
+
+    auto stemSideStaccatoOffsets = [](Score* current) {
+        std::vector<double> offsets;
+        for (Chord* chord : collectChords(current)) {
+            for (Articulation* articulation : chord->articulations()) {
+                if (!articulation->isStaccato() || articulation->up() != chord->up() || !chord->stem()) {
+                    continue;
+                }
+                const Note* head = chord->up() ? chord->downNote() : chord->upNote();
+                offsets.push_back((articulation->pageBoundingRect().center().x() - head->pageBoundingRect().center().x())
+                                  / articulation->spatium());
+            }
+        }
+        return offsets;
+    };
+
+    const std::vector<double> centred = stemSideStaccatoOffsets(score);
+    ASSERT_GE(centred.size(), 2u);
+    for (double offset : centred) {
+        EXPECT_NEAR(offset, 0.0, 0.02);
+    }
+
+    // The fixture exercises the rule: halfway alignment moves every mark.
+    score->style().set(Sid::articulationStemHAlign, int(ArticulationStemSideAlign::AVERAGE));
+    relayoutScore(score);
+    for (double offset : stemSideStaccatoOffsets(score)) {
+        EXPECT_GT(std::abs(offset), 0.1);
+    }
+
+    delete score;
+}
+
+// Test value: A tuplet number on the beam side never straddles a staff line
+// (Chopin Op. 9 No. 1 m3 "11"); the source's tuplets-inside-the-staff style
+// put it across the bottom line.
+TEST_F(Engraving_PianomaniaPrettifyTests, beamSideTupletNumberStaysOffStaffLines)
+{
+    MasterScore* score = readAutoLaidOut(u"beam-side-tuplet-number.mscx");
+    ASSERT_TRUE(score);
+
+    auto straddlingNumbers = [](Score* current) {
+        size_t straddling = 0;
+        size_t numbers = 0;
+        for (Tuplet* tuplet : collectTuplets(current)) {
+            const Text* number = tuplet->number();
+            if (!number || !number->visible() || number->ldata()->isSkipDraw() || tuplet->cross()) {
+                continue;
+            }
+            const System* system = tuplet->measure()->system();
+            const RectF bounds = number->pageBoundingRect();
+            ++numbers;
+            const int lines = current->staff(tuplet->staffIdx())->lines(tuplet->tick());
+            for (int line = 0; line < lines; ++line) {
+                const double y = staffLinePageY(system, tuplet->staffIdx(), line, tuplet->tick());
+                if (bounds.top() < y && bounds.bottom() > y) {
+                    ++straddling;
+                    break;
+                }
+            }
+        }
+        return std::make_pair(numbers, straddling);
+    };
+
+    const auto [numbers, straddling] = straddlingNumbers(score);
+    ASSERT_GE(numbers, 1u);
+    EXPECT_EQ(straddling, 0u);
+
+    // The fixture exercises the rule: tuplets inside the staff cross a line.
+    score->style().set(Sid::tupletOutOfStaff, false);
+    relayoutScore(score);
+    EXPECT_GE(straddlingNumbers(score).second, 1u);
+
+    delete score;
+}
+
+// Test value: A centred dynamic in the grand-staff gap clears a cross-staff
+// beam rising from the lower staff (Beethoven Op. 27 No. 2 m5 "pp").
+TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredDynamicClearsCrossStaffBeam)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"staff-centered-dynamic-cross-staff-beam.mscx");
+    ASSERT_TRUE(score);
+
+    const std::vector<Dynamic*> dynamics = collectAnnotations<Dynamic>(score, &EngravingObject::isDynamic);
+    ASSERT_EQ(dynamics.size(), 1u);
+    const Dynamic* dynamic = dynamics.front();
+    const RectF bounds = dynamic->pageBoundingRect();
+    const std::vector<RectF> beams = crossStaffBeamPageRects(score);
+    ASSERT_FALSE(beams.empty());
+    for (const RectF& beam : beams) {
+        EXPECT_FALSE(rectsOverlap(bounds, beam));
+    }
+    for (staff_idx_t staffIdx : { staff_idx_t(0), staff_idx_t(1) }) {
+        for (const RectF& head : notePageRects(score, staffIdx)) {
+            EXPECT_FALSE(rectsOverlap(bounds, head));
+        }
+    }
+    const System* system = dynamic->segment()->measure()->system();
+    EXPECT_GT(bounds.top(), staffLinePageY(system, 0, 4, dynamic->tick()));
+    EXPECT_LT(bounds.bottom(), staffLinePageY(system, 1, 0, dynamic->tick()));
+
+    delete score;
+}
+
+// Test value: Centred hairpins under cross-staff beams sit below the beams and
+// cross only the lower staff's stems (C. P. E. Bach H. 220 m7-8).
+TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredHairpinsSitBelowCrossStaffBeams)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"staff-centered-hairpins-cross-staff-beams.mscx");
+    ASSERT_TRUE(score);
+
+    const std::vector<RectF> beams = crossStaffBeamPageRects(score);
+    ASSERT_FALSE(beams.empty());
+    size_t checked = 0;
+    for (Hairpin* hairpin : collectHairpins(score)) {
+        for (SpannerSegment* spannerSegment : hairpin->spannerSegments()) {
+            const HairpinSegment* segment = toHairpinSegment(spannerSegment);
+            const std::vector<PointF> points = hairpinPagePoints(segment);
+            double left = std::numeric_limits<double>::max();
+            double right = -left;
+            double top = std::numeric_limits<double>::max();
+            double bottom = -top;
+            for (const PointF& point : points) {
+                left = std::min(left, point.x());
+                right = std::max(right, point.x());
+                top = std::min(top, point.y());
+                bottom = std::max(bottom, point.y());
+            }
+            for (const RectF& beam : beams) {
+                if (beam.right() <= left || beam.left() >= right) {
+                    continue;
+                }
+                EXPECT_GT(top, beam.bottom());
+            }
+            EXPECT_LT(bottom, staffLinePageY(segment->system(), 1, 0, hairpin->tick()));
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 2u);
+
+    delete score;
+}
+
+// Test value: A long slur passing over a chord clears the accent that a shorter
+// slur ending on that chord pushed outside itself (Chopin Op. 9 No. 1 m30).
+TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsMarkMovedOutsideShorterSlur)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"slur-over-mark-outside-short-slur.mscx");
+    ASSERT_TRUE(score);
+
+    Slur* longSlur = nullptr;
+    for (const auto& pair : score->spanner()) {
+        Slur* slur = pair.second && pair.second->isSlur() ? toSlur(pair.second) : nullptr;
+        if (slur && slur->staffIdx() == 0 && (!longSlur || slur->ticks() > longSlur->ticks())) {
+            longSlur = slur;
+        }
+    }
+    ASSERT_TRUE(longSlur);
+    ASSERT_EQ(longSlur->nsegments(), 1u);
+    SlurSegment* slurSegment = longSlur->frontSegment();
+
+    size_t checked = 0;
+    for (Chord* chord : collectChords(score)) {
+        if (chord->tick() <= longSlur->tick() || chord->tick() >= longSlur->tick2() || chord->staffIdx() != 0) {
+            continue;
+        }
+        for (Articulation* accent : chord->articulations()) {
+            if (!accent->isAccent() || accent->up() != longSlur->up()) {
+                continue;
+            }
+            const double spatium = accent->spatium();
+            Shape accentShape(Shape::Type::Composite);
+            accentShape.add(accent->shape().translated(accent->pagePos()));
+            accentShape.add(accent->ldata()->bbox().translated(accent->pagePos()));
+            Shape slurShape = slurSegment->shape().translated(slurSegment->pagePos());
+            slurShape.add(sampledPathShape(slurSegment->ldata()->path(), slurSegment->pagePos()));
+            const double clearance = longSlur->up() ? slurShape.verticalClearance(accentShape, 0.0)
+                                     : accentShape.verticalClearance(slurShape, 0.0);
+            EXPECT_GE(clearance, 0.1 * spatium);
+            ++checked;
+        }
+    }
+    EXPECT_GE(checked, 1u);
+
+    delete score;
 }

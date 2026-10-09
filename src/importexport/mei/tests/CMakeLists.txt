@@ -70,7 +70,10 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_articulation_centres_match_native_rendered_bounds:"
     "Mei_Tests.mei_export_articulation_centres_preserve_native_notehead_anchors:"
     "Mei_Tests.mei_export_wedge_keeps_only_owned_endpoint_system_geometry:"
-    "Mei_Tests.pianomania_staff_centered_dynamic_clears_ledger_accidental"
+    "Mei_Tests.pianomania_staff_centered_dynamic_clears_ledger_accidental:"
+    "Mei_Tests.mei_export_trill_and_ornaments_carry_drawn_glyph_geometry:"
+    "Mei_Tests.mei_export_small_notes_chords_and_rests_are_cue:"
+    "Mei_Tests.mei_export_key_signature_symbols_match_layout"
 )
 
 add_test(
@@ -84,5 +87,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*31 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*34 tests"
 )

@@ -991,11 +991,31 @@ void resetPianomaniaItemPlacement(EngravingItem* item)
     changed = resetPianomaniaPlacementProperty(item, Pid::AUTOPLACE) || changed;
     changed = resetPianomaniaPlacementProperty(item, Pid::MIN_DISTANCE) || changed;
     if (item->isSpannerSegment()) {
-        changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET2) || changed;
+        // A dragged end grip (a hairpin pulled back before the last note of
+        // its span) is an OFFSET2 offset. It has no property default, so reset
+        // it the way SpannerSegment::reset() does.
+        SpannerSegment* segment = toSpannerSegment(item);
+        if (!segment->userOff2().isNull() || segment->propertyFlags(Pid::OFFSET2) == PropertyFlags::UNSTYLED) {
+            segment->undoChangeProperty(Pid::OFFSET2, PropertyValue::fromValue(PointF()), PropertyFlags::NOSTYLE);
+            changed = true;
+        }
     }
     if (changed) {
         item->setOffsetChanged(false);
     }
+}
+
+// A dragged ottava hook keeps the length it was given against the source
+// layout, so a re-cast system draws it far past the notes. The hook heights go
+// back to the style.
+void resetPianomaniaLineHookPlacement(Spanner* spanner)
+{
+    if (!spanner->isOttava() || spanner->generated()) {
+        return;
+    }
+
+    resetPianomaniaPlacementProperty(spanner, Pid::BEGIN_HOOK_HEIGHT);
+    resetPianomaniaPlacementProperty(spanner, Pid::END_HOOK_HEIGHT);
 }
 
 bool isPianomaniaPlacementOwnedSpanner(const Spanner* spanner)
@@ -1090,6 +1110,7 @@ void resetPianomaniaManualPlacement(MasterScore* score)
         if (!spanner || !isPianomaniaPlacementOwnedSpanner(spanner)) {
             continue;
         }
+        resetPianomaniaLineHookPlacement(spanner);
         for (SpannerSegment* spannerSegment : spanner->spannerSegments()) {
             resetPianomaniaItemPlacement(spannerSegment);
         }
