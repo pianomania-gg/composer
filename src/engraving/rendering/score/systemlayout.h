@@ -202,6 +202,7 @@ private:
     static bool whammyBarShouldBeCenteredBetweenStaves(const WhammyBarSegment* wbar, const System* system);
     static bool elementHasAnotherStackedOutside(const EngravingItem* element, const Shape& elementShape, const SkylineLine& skylineLine);
     static void centerElementBetweenStaves(EngravingItem* element, const System* system);
+    static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerMMRestBetweenStaves(MMRest* mmRest, const System* system);
 
     static bool shouldBeJustified(System* system, double curSysWidth, double targetSystemWidth, LayoutContext& ctx);

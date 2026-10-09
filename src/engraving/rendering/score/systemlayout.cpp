@@ -6557,6 +6557,260 @@ void SystemLayout::updateSkylineForElement(EngravingItem* element, const System*
     }
 }
 
+namespace {
+// Items snapped into one chain (a dynamic and the expression after it, a
+// cresc. that ends where the dim. starts) are aligned together.
+std::vector<EngravingItem*> staffCenteredSnappingChain(EngravingItem* item, const System* system)
+{
+    std::vector<EngravingItem*> chain;
+    std::set<const EngravingItem*> seen { item };
+    EngravingItem* start = item;
+    while (EngravingItem* before = start->ldata()->itemSnappedBefore()) {
+        if (before->findAncestor(ElementType::SYSTEM) != system || !seen.insert(before).second) {
+            break;
+        }
+        start = before;
+    }
+
+    seen = { start };
+    for (EngravingItem* link = start; link;) {
+        chain.push_back(link);
+        EngravingItem* after = link->ldata()->itemSnappedAfter();
+        link = after && after->findAncestor(ElementType::SYSTEM) == system && seen.insert(after).second ? after : nullptr;
+    }
+    return chain;
+}
+
+// What a between-staves item draws, in its own coordinates. A wedge is
+// sliced so that its thin end can pass close to a beam its mouth would hit.
+std::vector<RectF> staffCenteredItemRects(const EngravingItem* item)
+{
+    std::vector<RectF> rects;
+    if (item->isHairpinSegment()) {
+        const HairpinSegment* segment = toHairpinSegment(item);
+        const HairpinSegment::LayoutData* ldata = segment->ldata();
+        if (!segment->hairpin()->isLineType() && ldata->npoints == 4 && segment->text()->empty() && segment->endText()->empty()) {
+            const LineF upper(ldata->points[0], ldata->points[1]);
+            const LineF lower(ldata->points[2], ldata->points[3]);
+            const double left = std::min(upper.x1(), lower.x1());
+            const double right = std::max(upper.x2(), lower.x2());
+            const double halfWidth = 0.5 * segment->absoluteFromSpatium(segment->style().styleS(Sid::hairpinLineWidth));
+            const double sliceWidth = segment->spatium();
+            const int slices = std::max(1, static_cast<int>(std::ceil((right - left) / sliceWidth)));
+            auto yAt = [](const LineF& line, double x) {
+                const double dx = line.x2() - line.x1();
+                return muse::RealIsNull(dx) ? line.y1() : line.y1() + (x - line.x1()) * (line.y2() - line.y1()) / dx;
+            };
+            for (int i = 0; i < slices; ++i) {
+                const double x1 = left + (right - left) * i / slices;
+                const double x2 = left + (right - left) * (i + 1) / slices;
+                const double top = std::min({ yAt(upper, x1), yAt(upper, x2), yAt(lower, x1), yAt(lower, x2) }) - halfWidth;
+                const double bottom = std::max({ yAt(upper, x1), yAt(upper, x2), yAt(lower, x1), yAt(lower, x2) }) + halfWidth;
+                rects.emplace_back(x1, top, x2 - x1, bottom - top);
+            }
+            return rects;
+        }
+    }
+
+    const Shape shape = item->ldata()->shape();
+    for (const ShapeElement& element : shape.elements()) {
+        if (!element.ignoreForLayout()) {
+            rects.push_back(element);
+        }
+    }
+    return rects;
+}
+
+bool belongsToStaffCenteredChain(const std::vector<EngravingItem*>& chain, const EngravingItem* item)
+{
+    for (const EngravingItem* member : chain) {
+        if (item == member || item->parentItem() == member) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct VerticalInterval {
+    double from = 0.0;
+    double to = 0.0;
+};
+
+// The vertical moves that keep every rect of the chain clear of every
+// obstacle by `clearance`, inside [minMove, maxMove].
+std::vector<VerticalInterval> staffCenteredFreeMoves(const std::vector<RectF>& chainRects, const std::vector<RectF>& obstacles,
+                                                     double minMove, double maxMove, double clearance)
+{
+    std::vector<VerticalInterval> blocked;
+    for (const RectF& rect : chainRects) {
+        for (const RectF& obstacle : obstacles) {
+            if (rect.right() <= obstacle.left() || rect.left() >= obstacle.right()) {
+                continue;
+            }
+            blocked.push_back({ obstacle.top() - rect.bottom() - clearance, obstacle.bottom() - rect.top() + clearance });
+        }
+    }
+    std::sort(blocked.begin(), blocked.end(), [](const VerticalInterval& a, const VerticalInterval& b) { return a.from < b.from; });
+
+    std::vector<VerticalInterval> free;
+    double cursor = minMove;
+    for (const VerticalInterval& interval : blocked) {
+        if (interval.to <= cursor) {
+            continue;
+        }
+        if (interval.from >= maxMove) {
+            break;
+        }
+        if (interval.from > cursor) {
+            free.push_back({ cursor, interval.from });
+        }
+        cursor = interval.to;
+    }
+    if (cursor <= maxMove) {
+        free.push_back({ cursor, maxMove });
+    }
+    return free;
+}
+}
+
+// Skylines leave out cross-staff beams and include stems, so centering can
+// park a between-staves item on a beam that crosses the gap, or on notes of
+// the other staff. A chain that overlaps a beam or a note in the gap moves,
+// as a unit, to the middle of the roomiest clear band between the staves.
+// Stems are not obstacles: crossing a stem is unavoidable where beams cross
+// the gap. Fingerings are placed around the centred items afterwards, so
+// their skyline rects are not final here.
+void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system)
+{
+    constexpr double CLEARANCE_SP = 0.25;
+    constexpr double OVERLAP_TOLERANCE_SP = 0.05;
+
+    std::set<const EngravingItem*> handled;
+    for (EngravingItem* item : centeredItems) {
+        if (handled.count(item)) {
+            continue;
+        }
+        const std::vector<EngravingItem*> chain = staffCenteredSnappingChain(item, system);
+        handled.insert(chain.begin(), chain.end());
+
+        const bool isAbove = item->placeAbove();
+        const staff_idx_t thisIdx = item->staffIdx();
+        bool uniform = true;
+        for (const EngravingItem* member : chain) {
+            uniform = uniform && member->staffIdx() == thisIdx && member->placeAbove() == isAbove;
+        }
+        const staff_idx_t nextIdx = isAbove ? system->prevVisibleStaff(thisIdx) : system->nextVisibleStaff(thisIdx);
+        if (!uniform || nextIdx == muse::nidx) {
+            continue;
+        }
+
+        const SysStaff* thisStaff = system->staff(thisIdx);
+        const SysStaff* nextStaff = system->staff(nextIdx);
+        if (!thisStaff || !nextStaff) {
+            continue;
+        }
+
+        // Work in the item's own staff frame (system x, staff-relative y).
+        const double yStaffDiff = nextStaff->y() - thisStaff->y();
+        const Fraction tick = item->tick();
+        const double upperStaffBottom = isAbove ? yStaffDiff + system->score()->staff(nextIdx)->staffHeight(tick)
+                                        : system->score()->staff(thisIdx)->staffHeight(tick);
+        const double lowerStaffTop = isAbove ? 0.0 : yStaffDiff;
+
+        std::vector<RectF> chainRects;
+        double chainTop = DBL_MAX;
+        double chainBottom = -DBL_MAX;
+        for (const EngravingItem* member : chain) {
+            if (!member->visible()) {
+                continue;
+            }
+            const PointF origin(member->pageX() - system->pageX(), member->y());
+            for (const RectF& memberRect : staffCenteredItemRects(member)) {
+                const RectF rect = memberRect.translated(origin);
+                chainRects.push_back(rect);
+                chainTop = std::min(chainTop, rect.top());
+                chainBottom = std::max(chainBottom, rect.bottom());
+            }
+        }
+        if (chainRects.empty()) {
+            continue;
+        }
+
+        std::vector<RectF> obstacles;
+        auto collectSkyline = [&](const SkylineLine& line, double yShift) {
+            for (const ShapeElement& element : line.elements()) {
+                const EngravingItem* obstacleItem = element.item();
+                if (obstacleItem && (!obstacleItem->visible() || obstacleItem->isStem() || obstacleItem->isFingering()
+                                     || belongsToStaffCenteredChain(chain, obstacleItem)
+                                     || Autoplace::itemsShouldIgnoreEachOther(item, obstacleItem))) {
+                    continue;
+                }
+                obstacles.push_back(element.translated(PointF(0.0, yShift)));
+            }
+        };
+        collectSkyline(isAbove ? thisStaff->skyline().north() : thisStaff->skyline().south(), 0.0);
+        collectSkyline(isAbove ? nextStaff->skyline().south() : nextStaff->skyline().north(), yStaffDiff);
+
+        // Cross-staff beams are in no skyline.
+        std::set<const Beam*> crossBeams;
+        for (const MeasureBase* mb : system->measures()) {
+            if (!mb->isMeasure()) {
+                continue;
+            }
+            for (const Segment& segment : toMeasure(mb)->segments()) {
+                if (!segment.isChordRestType()) {
+                    continue;
+                }
+                for (EngravingItem* element : segment.elist()) {
+                    if (!element || !element->isChordRest()) {
+                        continue;
+                    }
+                    const staff_idx_t staffIdx = element->staffIdx();
+                    const Beam* beam = toChordRest(element)->beam();
+                    if (beam && beam->cross() && beam->visible() && (staffIdx == thisIdx || staffIdx == nextIdx)) {
+                        crossBeams.insert(beam);
+                    }
+                }
+            }
+        }
+        const PointF staffOrigin = system->pagePos() + PointF(0.0, thisStaff->y());
+        for (const Beam* beam : crossBeams) {
+            const PointF beamOrigin = beam->pagePos() - staffOrigin;
+            const Shape beamShape = beam->shape();
+            for (const ShapeElement& element : beamShape.elements()) {
+                obstacles.push_back(element.translated(beamOrigin));
+            }
+        }
+
+        const double spatium = item->spatium();
+        const double minMove = upperStaffBottom - chainTop;
+        const double maxMove = lowerStaffTop - chainBottom;
+        if (!staffCenteredFreeMoves(chainRects, obstacles, 0.0, 0.0, -OVERLAP_TOLERANCE_SP * spatium).empty()) {
+            continue; // nothing overlaps where the chain is now
+        }
+
+        std::vector<VerticalInterval> free = staffCenteredFreeMoves(chainRects, obstacles, minMove, maxMove, CLEARANCE_SP * spatium);
+        if (free.empty()) {
+            free = staffCenteredFreeMoves(chainRects, obstacles, minMove, maxMove, 0.0);
+        }
+        if (free.empty()) {
+            continue;
+        }
+
+        const VerticalInterval* roomiest = &free.front();
+        for (const VerticalInterval& interval : free) {
+            if (interval.to - interval.from > roomiest->to - roomiest->from) {
+                roomiest = &interval;
+            }
+        }
+        const double yMove = 0.5 * (roomiest->from + roomiest->to);
+        for (EngravingItem* member : chain) {
+            member->mutldata()->moveY(yMove);
+            updateSkylineForElement(member, system, yMove);
+        }
+    }
+}
+
 void SystemLayout::centerElementsBetweenStaves(const System* system)
 {
     std::vector<EngravingItem*> centeredItems;
@@ -6591,6 +6845,7 @@ void SystemLayout::centerElementsBetweenStaves(const System* system)
     }
 
     AlignmentLayout::alignStaffCenteredItems(centeredItems, system);
+    clearStaffCenteredItemsOfNotation(centeredItems, system);
 }
 
 void SystemLayout::centerBigTimeSigsAcrossStaves(const System* system)
