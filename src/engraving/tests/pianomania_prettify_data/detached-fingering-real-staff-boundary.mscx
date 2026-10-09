@@ -1,0 +1,350 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<museScore version="4.50">
+  <programVersion>4.6.0</programVersion>
+  <programRevision/>
+  <Score>
+    <eid>fGAO13UUSfD_l0av9D49dPJ</eid>
+    <Division>480</Division>
+    <showInvisible>1</showInvisible>
+    <showUnprintable>1</showUnprintable>
+    <showFrames>1</showFrames>
+    <showMargins>0</showMargins>
+    <open>1</open>
+    <metaTag name="arranger"/>
+    <metaTag name="audioComUrl"/>
+    <metaTag name="composer">P. Tchaikovsky</metaTag>
+    <metaTag name="copyright"/>
+    <metaTag name="creationDate">2023-01-08</metaTag>
+    <metaTag name="lyricist"/>
+    <metaTag name="movementNumber"/>
+    <metaTag name="movementTitle"/>
+    <metaTag name="platform">Apple Macintosh</metaTag>
+    <metaTag name="source">http://musescore.com/user/36226131/scores/9438670</metaTag>
+    <metaTag name="sourceRevisionId"/>
+    <metaTag name="subtitle">Subtitle</metaTag>
+    <metaTag name="translator"/>
+    <metaTag name="workNumber"/>
+    <metaTag name="workTitle">Detached fingering real staff boundary fixture</metaTag>
+    <Order id="orchestral">
+      <name>Orchestral</name>
+      <instrument id="piano">
+        <family id="keyboards">Keyboards</family>
+        </instrument>
+      <section id="woodwind" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>flutes</family>
+        <family>oboes</family>
+        <family>clarinets</family>
+        <family>saxophones</family>
+        <family>bassoons</family>
+        <unsorted group="woodwinds"/>
+        </section>
+      <section id="brass" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>horns</family>
+        <family>trumpets</family>
+        <family>cornets</family>
+        <family>flugelhorns</family>
+        <family>trombones</family>
+        <family>tubas</family>
+        </section>
+      <section id="timpani" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>timpani</family>
+        </section>
+      <section id="percussion" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>keyboard-percussion</family>
+        <family>drums</family>
+        <family>unpitched-metal-percussion</family>
+        <family>unpitched-wooden-percussion</family>
+        <family>other-percussion</family>
+        </section>
+      <family>keyboards</family>
+      <family>harps</family>
+      <family>organs</family>
+      <family>synths</family>
+      <soloists/>
+      <section id="voices" brackets="true" barLineSpan="false" thinBrackets="true">
+        <family>voices</family>
+        <family>voice-groups</family>
+        </section>
+      <section id="strings" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>orchestral-strings</family>
+        </section>
+      <unsorted/>
+      </Order>
+    <Part id="1">
+      <Staff id="1">
+        <StaffType group="pitched">
+          <name>stdNormal</name>
+          </StaffType>
+        <bracket type="1" span="2" col="0" visible="1"/>
+        <barLineSpan>1</barLineSpan>
+        </Staff>
+      <Staff id="2">
+        <StaffType group="pitched">
+          <name>stdNormal</name>
+          </StaffType>
+        <defaultClef>F</defaultClef>
+        </Staff>
+      <trackName>Piano 1</trackName>
+      <Instrument id="piano">
+        <longName>Piano 1</longName>
+        <shortName>Pno. 1</shortName>
+        <trackName>Piano</trackName>
+        <minPitchP>21</minPitchP>
+        <maxPitchP>108</maxPitchP>
+        <minPitchA>21</minPitchA>
+        <maxPitchA>108</maxPitchA>
+        <instrumentId>keyboard.piano</instrumentId>
+        <clef staff="2">F</clef>
+        <Channel>
+          <program value="0"/>
+          <synti>Fluid</synti>
+          </Channel>
+        </Instrument>
+      </Part>
+    <Staff id="1">
+      <Measure>
+        <eid>Zt5MFizgUMF_ubqJvQDHaPK</eid>
+        <voice>
+          <TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><Chord>
+            <eid>J2JryBoGwoD_KKqvG6NZV5P</eid>
+            <dots>1</dots>
+            <durationType>eighth</durationType>
+            <Articulation>
+              <subtype>articAccentAbove</subtype>
+              <anchor>0</anchor>
+              <eid>RVKbN1l61/I_AWxzIBMiGQH</eid>
+              </Articulation>
+            <Note>
+              <eid>udL77U8VM0F_o6kCL/frvSC</eid>
+              <Fingering>
+                <eid>u3w4f9Ey1CM_eIuHU+fPRtD</eid>
+                <text>4</text>
+                </Fingering>
+              <pitch>66</pitch>
+              <tpc>20</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>O/qZ4FSvdyD_c9gHiOfmA8E</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>Zw+MObCelGK_rqoJtL8haOP</eid>
+              <Fingering>
+                <eid>vSQXLiZlWyG_CEkdIv7SiwD</eid>
+                <text>2</text>
+                </Fingering>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>Y4X7CHCaUNI_o9fqosI5/xP</eid>
+            <durationType>quarter</durationType>
+            <Note>
+              <eid>xZvX9gpY/vN_rIKdHCXexKH</eid>
+              <Fingering>
+                <eid>0rsI59FtjWO_8dYPVLgl5zK</eid>
+                <offset x="1.63469" y="4.43519"/>
+                <text>1-5</text>
+                </Fingering>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Clef>
+            <concertClefType>F</concertClefType>
+            <transposingClefType>F</transposingClefType>
+            <eid>z5B1MtcCH+O_8Ae+v+PvndO</eid>
+            </Clef>
+          <Chord>
+            <eid>zRJqulNvonJ_u1gKSHsZrHI</eid>
+            <durationType>eighth</durationType>
+            <Spanner type="Slur">
+              <Slur>
+                <eid>ZLGWTy5udPD_3YtKQHe/S0G</eid>
+                <up>up</up>
+                </Slur>
+              <next>
+                <location>
+                  <fractions>1/8</fractions>
+                  </location>
+                </next>
+              </Spanner>
+            <Note>
+              <eid>hk9rYSP3+UI_3FfpX+tsfXP</eid>
+              <Fingering>
+                <eid>y+IxiHKZq/C_bgsJREFgrjN</eid>
+                <text>4</text>
+                </Fingering>
+              <pitch>59</pitch>
+              <tpc>19</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>qqO5+PdJKjN_6PffXVXVOmP</eid>
+            <durationType>eighth</durationType>
+            <Spanner type="Slur">
+              <prev>
+                <location>
+                  <fractions>-1/8</fractions>
+                  </location>
+                </prev>
+              </Spanner>
+            <Note>
+              <eid>mVfOBliV6mG_uD7VWgM0tvJ</eid>
+              <pitch>57</pitch>
+              <tpc>17</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          </voice>
+        <voice>
+          <Chord>
+            <eid>zjcURaeHHkP_JzI2eXA1srN</eid>
+            <dots>1</dots>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>VJO2MRoY1TO_qki3F5ixZDH</eid>
+              <Fingering>
+                <eid>WAzsbYzF93E_JdJU5seXEtO</eid>
+                <text>2</text>
+                </Fingering>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>ElROvf6zzqB_I3YDN/H3loH</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>rz1jKY/AV6C_A6bpw8g0K6G</eid>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>RbYWlyqL4OD_RtIMYpZt03F</eid>
+            <durationType>quarter</durationType>
+            <Note>
+              <eid>kJjSnJM6xvE_KHzFOB9vj4I</eid>
+              <pitch>60</pitch>
+              <tpc>14</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>v8OU4xDmfmJ_/1M6/Xcyq/N</eid>
+            <durationType>quarter</durationType>
+            <Note>
+              <eid>+ShUo/edSrC_r5RZLRxbK/G</eid>
+              <Fingering>
+                <eid>nlKIVQXYvlM_aDNl+oWAbXH</eid>
+                <text>2</text>
+                </Fingering>
+              <pitch>54</pitch>
+              <tpc>20</tpc>
+              <pianomaniaHand>2</pianomaniaHand>
+              </Note>
+            </Chord>
+          </voice>
+        </Measure>
+      </Staff>
+    <Staff id="2">
+      <Measure>
+        <voice>
+          <Chord>
+            <eid>QKNGSMe8PwM_epnjmvvDTYM</eid>
+            <dots>1</dots>
+            <durationType>half</durationType>
+            <Articulation>
+              <subtype>articAccentAbove</subtype>
+              <eid>868WIzlA4xD_k2NFuWaJ0vK</eid>
+              </Articulation>
+            <Note>
+              <eid>cJmD5Zt3i0K_tcJBTnPVHbM</eid>
+              <Accidental>
+                <subtype>accidentalFlat</subtype>
+                <eid>AcERrot8dYK_sx1MTXT2/zG</eid>
+                </Accidental>
+              <Fingering>
+                <eid>NlyCphnfDJO_kjIokhomLPJ</eid>
+                <text>1</text>
+                </Fingering>
+              <pitch>51</pitch>
+              <tpc>11</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          </voice>
+        <voice>
+          <Chord>
+            <eid>NfLKCiQW4vC_s2kIdv3vti</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>y7SOlbs4tUE_PatHJh+unQI</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>U1NNKOZwqqE_VfhV9zYv/KH</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>S9NbY6wzv4B_m2H20x0SOOD</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>54WqMmW/aOC_7K2AraDL+RN</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>RLcq2F8tA6K_V61T23fFX4H</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>ziZWwIqt9cJ_aSnAkn96OaB</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>zTM2ocXDegM_fSNOnELsVPL</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>shgCpVzymtN_BI8N7mmmeMI</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>uj8PWD8Vlu_BH4SRPh3ZxC</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          <Chord>
+            <eid>YdOKiFzOVUI_f7aP9+wfHPF</eid>
+            <durationType>eighth</durationType>
+            <Note>
+              <eid>16mU3u5ZPHJ_S9kZSNydU5D</eid>
+              <pitch>43</pitch>
+              <tpc>15</tpc>
+              <pianomaniaHand>1</pianomaniaHand>
+              </Note>
+            </Chord>
+          </voice>
+        </Measure>
+      </Staff>
+    </Score>
+  </museScore>

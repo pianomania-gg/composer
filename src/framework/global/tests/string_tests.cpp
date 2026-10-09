@@ -376,6 +376,26 @@ TEST_F(Global_Types_StringTests, String_Trimmed)
         //! CHECK
         EXPECT_EQ(newStr, u"123abc");
     }
+
+    for (const String& accidental : { String(u"\u266D"), String(u"\u266E"), String(u"\u266F") }) {
+        EXPECT_EQ(accidental.trimmed(), accidental);
+        EXPECT_EQ((String(u" \t") + accidental + String(u"\t ")).trimmed(), accidental);
+    }
+
+    EXPECT_EQ(String(u"\u00A0\u2009text\u2009\u00A0").trimmed(), u"text");
+    EXPECT_EQ(String(u"\u0109").trimmed(), u"\u0109");
+
+    for (char16_t whitespace : {
+             u'\u0009', u'\u000A', u'\u000B', u'\u000C', u'\u000D', u'\u0020', u'\u0085', u'\u00A0', u'\u1680',
+             u'\u2000', u'\u2001', u'\u2002', u'\u2003', u'\u2004', u'\u2005', u'\u2006', u'\u2007', u'\u2008',
+             u'\u2009', u'\u200A', u'\u2028', u'\u2029', u'\u202F', u'\u205F', u'\u3000'
+         }) {
+        EXPECT_TRUE(Char::isSpace(whitespace));
+    }
+    EXPECT_FALSE(Char::isSpace(u'\u0109'));
+    EXPECT_FALSE(Char::isSpace(u'\u266D'));
+    EXPECT_FALSE(Char::isSpace(u'\u266E'));
+    EXPECT_FALSE(Char::isSpace(u'\u266F'));
 }
 
 TEST_F(Global_Types_StringTests, String_Split)

@@ -33,6 +33,7 @@
 #include "realfn.h"
 
 #include "style/defaultstyle.h"
+#include "types/symnames.h"
 
 #include "dom/articulation.h"
 #include "dom/barline.h"
@@ -148,6 +149,10 @@ constexpr double PM_FINGERING_DESPERATE_MOVE = 1.4;
 constexpr double PM_FINGERING_NOTEHEAD_DETACHMENT_CAP = 3.0;
 constexpr double PM_TEXT_HAIRPIN_NOTATION_CLEARANCE = 0.25;
 constexpr double PM_TEXT_HAIRPIN_MIN_OVERLAP = 0.05;
+
+constexpr std::array<double, 12> PM_FINGERING_HORIZONTAL_CANDIDATES_SP = {
+    -0.5, 0.5, -1.0, 1.0, -1.5, 1.5, -2.0, 2.0, -2.5, 2.5, -3.0, 3.0
+};
 
 struct GroupPlacement {
     double dx = 0.0;
@@ -1648,13 +1653,12 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
     const double noteheadDetachment = fingeringRectDistanceFromNoteheads(rect, ctx.noteheadRect, ctx.above);
     if (muse::RealIsNull(dx) && ctx.allowTuck
         && noteheadDetachment > PM_FINGERING_NOTEHEAD_DETACHMENT_CAP * sp) {
-        const double staffIntrusion = PM_FINGERING_TUCK_STAFF_INTRUSION * sp;
         auto clearsPocketAt = [&](double drop) {
             const RectF candidate = movedAway(rect, -drop);
             return requiredVerticalMoveFromNotationRect(candidate, ctx.noteDangerRect, ctx.above,
                                                             PM_FINGERING_NOTE_CLEARANCE_MIN * sp) <= 0.0
-                   && requiredVerticalMoveFromStaff(candidate, ctx.staffTop + staffIntrusion,
-                                                    ctx.staffBottom - staffIntrusion, ctx.above,
+                   && requiredVerticalMoveFromStaff(candidate, ctx.staffTop,
+                                                    ctx.staffBottom, ctx.above,
                                                     PM_FINGERING_STAFF_CLEARANCE_MIN * sp) <= 0.0
                    && requiredVerticalMoveFromMarkObstacles(candidate, *ctx.obstacles, ctx.staffIdx, ctx.above,
                                                             PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0
@@ -1797,13 +1801,10 @@ GroupPlacement chooseFingeringGroupPlacement(const RectF& groupRect, const Finge
         return centered;
     }
 
-    const std::array<double, 12> xCandidates = { -0.5 * sp, 0.5 * sp, -1.0 * sp, 1.0 * sp,
-                                                 -1.5 * sp, 1.5 * sp, -2.0 * sp, 2.0 * sp,
-                                                 -2.5 * sp, 2.5 * sp, -3.0 * sp, 3.0 * sp };
-
     GroupPlacement best = centered;
     double bestScore = centered.moveAway;
-    for (double dx : xCandidates) {
+    for (double dxSp : PM_FINGERING_HORIZONTAL_CANDIDATES_SP) {
+        const double dx = dxSp * sp;
         GroupPlacement candidate = resolveFingeringGroupPlacement(groupRect, dx, ctx);
         const double score = candidate.moveAway + (std::abs(dx) * 1.75);
         if (score < bestScore) {
@@ -1878,6 +1879,60 @@ RectF segmentAnnotationSystemRect(const EngravingItem* item)
 
     return item->shape().bbox().translated(PointF(0.0, staffYInSystem(measure->system(), item->vStaffIdx()))
                                            + item->pos() + segment->pos() + measure->pos() + item->staffOffset());
+}
+
+RectF naturalAutomaticFermataSystemRect(Fermata* fermata)
+{
+    const Segment* segment = fermata ? fermata->segment() : nullptr;
+    const Measure* measure = segment ? segment->measure() : nullptr;
+    const System* system = measure ? measure->system() : nullptr;
+    if (!fermata || !segment || !measure || !system || !fermata->visible() || !fermata->autoplace()
+        || !fermata->isStyled(Pid::OFFSET)) {
+        return RectF();
+    }
+
+    // Select the same real glyph as TLayout without touching the source item
+    // or its current layout data when no safe pocket is found.
+    SymId previewSym = fermata->symId();
+    String name = String::fromAscii(SymNames::nameForSymId(previewSym).ascii());
+    if (fermata->placeAbove() && name.endsWith(u"Below")) {
+        previewSym = SymNames::symIdByName(name.left(name.size() - 5) + u"Above");
+    } else if (!fermata->placeAbove() && name.endsWith(u"Above")) {
+        previewSym = SymNames::symIdByName(name.left(name.size() - 5) + u"Below");
+    }
+    const Shape previewShape(fermata->symBbox(previewSym), fermata);
+
+    double x = 0.0;
+    const EngravingItem* anchor = segment->element(fermata->track());
+    if (anchor && anchor->isChord()) {
+        const Chord* chord = toChord(anchor);
+        x = chord->x() + ChordLayout::centerX(chord);
+    } else if (anchor && anchor->isRest()) {
+        const Rest* rest = toRest(anchor);
+        x = rest->x() + rest->centerX();
+    } else if (anchor) {
+        x = anchor->x() - anchor->shape().left() + 0.5 * anchor->width() * fermata->staff()->staffMag(Fraction(0, 1));
+    }
+    x -= 0.5 * previewShape.bbox().width();
+    const PointF previewOffset = fermata->propertyDefault(Pid::OFFSET).value<PointF>();
+    x += previewOffset.x();
+
+    Shape staffShape = segment->staffShape(fermata->staffIdx());
+    staffShape.removeTypes({ ElementType::FERMATA, ElementType::FINGERING });
+    double y = fermata->placeAbove() ? 0.0 : fermata->staff()->staffHeight(fermata->tick());
+    if (fermata->isStyled(Pid::OFFSET)) {
+        y += previewOffset.y();
+    }
+    const double minDistance = fermata->minDistance().toMM(fermata->spatium());
+    if (fermata->placeAbove()) {
+        y = std::min(y, -(previewShape.minVerticalDistance(staffShape) + minDistance));
+    } else {
+        y = std::max(y, staffShape.minVerticalDistance(previewShape) + minDistance);
+    }
+
+    const PointF origin = PointF(0.0, staffYInSystem(system, fermata->vStaffIdx()))
+                          + segment->pos() + measure->pos() + fermata->staffOffset();
+    return previewShape.bbox().translated(origin + PointF(x, y));
 }
 
 RectF measureElementSystemRect(const EngravingItem* item)
@@ -2337,6 +2392,179 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
         adjustment->valid = true;
     }
 
+    return true;
+}
+
+Fermata* automaticFermataForCompoundFingeringGroup(const std::vector<Fingering*>& fingerings)
+{
+    if (fingerings.size() < 2 || !fingerings.front() || !fingerings.front()->note()) {
+        return nullptr;
+    }
+
+    Chord* chord = fingerings.front()->note()->chord();
+    Segment* segment = chord ? chord->segment() : nullptr;
+    if (!chord || !segment) {
+        return nullptr;
+    }
+    for (const Fingering* fingering : fingerings) {
+        if (!fingering || !fingering->note() || fingering->note()->chord() != chord) {
+            return nullptr;
+        }
+    }
+
+    const bool above = fingerings.front()->placement() == PlacementV::ABOVE;
+    for (EngravingItem* annotation : segment->annotations()) {
+        if (!annotation || !annotation->isFermata()) {
+            continue;
+        }
+        Fermata* fermata = toFermata(annotation);
+        if (segment->element(fermata->track()) != chord || !fermata->visible() || !fermata->autoplace()
+            || !fermata->isStyled(Pid::OFFSET)
+            || fermata->placeAbove() != above) {
+            continue;
+        }
+        return fermata;
+    }
+    return nullptr;
+}
+
+bool rectsClearHorizontally(const RectF& left, const RectF& right, double clearance)
+{
+    return left.right() <= right.left() - clearance || left.left() >= right.right() + clearance;
+}
+
+bool naturalFermataPlacementIsSafe(const RectF& rect, const std::vector<Fingering*>& fingerings,
+                                   const std::vector<FingeringObstacle>& obstacles, const FingeringGroupContext& ctx)
+{
+    if (rect.isNull() || !ctx.system || fingerings.empty()) {
+        return false;
+    }
+
+    const double clearance = PM_FINGERING_STRUCTURE_CLEARANCE_MIN * ctx.spatium;
+    const RectF padded = rect.adjusted(-clearance, -clearance, clearance, clearance);
+    const Page* page = ctx.system->page();
+    if (!page) {
+        return false;
+    }
+    const RectF pageRect = padded.translated(ctx.system->pagePos());
+    if (pageRect.left() < 0.0 || pageRect.top() < 0.0
+        || pageRect.right() > page->width() || pageRect.bottom() > page->height()) {
+        return false;
+    }
+
+    if (requiredVerticalMoveFromMarkObstacles(rect, obstacles, ctx.staffIdx, ctx.above, clearance) > 0.0
+        || requiredVerticalMoveFromStructuralObstacles(rect, ctx.structuralObstacles, ctx.above, clearance) > 0.0
+        || slurAvoidanceForRect(rect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, ctx.spatium,
+                               PM_FINGERING_SLUR_CLEARANCE).conflict) {
+        return false;
+    }
+
+    return true;
+}
+
+bool compactExcessiveAutomaticFermataStack(const std::vector<Fingering*>& fingerings,
+                                           const std::vector<FingeringObstacle>& obstacles)
+{
+    Fermata* fermata = automaticFermataForCompoundFingeringGroup(fingerings);
+    if (!fermata) {
+        return false;
+    }
+
+    Fingering* first = fingerings.front();
+    Chord* chord = first->note()->chord();
+    System* system = chord && chord->measure() ? chord->measure()->system() : nullptr;
+    if (!system) {
+        return false;
+    }
+
+    const double spatium = first->spatium();
+    const bool above = first->placement() == PlacementV::ABOVE;
+    const RectF groupRect = fingeringGroupSystemRect(fingerings);
+    const RectF noteRect = fingeringGroupNoteSystemRect(fingerings);
+    const RectF fermataRect = naturalAutomaticFermataSystemRect(fermata);
+    const double clearance = PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium;
+    if (groupRect.isNull() || noteRect.isNull() || fermataRect.isNull()
+        || groupRect.right() <= fermataRect.left() - clearance
+        || groupRect.left() >= fermataRect.right() + clearance) {
+        return false;
+    }
+
+    const double predictedOuterEdge = above ? groupRect.top() - clearance - fermataRect.height()
+                                      : groupRect.bottom() + clearance + fermataRect.height();
+    const double predictedOuterDetachment = above ? noteRect.top() - predictedOuterEdge
+                                            : predictedOuterEdge - noteRect.bottom();
+    if (predictedOuterDetachment <= PM_FINGERING_NOTEHEAD_DETACHMENT_CAP * spatium) {
+        return false;
+    }
+
+    std::vector<FingeringObstacle> compoundObstacles = obstacles;
+    addRectObstacle(compoundObstacles, FingeringObstacleKind::Mark, fermataRect, chord->vStaffIdx(), above);
+
+    FingeringGroupContext ctx;
+    ctx.obstacles = &compoundObstacles;
+    ctx.system = system;
+    ctx.structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
+    ctx.noteDangerRect = fingeringGroupNotationDangerRect(fingerings, 0.2 * spatium, chord->isGrace());
+    ctx.noteheadRect = noteRect;
+    ctx.groupShape = fingeringGroupSystemShape(fingerings);
+    ctx.staffTop = staffYInSystem(system, chord->vStaffIdx());
+    ctx.staffBottom = ctx.staffTop + first->staff()->staffHeight(first->tick());
+    ctx.staffIdx = chord->vStaffIdx();
+    ctx.above = above;
+    ctx.spatium = spatium;
+    ctx.allowTuck = false;
+
+    if (!naturalFermataPlacementIsSafe(fermataRect, fingerings, obstacles, ctx)) {
+        return false;
+    }
+
+    bool found = false;
+    GroupPlacement best;
+    double bestScore = DBL_MAX;
+    for (double dxSp : PM_FINGERING_HORIZONTAL_CANDIDATES_SP) {
+        const double dx = dxSp * spatium;
+        const GroupPlacement candidate = resolveFingeringGroupPlacement(groupRect, dx, ctx);
+        const RectF finalRect = groupRect.translated(dx, above ? -candidate.moveAway : candidate.moveAway);
+        const RectF finalPageRect = finalRect.translated(system->pagePos()).adjusted(
+            -clearance, -clearance, clearance, clearance);
+        const Page* page = system->page();
+        const bool onPage = page && finalPageRect.left() >= 0.0 && finalPageRect.top() >= 0.0
+                            && finalPageRect.right() <= page->width() && finalPageRect.bottom() <= page->height();
+        const bool clearsNotation
+            = requiredVerticalMoveFromNotationRect(finalRect, ctx.noteDangerRect, above,
+                                                    PM_FINGERING_NOTE_CLEARANCE_MIN * spatium) <= 0.0
+              && requiredVerticalMoveFromStaff(finalRect, ctx.staffTop, ctx.staffBottom, above,
+                                               PM_FINGERING_STAFF_CLEARANCE_MIN * spatium) <= 0.0
+              && requiredVerticalMoveFromMarkObstacles(finalRect, compoundObstacles, ctx.staffIdx, above,
+                                                       PM_FINGERING_MARK_CLEARANCE_MIN * spatium) <= 0.0
+              && requiredVerticalMoveFromStructuralObstacles(finalRect, ctx.structuralObstacles, above,
+                                                             PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) <= 0.0
+              && !slurAvoidanceForRect(finalRect, compoundObstacles, ctx.staffIdx, ctx.staffTop, above, spatium,
+                                       PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+              && fingeringGroupFinalTuckClearsSkyline(groupRect, finalRect, ctx);
+        if (!candidate.slurResolved || !onPage || !clearsNotation
+            || !rectsClearHorizontally(finalRect, fermataRect, clearance)
+            || fingeringRectDistanceFromNoteheads(finalRect, noteRect, above)
+               > PM_FINGERING_NOTEHEAD_DETACHMENT_CAP * spatium) {
+            continue;
+        }
+
+        const double score = std::abs(dx) + candidate.moveAway;
+        if (!found || score < bestScore) {
+            found = true;
+            best = candidate;
+            bestScore = score;
+        }
+    }
+    if (!found) {
+        return false;
+    }
+
+    const double dy = above ? -best.moveAway : best.moveAway;
+    for (Fingering* fingering : fingerings) {
+        fingering->mutldata()->moveX(best.dx);
+        fingering->mutldata()->moveY(dy);
+    }
     return true;
 }
 
@@ -3049,13 +3277,14 @@ void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addF
         PmFingeringGroupAdjustment adjustment;
         const bool adjusted = adjustFingeringGroupAroundNotation(group, obstacles, allowOppositeSide, !graceGroup,
                                                                  0.0, &adjustment, rescueManualPlacement);
-        if (adjustment.valid) {
+        const bool compactedFermataStack = !graceGroup && compactExcessiveAutomaticFermataStack(group, obstacles);
+        if (adjustment.valid && !compactedFermataStack) {
             adjustments.push_back(std::move(adjustment));
         }
         if (graceGroup) {
             moved = alignGraceFingeringGroupToNearbyMainBaseline(group, obstacles) || moved;
         }
-        moved = adjusted || moved;
+        moved = compactedFermataStack || adjusted || moved;
         return moved;
     };
 
@@ -6489,7 +6718,7 @@ bool SystemLayout::whammyBarShouldBeCenteredBetweenStaves(const WhammyBarSegment
 
 bool SystemLayout::elementHasAnotherStackedOutside(const EngravingItem* element, const Shape& elementShape, const SkylineLine& skylineLine)
 {
-    double elemShapeLeft = -elementShape.left();
+    double elemShapeLeft = elementShape.left();
     double elemShapeRight = elementShape.right();
     double elemShapeTop = elementShape.top();
     double elemShapeBottom = elementShape.bottom();
@@ -6545,7 +6774,46 @@ void SystemLayout::centerElementBetweenStaves(EngravingItem* element, const Syst
 
     const SkylineLine& skylineOfThisStaff = isAbove ? thisStaff->skyline().north() : thisStaff->skyline().south();
 
+    auto eligiblePrettifyWedge = [&]() {
+        if (!MScore::pianomaniaPrettifySlursFingerings || !element->isHairpinSegment() || !isAbove
+            || !element->autoplace() || !element->isStyled(Pid::OFFSET) || !element->part()
+            || element->part()->nstaves() <= 1
+            || thisIdx != element->part()->staves().back()->idx()) {
+            return false;
+        }
+        const HairpinSegment* segment = toHairpinSegment(element);
+        const Hairpin* hairpin = segment->hairpin();
+        return hairpin && hairpin->autoplace() && !hairpin->isLineType()
+               && hairpin->centerBetweenStaves() != AutoOnOff::OFF
+               && !element->ldata()->itemSnappedBefore() && !element->ldata()->itemSnappedAfter();
+    };
+
     if (elementHasAnotherStackedOutside(element, elementShape, skylineOfThisStaff)) {
+        if (eligiblePrettifyWedge()) {
+            double yStaffDiff = nextStaff->y() - thisStaff->y();
+            SkylineLine upperSkyline = nextStaff->skyline().south();
+            upperSkyline.translateY(yStaffDiff);
+            constexpr double maxLiftSp = 0.40;
+            constexpr double minClearanceSp = 0.25;
+            const double sp = element->spatium();
+            double safeLift = upperSkyline.verticalClaranceBelow(elementShape) - minClearanceSp * sp;
+            const RectF bounds = elementShape.bbox();
+            for (const ShapeElement& obstacle : skylineOfThisStaff.elements()) {
+                const EngravingItem* obstacleItem = obstacle.item();
+                if (!obstacleItem || obstacleItem == element || obstacleItem->parentItem() == element
+                    || Autoplace::itemsShouldIgnoreEachOther(element, obstacleItem)
+                    || obstacle.right() <= bounds.left() || obstacle.left() >= bounds.right()
+                    || obstacle.bottom() > bounds.top()) {
+                    continue;
+                }
+                safeLift = std::min(safeLift, bounds.top() - obstacle.bottom() - minClearanceSp * sp);
+            }
+            const double lift = std::clamp(safeLift, 0.0, maxLiftSp * sp);
+            if (lift > 0.0) {
+                element->mutldata()->moveY(-lift);
+                updateSkylineForElement(element, system, -lift);
+            }
+        }
         return;
     }
 
@@ -6554,7 +6822,9 @@ void SystemLayout::centerElementBetweenStaves(EngravingItem* element, const Syst
         if (!shapeItem) {
             return false;
         }
-        return shapeItem->isAccidental() || Autoplace::itemsShouldIgnoreEachOther(element, shapeItem);
+        // Ledger accidentals occupy the grand-staff gap too. Ignoring them
+        // can move a centred dynamic into a sharp after normal autoplace.
+        return Autoplace::itemsShouldIgnoreEachOther(element, shapeItem);
     });
 
     double yStaffDiff = nextStaff->y() - thisStaff->y();
@@ -6568,6 +6838,18 @@ void SystemLayout::centerElementBetweenStaves(EngravingItem* element, const Syst
                              - elementMinDist;
 
     double yMove = 0.5 * (availSpaceBelow - availSpaceAbove);
+
+    if (eligiblePrettifyWedge()) {
+        constexpr double maxLiftSp = 0.40;
+        constexpr double minUpperClearanceSp = 0.25;
+        const double sp = element->spatium();
+        // availSpaceAbove already excludes the ordinary minimum distance.
+        // The upper-lane clamp needs the physical gap after centering, so add
+        // that allowance back before reserving the smaller Prettify clearance.
+        const double physicalSpaceAbove = availSpaceAbove + elementMinDist + yMove;
+        const double safeLift = std::max(0.0, physicalSpaceAbove - minUpperClearanceSp * sp);
+        yMove -= std::min(maxLiftSp * sp, safeLift);
+    }
 
     element->mutldata()->moveY(yMove);
 
