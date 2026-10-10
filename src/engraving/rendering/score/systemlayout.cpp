@@ -197,6 +197,11 @@ struct FingeringObstacle {
     RectF rect;
     staff_idx_t staffIdx = muse::nidx;
     bool above = true;
+    // Smallest clearance this mark accepts, whatever the caller's squeeze
+    // floor. Dots and tenuto bars may be nearly touched by a tucked digit; a
+    // wedge (accent, marcato) stacked under a digit needs a real gap (Bartok
+    // For Children I/3 m8/m18: a "1" grazing its marcato read as one glyph).
+    double clearanceFloor = 0.0;
 };
 
 struct TextHairpinObstacle {
@@ -651,7 +656,8 @@ double requiredVerticalMoveFromMarkObstacles(const RectF& fingeringRect, const s
         if (obstacle.staffIdx != staffIdx || obstacle.above != above) {
             continue;
         }
-        required = std::max(required, requiredVerticalMoveFromNotationRect(fingeringRect, obstacle.rect, above, clearance));
+        required = std::max(required, requiredVerticalMoveFromNotationRect(fingeringRect, obstacle.rect, above,
+                                                                           std::max(clearance, obstacle.clearanceFloor)));
     }
     return required;
 }
@@ -2066,8 +2072,12 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
                         if (!visibleObstacleItem(articulation)) {
                             continue;
                         }
+                        const size_t obstacleCount = obstacles.size();
                         addRectObstacle(obstacles, FingeringObstacleKind::Mark, chordAttachedItemSystemRect(chord, articulation),
                                         chord->vStaffIdx(), articulation->up());
+                        if ((articulation->isAccent() || articulation->isMarcato()) && obstacles.size() > obstacleCount) {
+                            obstacles.back().clearanceFloor = PM_FINGERING_MARK_CLEARANCE * articulation->spatium();
+                        }
                     }
                     Ornament* ornament = chord->findOrnament();
                     if (visibleObstacleItem(ornament)

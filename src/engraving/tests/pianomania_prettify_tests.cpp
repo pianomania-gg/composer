@@ -4108,3 +4108,33 @@ TEST_F(Engraving_PianomaniaPrettifyTests, tupletNumberYieldsSideToLeftHandDigits
     assertDigitsBelowAndNumberAbove(score);
     delete score;
 }
+
+// Test value: Bartok For Children I/3 m8/m18. A digit over a marcato on the
+// same note stacks centred on the wedge with a real gap, instead of the
+// near-touch squeeze that suits staccato dots.
+TEST_F(Engraving_PianomaniaPrettifyTests, digitOverMarcatoKeepsClearGap)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-marcato-stack.mscx");
+    ASSERT_TRUE(score);
+
+    size_t checked = 0;
+    for (const Fingering* fingering : collectFingeringsByText(score, u"1")) {
+        const Chord* chord = fingering->note()->chord();
+        for (const Articulation* articulation : chord->articulations()) {
+            if (!articulation->isMarcato()) {
+                continue;
+            }
+            const double sp = fingering->spatium();
+            const RectF digitRect = fingering->pageBoundingRect();
+            const RectF marcatoRect = articulation->pageBoundingRect();
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE);
+            EXPECT_LE(digitRect.bottom(), marcatoRect.top() - 0.25 * sp + 1e-3);
+            EXPECT_NEAR(digitRect.center().x(), marcatoRect.center().x(), 0.1 * sp);
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 1u);
+
+    delete score;
+}
