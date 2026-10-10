@@ -5737,7 +5737,11 @@ bool MeiExporter::writeTrill(const Trill *trill, const std::string &startid) {
     wavyLines.push_back(segment->symBbox(wavySymbols).translated(origin + PointF(penX, 0.0)));
   }
 
-  if (!wavyLines.empty()) {
+  // A trill too short for its wavy line draws only the "tr" (Polonaise
+  // m136): it has no extender for readers to draw.
+  if (wavyLines.empty()) {
+    trillNode.attribute("extender").set_value("false");
+  } else {
     auto formatLine = [this](const RectF &line) {
       const std::string y = formatDecimalStr(toBottomLeftInches(line.center().y()), 3);
       return formatDecimalStr(line.left() / DPI, 3) + "," + y + "," +

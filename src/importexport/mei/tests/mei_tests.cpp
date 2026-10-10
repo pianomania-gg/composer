@@ -3009,6 +3009,25 @@ TEST_F(Mei_Tests, pianomania_auto_layout_turns_header_clef_change_into_clef_chan
     EXPECT_EQ(staffTwoTreble, 1u);
 }
 
+// Polonaise m136: a trill too short for its wavy line draws only "tr". The
+// export only claims an extender for a trill that draws a line, and every
+// claimed line carries its geometry, so readers never invent one.
+TEST_F(Mei_Tests, mei_export_trill_extender_matches_drawn_line) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-trill-extender.test.mei");
+    size_t withoutLine = 0;
+    for (const std::string& tag : collectStartTags(meiText, "trill")) {
+        const bool claimsLine = xmlAttributeValue(tag, "extender") == std::optional<std::string>("true");
+        EXPECT_EQ(claimsLine, xmlAttributeValue(tag, "pm:x1y1x2y2").has_value()) << tag;
+        if (!claimsLine) {
+            ++withoutLine;
+        }
+    }
+    EXPECT_EQ(withoutLine, 1u);
+}
+
 // Moonlight m31: a rest moved into the lower staff from the upper staff must
 // clear the lower staff's chord at the same moment instead of sitting on it.
 TEST_F(Mei_Tests, pianomania_cross_staff_rest_clears_destination_chord) {

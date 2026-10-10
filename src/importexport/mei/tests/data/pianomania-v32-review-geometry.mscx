@@ -160,8 +160,59 @@
         </Measure>
       <Measure>
         <voice>
+          <Spanner type="Trill">
+            <Trill>
+              <subtype>trill</subtype>
+              <Ornament>
+                <subtype>ornamentTrill</subtype>
+                </Ornament>
+              </Trill>
+            <next>
+              <location>
+                <fractions>1/32</fractions>
+                </location>
+              </next>
+            </Spanner>
           <Chord>
-            <durationType>whole</durationType>
+            <durationType>32nd</durationType>
+            <Note>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+              </Note>
+            </Chord>
+          <Spanner type="Trill">
+            <prev>
+              <location>
+                <fractions>-1/32</fractions>
+                </location>
+              </prev>
+            </Spanner>
+          <Chord>
+            <durationType>32nd</durationType>
+            <Note>
+              <pitch>74</pitch>
+              <tpc>16</tpc>
+              </Note>
+            </Chord>
+          <Rest>
+            <durationType>16th</durationType>
+            </Rest>
+          <Chord>
+            <durationType>eighth</durationType>
+            <Note>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+              </Note>
+            </Chord>
+          <Chord>
+            <durationType>quarter</durationType>
+            <Note>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+              </Note>
+            </Chord>
+          <Chord>
+            <durationType>half</durationType>
             <Note>
               <pitch>72</pitch>
               <tpc>14</tpc>
