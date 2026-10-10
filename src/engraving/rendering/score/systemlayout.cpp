@@ -7279,6 +7279,11 @@ std::vector<VerticalInterval> staffCenteredFreeMoves(const std::vector<RectF>& c
 void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system)
 {
     constexpr double CLEARANCE_SP = 0.25;
+    // A dynamic or expression reads as touching a cross-staff beam well before
+    // the ink overlaps: readers draw the dynamic glyph slightly deeper than
+    // MuseScore does, so a 0.3sp gap here touched the beam in Practice
+    // (Moonlight m5 "pp"). Beams keep a wider margin than other notation.
+    constexpr double BEAM_CLEARANCE_SP = 0.5;
     constexpr double OVERLAP_TOLERANCE_SP = 0.05;
 
     std::set<const EngravingItem*> handled;
@@ -7369,21 +7374,28 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
                 }
             }
         }
+        const double spatium = item->spatium();
+        // Beam boxes grow by the extra beam margin, so every search below can
+        // use one clearance for all obstacles.
+        const double beamMargin = (BEAM_CLEARANCE_SP - CLEARANCE_SP) * spatium;
+        std::vector<RectF> beamObstacles;
         const PointF staffOrigin = system->pagePos() + PointF(0.0, thisStaff->y());
         for (const Beam* beam : crossBeams) {
             const PointF beamOrigin = beam->pagePos() - staffOrigin;
             const Shape beamShape = beam->shape();
             for (const ShapeElement& element : beamShape.elements()) {
-                obstacles.push_back(element.translated(beamOrigin));
+                beamObstacles.push_back(element.translated(beamOrigin).adjusted(-beamMargin, -beamMargin, beamMargin, beamMargin));
             }
         }
 
-        const double spatium = item->spatium();
         const double minMove = upperStaffBottom - chainTop;
         const double maxMove = lowerStaffTop - chainBottom;
-        if (!staffCenteredFreeMoves(chainRects, obstacles, 0.0, 0.0, -OVERLAP_TOLERANCE_SP * spatium).empty()) {
-            continue; // nothing overlaps where the chain is now
+        if (!staffCenteredFreeMoves(chainRects, obstacles, 0.0, 0.0, -OVERLAP_TOLERANCE_SP * spatium).empty()
+            && (beamObstacles.empty()
+                || !staffCenteredFreeMoves(chainRects, beamObstacles, 0.0, 0.0, CLEARANCE_SP * spatium).empty())) {
+            continue; // nothing overlaps where the chain is now, and beams keep their margin
         }
+        obstacles.insert(obstacles.end(), beamObstacles.begin(), beamObstacles.end());
 
         std::vector<VerticalInterval> free = staffCenteredFreeMoves(chainRects, obstacles, minMove, maxMove, CLEARANCE_SP * spatium);
         if (free.empty()) {

@@ -84,6 +84,9 @@ public:
     static double minDistance(const System* top, const System* bottom, const LayoutContext& ctx);
 
     static void centerElementsBetweenStaves(const System* system);
+    // Moves staff-centred dynamics, expressions and hairpins off notation in
+    // the gap, keeping cross-staff beams at a wider margin.
+    static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerBigTimeSigsAcrossStaves(const System* system);
 
     static void adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines = false);
@@ -205,7 +208,6 @@ private:
     static void centerElementBetweenStaves(EngravingItem* element, const System* system);
     static void resolveSlursOverMovedMarks(System* system, const std::vector<Spanner*>& slurs,
                                            const std::map<const Articulation*, double>& markYBefore, LayoutContext& ctx);
-    static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerMMRestBetweenStaves(MMRest* mmRest, const System* system);
 
     static bool shouldBeJustified(System* system, double curSysWidth, double targetSystemWidth, LayoutContext& ctx);

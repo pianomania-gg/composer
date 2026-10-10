@@ -990,6 +990,13 @@ void resetPianomaniaItemPlacement(EngravingItem* item)
     bool changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET);
     changed = resetPianomaniaPlacementProperty(item, Pid::AUTOPLACE) || changed;
     changed = resetPianomaniaPlacementProperty(item, Pid::MIN_DISTANCE) || changed;
+    if (item->isExpression()) {
+        // An expression after a dynamic shares the dynamic's baseline unless
+        // the source unsnapped it, which strands the word lower than its
+        // dynamic once Auto Layout re-casts the system (Arabesque m32 "f
+        // risoluto").
+        changed = resetPianomaniaPlacementProperty(item, Pid::SNAP_TO_DYNAMICS) || changed;
+    }
     if (item->isSpannerSegment()) {
         // A dragged end grip (a hairpin pulled back before the last note of
         // its span) is an OFFSET2 offset. It has no property default, so reset
