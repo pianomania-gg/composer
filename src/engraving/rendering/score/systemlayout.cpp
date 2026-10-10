@@ -203,6 +203,8 @@ struct TextHairpinObstacle {
 };
 
 RectF tupletMarkerSystemRect(const Tuplet* tuplet);
+bool tupletMarkerIsDrawn(const Tuplet* tuplet);
+bool visibleObstacleItem(const EngravingItem* item);
 
 // Dynamics that modify a specific note or chord (sforzando family), as
 // opposed to passage dynamics (p, f, mf, ...) that mark a span of music.
@@ -1575,7 +1577,9 @@ bool fingeringGroupPreferredSideTupletBlocked(const std::vector<Fingering*>& fin
         const Chord* fingeringChord = fingeringNote ? fingeringNote->chord() : nullptr;
         Tuplet* tuplet = fingeringChord ? fingeringChord->tuplet() : nullptr;
         while (tuplet) {
-            const RectF markerRect = tupletMarkerSystemRect(tuplet);
+            // Only drawn tuplet ink can block a digit: a hidden tuplet
+            // (Moonlight's implied triplets) leaves its side free.
+            const RectF markerRect = tupletMarkerIsDrawn(tuplet) ? tupletMarkerSystemRect(tuplet) : RectF();
             if (!markerRect.isNull() && tuplet->vStaffIdx() == chord->vStaffIdx()
                 && rectIsAboveStaff(markerRect, tuplet) == above
                 && rect.right() >= markerRect.left() - tupletClearance
@@ -1962,6 +1966,16 @@ RectF measureElementSystemRect(const EngravingItem* item)
                                            + measure->pos() + item->pos() + item->staffOffset());
 }
 
+// Whether the tuplet prints any ink (number or bracket) a digit could hit.
+bool tupletMarkerIsDrawn(const Tuplet* tuplet)
+{
+    if (!visibleObstacleItem(tuplet)) {
+        return false;
+    }
+    const Text* number = tuplet->number();
+    return visibleObstacleItem(number) || tuplet->hasBracket();
+}
+
 RectF tupletMarkerSystemRect(const Tuplet* tuplet)
 {
     const Measure* measure = tuplet && tuplet->explicitParent() && tuplet->explicitParent()->isMeasure()
@@ -2131,7 +2145,7 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
                 }
                 Tuplet* tuplet = toChordRest(item)->tuplet();
                 while (tuplet) {
-                    if (seenTuplets.insert(tuplet).second && visibleObstacleItem(tuplet)) {
+                    if (seenTuplets.insert(tuplet).second && tupletMarkerIsDrawn(tuplet)) {
                         const RectF rect = tupletMarkerSystemRect(tuplet);
                         addRectObstacle(obstacles, FingeringObstacleKind::Tuplet, rect, tuplet->vStaffIdx(),
                                         rectIsAboveStaff(rect, tuplet));

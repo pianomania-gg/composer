@@ -4022,3 +4022,28 @@ TEST_F(Engraving_PianomaniaPrettifyTests, sameHandTritoneDyadStacksAboveInOneCol
 
     delete score;
 }
+
+// Test value: Moonlight m1/m3. Hidden tuplets print nothing, so they cannot
+// push a digit off its side: the triplet's middle digit stays above with its
+// neighbours instead of dropping below the notes.
+TEST_F(Engraving_PianomaniaPrettifyTests, hiddenTupletLeavesDigitsOnHandSide)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-hidden-tuplet.mscx");
+    ASSERT_TRUE(score);
+
+    for (Tuplet* tuplet : collectTuplets(score)) {
+        ASSERT_FALSE(tuplet->visible());
+    }
+    size_t checked = 0;
+    for (const String& text : { String(u"1"), String(u"2"), String(u"3"), String(u"4"), String(u"5") }) {
+        for (const Fingering* fingering : collectFingeringsByText(score, text)) {
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE) << text.toStdString();
+            EXPECT_LT(fingeringSystemRect(fingering).bottom(), noteSystemRect(fingering->note()).top()) << text.toStdString();
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 5u);
+
+    delete score;
+}
