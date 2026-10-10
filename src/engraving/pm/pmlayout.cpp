@@ -30,6 +30,7 @@
 #include "../dom/fermata.h"
 #include "../dom/instrument.h"
 #include "../dom/layoutbreak.h"
+#include "../dom/clef.h"
 #include "../dom/masterscore.h"
 #include "../dom/measure.h"
 #include "../dom/measurebase.h"
@@ -1124,6 +1125,43 @@ void resetPianomaniaManualPlacement(MasterScore* score)
     }
 }
 
+// A source can store a clef change at a system start in that system's header
+// clef slot. Once Auto Layout re-casts the systems that measure can land
+// mid-system, where a header clef is not drawn although the notes follow it
+// (Skerceto m45, Polonaise m40), and readers lose the change. Each such change
+// becomes an ordinary clef change before the measure's barline, which layout
+// draws mid-system or as a courtesy clef before a system break.
+void convertPianomaniaHeaderClefChanges(MasterScore* score)
+{
+    std::vector<Clef*> changes;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        if (!measure->prevMeasure()) {
+            continue;
+        }
+        Segment* segment = measure->findSegmentR(SegmentType::HeaderClef, Fraction(0, 1));
+        if (!segment) {
+            continue;
+        }
+        for (EngravingItem* item : segment->elist()) {
+            if (!item || !item->isClef() || item->generated() || !item->staff()) {
+                continue;
+            }
+            Clef* clef = toClef(item);
+            if (clef->staff()->clef(measure->tick() - Fraction::fromTicks(1)) != clef->clefType()) {
+                changes.push_back(clef);
+            }
+        }
+    }
+
+    for (Clef* clef : changes) {
+        Measure* measure = clef->measure();
+        Staff* staff = clef->staff();
+        const ClefType type = clef->clefType();
+        score->undoRemoveElement(clef);
+        score->undoChangeClef(staff, measure, type);
+    }
+}
+
 void ensurePianomaniaGrandStaffBraces(MasterScore* score)
 {
     if (!score) {
@@ -1810,6 +1848,7 @@ void mu::engraving::pm::applyPianomaniaAutoLayout(MasterScore* score, const PmAu
     normalizePianomaniaTempoIndicators(score);
     normalizePianomaniaExpressionText(score);
     splitPianomaniaDynamicExpressionText(score);
+    convertPianomaniaHeaderClefChanges(score);
     resetPianomaniaManualPlacement(score);
     ensurePianomaniaGrandStaffBraces(score);
     applyPianomaniaStyle(score);

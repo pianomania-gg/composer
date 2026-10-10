@@ -2975,6 +2975,40 @@ TEST_F(Mei_Tests, mei_export_header_clef_change_at_system_start) {
     EXPECT_EQ(staffOneChanges, 0u);
 }
 
+// Skerceto m45: Auto Layout can re-cast a stored header clef change into the
+// middle of a system, where MuseScore does not draw header clefs. Auto Layout
+// turns it into an ordinary clef change before the barline, so it is drawn and
+// exported with its laid-out position.
+TEST_F(Mei_Tests, pianomania_auto_layout_turns_header_clef_change_into_clef_change) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+
+    const Measure* second = score->firstMeasure()->nextMeasure();
+    const Measure* third = second->nextMeasure();
+    ASSERT_TRUE(third);
+    const Segment* header = third->findSegmentR(SegmentType::HeaderClef, Fraction(0, 1));
+    const EngravingItem* headerItem = header ? header->element(VOICES) : nullptr;
+    EXPECT_TRUE(!headerItem || headerItem->generated()) << "the stored header clef change must not remain";
+    const Segment* change = second->findSegmentR(SegmentType::Clef, second->ticks());
+    ASSERT_TRUE(change);
+    const EngravingItem* changeItem = change->element(VOICES);
+    ASSERT_TRUE(changeItem && changeItem->isClef());
+    EXPECT_EQ(toClef(changeItem)->clefType(), ClefType::G);
+    EXPECT_EQ(score->staff(1)->clef(third->tick()), ClefType::G);
+
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-auto-layout-clef.test.mei");
+    size_t staffTwoTreble = 0;
+    for (const std::string& tag : collectStartTags(meiText, "clef")) {
+        if (xmlAttributeValue(tag, "staff") == std::optional<std::string>("2")
+            && xmlAttributeValue(tag, "shape") == std::optional<std::string>("G")) {
+            EXPECT_EQ(xmlAttributeValue(tag, "beat"), std::optional<std::string>("5.0000")) << tag;
+            ++staffTwoTreble;
+        }
+    }
+    EXPECT_EQ(staffTwoTreble, 1u);
+}
+
 // Moonlight m31: a rest moved into the lower staff from the upper staff must
 // clear the lower staff's chord at the same moment instead of sitting on it.
 TEST_F(Mei_Tests, pianomania_cross_staff_rest_clears_destination_chord) {
