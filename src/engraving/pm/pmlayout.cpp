@@ -30,6 +30,7 @@
 #include "../dom/fermata.h"
 #include "../dom/instrument.h"
 #include "../dom/layoutbreak.h"
+#include "../dom/clef.h"
 #include "../dom/masterscore.h"
 #include "../dom/measure.h"
 #include "../dom/measurebase.h"
@@ -990,6 +991,13 @@ void resetPianomaniaItemPlacement(EngravingItem* item)
     bool changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET);
     changed = resetPianomaniaPlacementProperty(item, Pid::AUTOPLACE) || changed;
     changed = resetPianomaniaPlacementProperty(item, Pid::MIN_DISTANCE) || changed;
+    if (item->isExpression()) {
+        // An expression after a dynamic shares the dynamic's baseline unless
+        // the source unsnapped it, which strands the word lower than its
+        // dynamic once Auto Layout re-casts the system (Arabesque m32 "f
+        // risoluto").
+        changed = resetPianomaniaPlacementProperty(item, Pid::SNAP_TO_DYNAMICS) || changed;
+    }
     if (item->isSpannerSegment()) {
         // A dragged end grip (a hairpin pulled back before the last note of
         // its span) is an OFFSET2 offset. It has no property default, so reset
@@ -1114,6 +1122,43 @@ void resetPianomaniaManualPlacement(MasterScore* score)
         for (SpannerSegment* spannerSegment : spanner->spannerSegments()) {
             resetPianomaniaItemPlacement(spannerSegment);
         }
+    }
+}
+
+// A source can store a clef change at a system start in that system's header
+// clef slot. Once Auto Layout re-casts the systems that measure can land
+// mid-system, where a header clef is not drawn although the notes follow it
+// (Skerceto m45, Polonaise m40), and readers lose the change. Each such change
+// becomes an ordinary clef change before the measure's barline, which layout
+// draws mid-system or as a courtesy clef before a system break.
+void convertPianomaniaHeaderClefChanges(MasterScore* score)
+{
+    std::vector<Clef*> changes;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        if (!measure->prevMeasure()) {
+            continue;
+        }
+        Segment* segment = measure->findSegmentR(SegmentType::HeaderClef, Fraction(0, 1));
+        if (!segment) {
+            continue;
+        }
+        for (EngravingItem* item : segment->elist()) {
+            if (!item || !item->isClef() || item->generated() || !item->staff()) {
+                continue;
+            }
+            Clef* clef = toClef(item);
+            if (clef->staff()->clef(measure->tick() - Fraction::fromTicks(1)) != clef->clefType()) {
+                changes.push_back(clef);
+            }
+        }
+    }
+
+    for (Clef* clef : changes) {
+        Measure* measure = clef->measure();
+        Staff* staff = clef->staff();
+        const ClefType type = clef->clefType();
+        score->undoRemoveElement(clef);
+        score->undoChangeClef(staff, measure, type);
     }
 }
 
@@ -1618,14 +1663,16 @@ void verifyOverfullSystems(MasterScore* score, int maxPasses)
 }
 
 // Words carried by a line (e.g. a text-only "dim. e ritenuto." hairpin) must
-// read in full before the next dynamic on their row. Autoplace only stacks
+// read in full before the next dynamic on their row, and between the staves
+// of a grand staff before the barline that ends their measure. Autoplace only stacks
 // items vertically, so a phrase wider than its measures runs straight through
 // that dynamic. Measured on the natural (LINE mode) widths, the measures from
 // the text's start up to the dynamic are widened just enough; justification
 // in page layout only ever adds room.
 double pianomaniaLineTextOverrun(const TextLineBaseSegment* lineSegment, const Score* score,
-                                 Measure*& firstMeasure, Measure*& lastMeasure)
+                                 Measure*& firstMeasure, Measure*& lastMeasure, double& stretchedWidth)
 {
+    stretchedWidth = 0.0;
     const Text* text = lineSegment ? lineSegment->text() : nullptr;
     if (!text || text->empty() || !lineSegment->visible()) {
         return 0.0;
@@ -1658,16 +1705,39 @@ double pianomaniaLineTextOverrun(const TextLineBaseSegment* lineSegment, const S
         }
     }
 
-    if (!blockingSegment) {
-        return 0.0;
+    if (blockingSegment) {
+        firstMeasure = score->tick2measure(line->tick());
+        lastMeasure = blockingSegment->measure();
+        if (blockingSegment->rtick().isZero() && lastMeasure != firstMeasure) {
+            lastMeasure = lastMeasure->prevMeasure();
+        }
+        return overrun;
     }
 
-    firstMeasure = score->tick2measure(line->tick());
-    lastMeasure = blockingSegment->measure();
-    if (blockingSegment->rtick().isZero() && lastMeasure != firstMeasure) {
-        lastMeasure = lastMeasure->prevMeasure();
+    // Between the staves of a grand staff the barline crosses the words, so a
+    // phrase that ends just past its own measure is cut by that barline
+    // (Kuhlau Op. 55/1 II m100 "poco a poco cre|sc."). The start measure is
+    // widened so the phrase ends before it; a phrase longer than its measure
+    // and then some is left to cross barlines between its words.
+    static constexpr double maxBarlineOverrunShare = 0.6;
+    Measure* startMeasure = score->tick2measure(line->tick());
+    const Staff* staff = line->staff();
+    const bool betweenStaves = staff && staff->part() && staff->part()->nstaves() > 1
+                               && (lineSegment->placeAbove() ? staff != staff->part()->staves().front()
+                                   : staff != staff->part()->staves().back());
+    if (!startMeasure || !betweenStaves || startMeasure->system() != lineSegment->system()) {
+        return 0.0;
     }
-    return overrun;
+    const double barlineOverrun = textRect.right() + padding - startMeasure->pageBoundingRect().right();
+    if (barlineOverrun <= 0.0 || barlineOverrun > maxBarlineOverrunShare * startMeasure->width()) {
+        return 0.0;
+    }
+    firstMeasure = startMeasure;
+    lastMeasure = startMeasure;
+    // Widening also moves the phrase's start, so only the part of the measure
+    // after that start buys room.
+    stretchedWidth = startMeasure->pageBoundingRect().right() - std::max(textRect.left(), startMeasure->pageBoundingRect().left());
+    return barlineOverrun;
 }
 
 void fitPianomaniaLineTextBeforeDynamics(MasterScore* score)
@@ -1683,14 +1753,14 @@ void fitPianomaniaLineTextBeforeDynamics(MasterScore* score)
 
             Measure* firstMeasure = nullptr;
             Measure* lastMeasure = nullptr;
+            double spanWidth = 0.0;
             const auto* lineSegment = static_cast<const TextLineBaseSegment*>(spanner->frontSegment());
-            const double overrun = pianomaniaLineTextOverrun(lineSegment, score, firstMeasure, lastMeasure);
+            const double overrun = pianomaniaLineTextOverrun(lineSegment, score, firstMeasure, lastMeasure, spanWidth);
             if (overrun <= 0.0 || !firstMeasure || !lastMeasure) {
                 continue;
             }
 
-            double spanWidth = 0.0;
-            for (Measure* measure = firstMeasure; measure; measure = measure->nextMeasure()) {
+            for (Measure* measure = firstMeasure; spanWidth <= 0.0 && measure; measure = measure->nextMeasure()) {
                 spanWidth += measure->width();
                 if (measure == lastMeasure) {
                     break;
@@ -1803,6 +1873,7 @@ void mu::engraving::pm::applyPianomaniaAutoLayout(MasterScore* score, const PmAu
     normalizePianomaniaTempoIndicators(score);
     normalizePianomaniaExpressionText(score);
     splitPianomaniaDynamicExpressionText(score);
+    convertPianomaniaHeaderClefChanges(score);
     resetPianomaniaManualPlacement(score);
     ensurePianomaniaGrandStaffBraces(score);
     applyPianomaniaStyle(score);

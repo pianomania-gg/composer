@@ -27,6 +27,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <cfloat>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <set>
@@ -43,6 +45,7 @@
 #include "engraving/dom/articulation.h"
 #include "engraving/dom/accidental.h"
 #include "engraving/dom/excerpt.h"
+#include "engraving/dom/beam.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/chordrest.h"
 #include "engraving/dom/dynamic.h"
@@ -62,6 +65,8 @@
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stafftext.h"
 #include "engraving/dom/system.h"
+#include "engraving/pm/pmlayout.h"
+#include "engraving/rendering/score/systemlayout.h"
 #include "engraving/dom/volta.h"
 #include "engraving/dom/tuplet.h"
 #include "engraving/dom/trill.h"
@@ -2890,6 +2895,290 @@ TEST_F(Mei_Tests, mei_export_key_signature_symbols_match_layout) {
         }
     }
     EXPECT_TRUE(sawChange);
+}
+
+
+namespace {
+const String V32_REVIEW_FIXTURE = u"pianomania-v32-review-geometry.mscx";
+
+MasterScore* readLaidOutV32ReviewFixture()
+{
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false);
+    if (score) {
+        score->setLayoutAll();
+        score->doLayout();
+    }
+    return score;
+}
+
+// Smallest Euclidean gap between a rect and an item's shape, page coordinates.
+double pageGapToShape(const RectF& rect, const EngravingItem* item)
+{
+    double gap = DBL_MAX;
+    // shape() returns a temporary; keep it alive for the loop.
+    const Shape shape = item->shape().translated(item->pagePos());
+    for (const ShapeElement& element : shape.elements()) {
+        const double dx = std::max({ 0.0, element.left() - rect.right(), rect.left() - element.right() });
+        const double dy = std::max({ 0.0, element.top() - rect.bottom(), rect.top() - element.bottom() });
+        gap = std::min(gap, std::hypot(dx, dy));
+    }
+    return gap;
+}
+}
+
+// Scarlatti K. 34 m8: the source hides the grace G#'s sharp. A hidden
+// accidental is not engraved, so the export keeps only the alteration
+// (@accid.ges) and no drawable @accid or position.
+TEST_F(Mei_Tests, mei_export_hidden_accidental_is_gestural_only) {
+    std::unique_ptr<MasterScore> score(readLaidOutV32ReviewFixture());
+    ASSERT_TRUE(score);
+    Chord* chord = toChord(score->firstSegment(SegmentType::ChordRest)->element(0));
+    ASSERT_TRUE(chord);
+    ASSERT_TRUE(chord->upNote()->accidental());
+    ASSERT_FALSE(chord->upNote()->accidental()->visible());
+
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-hidden-accidental.test.mei");
+    const std::vector<std::string> accids = collectStartTags(meiText, "accid");
+    ASSERT_FALSE(accids.empty());
+    const std::string& hidden = accids.front();
+    EXPECT_EQ(xmlAttributeValue(hidden, "accid.ges"), std::optional<std::string>("s")) << hidden;
+    EXPECT_FALSE(xmlAttributeValue(hidden, "accid").has_value()) << hidden;
+    EXPECT_FALSE(xmlAttributeValue(hidden, "pm:xy").has_value()) << hidden;
+}
+
+// Promenade m51: a source can store a clef change at a system start in the new
+// system's header clef. It is the only record of the change, so it is exported
+// as a beat-1 clef; unchanged header clefs stay implicit.
+TEST_F(Mei_Tests, mei_export_header_clef_change_at_system_start) {
+    std::unique_ptr<MasterScore> score(readLaidOutV32ReviewFixture());
+    ASSERT_TRUE(score);
+    const Measure* third = score->firstMeasure()->nextMeasure()->nextMeasure();
+    ASSERT_TRUE(third);
+    ASSERT_NE(third->system(), score->firstMeasure()->system()) << "fixture measure 3 must start a system";
+
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-header-clef.test.mei");
+    size_t staffTwoTreble = 0;
+    size_t staffOneChanges = 0;
+    for (const std::string& tag : collectStartTags(meiText, "clef")) {
+        if (!xmlAttributeValue(tag, "beat").has_value()) {
+            continue; // staffDef clefs
+        }
+        if (xmlAttributeValue(tag, "staff") == std::optional<std::string>("2")) {
+            EXPECT_EQ(xmlAttributeValue(tag, "shape"), std::optional<std::string>("G")) << tag;
+            EXPECT_EQ(xmlAttributeValue(tag, "beat"), std::optional<std::string>("1.0000")) << tag;
+            ++staffTwoTreble;
+        } else {
+            ++staffOneChanges;
+        }
+    }
+    EXPECT_EQ(staffTwoTreble, 1u);
+    EXPECT_EQ(staffOneChanges, 0u);
+}
+
+// Skerceto m45: Auto Layout can re-cast a stored header clef change into the
+// middle of a system, where MuseScore does not draw header clefs. Auto Layout
+// turns it into an ordinary clef change before the barline, so it is drawn and
+// exported with its laid-out position.
+TEST_F(Mei_Tests, pianomania_auto_layout_turns_header_clef_change_into_clef_change) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+
+    const Measure* second = score->firstMeasure()->nextMeasure();
+    const Measure* third = second->nextMeasure();
+    ASSERT_TRUE(third);
+    const Segment* header = third->findSegmentR(SegmentType::HeaderClef, Fraction(0, 1));
+    const EngravingItem* headerItem = header ? header->element(VOICES) : nullptr;
+    EXPECT_TRUE(!headerItem || headerItem->generated()) << "the stored header clef change must not remain";
+    const Segment* change = second->findSegmentR(SegmentType::Clef, second->ticks());
+    ASSERT_TRUE(change);
+    const EngravingItem* changeItem = change->element(VOICES);
+    ASSERT_TRUE(changeItem && changeItem->isClef());
+    EXPECT_EQ(toClef(changeItem)->clefType(), ClefType::G);
+    EXPECT_EQ(score->staff(1)->clef(third->tick()), ClefType::G);
+
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-auto-layout-clef.test.mei");
+    size_t staffTwoTreble = 0;
+    for (const std::string& tag : collectStartTags(meiText, "clef")) {
+        if (xmlAttributeValue(tag, "staff") == std::optional<std::string>("2")
+            && xmlAttributeValue(tag, "shape") == std::optional<std::string>("G")) {
+            EXPECT_EQ(xmlAttributeValue(tag, "beat"), std::optional<std::string>("5.0000")) << tag;
+            ++staffTwoTreble;
+        }
+    }
+    EXPECT_EQ(staffTwoTreble, 1u);
+}
+
+// Polonaise m136: a trill too short for its wavy line draws only "tr". The
+// export only claims an extender for a trill that draws a line, and every
+// claimed line carries its geometry, so readers never invent one.
+TEST_F(Mei_Tests, mei_export_trill_extender_matches_drawn_line) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-trill-extender.test.mei");
+    size_t withoutLine = 0;
+    for (const std::string& tag : collectStartTags(meiText, "trill")) {
+        const bool claimsLine = xmlAttributeValue(tag, "extender") == std::optional<std::string>("true");
+        EXPECT_EQ(claimsLine, xmlAttributeValue(tag, "pm:x1y1x2y2").has_value()) << tag;
+        if (!claimsLine) {
+            ++withoutLine;
+        }
+    }
+    EXPECT_EQ(withoutLine, 1u);
+}
+
+// Kuhlau Op. 55/1 II m100: between the staves of a grand staff the barline
+// crosses a line's words, so Auto Layout widens the measure a short phrase
+// starts in until "poco a poco cresc." ends before that barline.
+TEST_F(Mei_Tests, pianomania_auto_layout_keeps_line_text_inside_its_measure) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    Measure* first = score->firstMeasure();
+    Hairpin* line = Factory::createHairpin(score->dummy()->segment());
+    line->setHairpinType(HairpinType::CRESC_LINE);
+    line->setBeginText(u"poco a poco cresc.");
+    line->setTick(first->tick() + Fraction(3, 4)); // the measure's last beat: the phrase runs past its barline
+    line->setTick2(first->nextMeasure()->endTick());
+    line->setTrack(0);
+    line->setTrack2(0);
+    line->setAnchor(Spanner::Anchor::SEGMENT);
+    score->addSpanner(line);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+
+    const auto* segment = static_cast<const TextLineBaseSegment*>(line->frontSegment());
+    ASSERT_TRUE(segment && segment->text());
+    const Measure* start = score->tick2measure(line->tick());
+    ASSERT_EQ(segment->system(), start->system());
+    EXPECT_LE(segment->text()->pageBoundingRect().right(), start->pageBoundingRect().right())
+        << "the phrase must end before the barline that closes its measure";
+}
+
+// Moonlight m31: a rest moved into the lower staff from the upper staff must
+// clear the lower staff's chord at the same moment instead of sitting on it.
+TEST_F(Mei_Tests, pianomania_cross_staff_rest_clears_destination_chord) {
+    std::unique_ptr<MasterScore> score(readLaidOutV32ReviewFixture());
+    ASSERT_TRUE(score);
+    Segment* segment = score->firstSegment(SegmentType::ChordRest);
+    ASSERT_TRUE(segment);
+    EngravingItem* restItem = segment->element(1); // staff 1, voice 2
+    ASSERT_TRUE(restItem && restItem->isRest());
+    Rest* rest = toRest(restItem);
+    ASSERT_EQ(rest->staffMove(), 1);
+    EngravingItem* chordItem = segment->element(VOICES); // staff 2, voice 1
+    ASSERT_TRUE(chordItem && chordItem->isChord());
+    const Note* top = toChord(chordItem)->upNote();
+
+    const RectF restRect = rest->pageBoundingRect();
+    const RectF noteRect = top->pageBoundingRect();
+    ASSERT_LT(restRect.left(), noteRect.right());
+    ASSERT_GT(restRect.right(), noteRect.left());
+    EXPECT_GE(noteRect.top() - restRect.bottom(), 0.3 * rest->spatium());
+}
+
+// Moonlight m5: a dynamic centred between the staves keeps half a space from a
+// cross-staff beam in the gap; Practice draws the dynamic glyph slightly deeper
+// than MuseScore, so a 0.3sp gap that MuseScore left there read as touching.
+TEST_F(Mei_Tests, pianomania_staff_centered_dynamic_keeps_cross_staff_beam_margin) {
+    PianomaniaPrettifyFlagScope flags(true, true);
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    Segment* segment = score->firstMeasure()->nextMeasure()->first(SegmentType::ChordRest);
+    ASSERT_TRUE(segment);
+    Dynamic* dynamic = Factory::createDynamic(segment, true);
+    dynamic->setTrack(0);
+    dynamic->setDynamicType(DynamicType::PP);
+    dynamic->setXmlText(Dynamic::dynamicText(DynamicType::PP));
+    dynamic->setCenterBetweenStaves(AutoOnOff::ON);
+    dynamic->setVoiceAssignment(VoiceAssignment::ALL_VOICE_IN_INSTRUMENT);
+    segment->add(dynamic);
+    score->style().set(Sid::dynamicsHairpinsAutoCenterOnGrandStaff, true);
+    score->setLayoutAll();
+    score->doLayout();
+
+    const Chord* chord = toChord(segment->element(0));
+    ASSERT_TRUE(chord && chord->beam() && chord->beam()->cross());
+    const Beam* beam = chord->beam();
+    const double sp = dynamic->spatium();
+
+    // Seat the dynamic just above the middle of the beam, where the Moonlight
+    // "pp" sat.
+    const RectF beamBounds = beam->pageBoundingRect();
+    dynamic->mutldata()->moveX(beamBounds.center().x() - dynamic->pageBoundingRect().center().x());
+    const RectF dynamicRect = dynamic->pageBoundingRect();
+    double beamTop = DBL_MAX;
+    const Shape beamShape = beam->shape().translated(beam->pagePos());
+    for (const ShapeElement& element : beamShape.elements()) {
+        if (element.right() > dynamicRect.left() && element.left() < dynamicRect.right()) {
+            beamTop = std::min(beamTop, element.top());
+        }
+    }
+    ASSERT_LT(beamTop, DBL_MAX) << "the beam must pass under the dynamic";
+    dynamic->mutldata()->moveY(beamTop - 0.3 * sp - dynamicRect.bottom());
+    const double seatedGap = pageGapToShape(dynamic->pageBoundingRect(), beam);
+    ASSERT_GT(seatedGap, 0.2 * sp);
+    ASSERT_LT(seatedGap, 0.45 * sp);
+
+    mu::engraving::rendering::score::SystemLayout::clearStaffCenteredItemsOfNotation({ dynamic }, chord->measure()->system());
+
+    EXPECT_GE(pageGapToShape(dynamic->pageBoundingRect(), beam), 0.5 * sp - 0.02 * sp);
+}
+
+// Arabesque m32 "f risoluto": an expression after a dynamic shares its
+// baseline even when the source unsnapped it, and the export carries the
+// word's left baseline origin so a reader with a narrower italic still starts
+// it where MuseScore did (Ave Maria m1 "p religioso").
+TEST_F(Mei_Tests, mei_export_snapped_expression_carries_text_origin) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false));
+    ASSERT_TRUE(score);
+    Segment* first = score->firstSegment(SegmentType::ChordRest);
+    ASSERT_TRUE(first);
+    Dynamic* dynamic = Factory::createDynamic(first, true);
+    dynamic->setTrack(0);
+    dynamic->setDynamicType(DynamicType::F);
+    first->add(dynamic);
+    Expression* snapped = Factory::createExpression(first, true);
+    snapped->setTrack(0);
+    snapped->setXmlText(u"risoluto");
+    snapped->setSnapToDynamics(false);
+    first->add(snapped);
+    Segment* later = first->next1(SegmentType::ChordRest);
+    while (later && later->measure() == first->measure()) {
+        later = later->next1(SegmentType::ChordRest);
+    }
+    ASSERT_TRUE(later);
+    Expression* lone = Factory::createExpression(later, true);
+    lone->setTrack(0);
+    lone->setXmlText(u"dolce");
+    later->add(lone);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+    EXPECT_TRUE(snapped->snapToDynamics());
+    ASSERT_EQ(snapped->ldata()->itemSnappedBefore(), dynamic);
+
+    const std::array<double, 2> left = pageInches(score.get(), snapped->pageBoundingRect().topLeft());
+    const std::array<double, 2> bottom = pageInches(score.get(), snapped->pageBoundingRect().bottomLeft());
+    const std::string meiText = exportPracticeGeometryFixture(score.get(), u"v32-text-origin.test.mei");
+    std::optional<std::string> snappedOrigin;
+    bool loneHasOrigin = false;
+    for (const std::string& tag : collectStartTags(meiText, "dir")) {
+        const std::optional<std::string> origin = xmlAttributeValue(tag, "pm:text-origin");
+        const size_t textStart = meiText.find(tag) + tag.size();
+        if (meiText.compare(textStart, 8, "risoluto") == 0) {
+            snappedOrigin = origin;
+        } else if (meiText.compare(textStart, 5, "dolce") == 0) {
+            loneHasOrigin = origin.has_value();
+        }
+    }
+    ASSERT_TRUE(snappedOrigin.has_value());
+    EXPECT_FALSE(loneHasOrigin);
+    const std::vector<double> xy = parseNumbers(*snappedOrigin);
+    ASSERT_EQ(xy.size(), 2u);
+    const double spInches = snapped->spatium() / DPI;
+    EXPECT_NEAR(xy[0], left[0], 0.3 * spInches);
+    EXPECT_LE(xy[1], left[1]);
+    EXPECT_GE(xy[1], bottom[1]);
 }
 
 }

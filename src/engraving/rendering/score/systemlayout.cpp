@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_set>
@@ -158,6 +159,14 @@ constexpr double PM_FINGERING_NESTLE_TRIGGER = PM_FINGERING_NOTEHEAD_DETACHMENT_
 constexpr double PM_FINGERING_NESTLE_NOTEHEAD_SIDE_TRIGGER = 2.5;
 constexpr double PM_FINGERING_NESTLE_NOTE_GAP = PM_FINGERING_NOTE_CLEARANCE_MIN + PM_FINGERING_SLUR_TARGET_EXTRA;
 constexpr double PM_FINGERING_NESTLE_MAX_DETACHMENT = 1.5;
+// A digit pinned between a slur and a beam may rest on the beam as it rests
+// on the staff's outer line: the beam is a rule, not a stem it could cross.
+constexpr double PM_FINGERING_BEAM_CLEARANCE_TUCK = PM_FINGERING_STAFF_CLEARANCE_MIN;
+// How far (sp) a stem-side digit may slide off its notehead's center, over
+// its own stem, to fit the pocket between its beam and a covering slur;
+// tried nearest first. A notehead-side digit stays centred: sliding it would
+// crowd the neighbouring notes' digits.
+constexpr std::array<double, 3> PM_FINGERING_UNDER_SLUR_STEMWARD_SLIDES_SP = { 0.0, 0.25, 0.5 };
 constexpr double PM_TEXT_HAIRPIN_NOTATION_CLEARANCE = 0.25;
 constexpr double PM_TEXT_HAIRPIN_MIN_OVERLAP = 0.05;
 
@@ -196,6 +205,11 @@ struct FingeringObstacle {
     RectF rect;
     staff_idx_t staffIdx = muse::nidx;
     bool above = true;
+    // Smallest clearance this mark accepts, whatever the caller's squeeze
+    // floor. Dots and tenuto bars may be nearly touched by a tucked digit; a
+    // wedge (accent, marcato) stacked under a digit needs a real gap (Bartok
+    // For Children I/3 m8/m18: a "1" grazing its marcato read as one glyph).
+    double clearanceFloor = 0.0;
 };
 
 struct TextHairpinObstacle {
@@ -203,6 +217,8 @@ struct TextHairpinObstacle {
 };
 
 RectF tupletMarkerSystemRect(const Tuplet* tuplet);
+bool tupletMarkerIsDrawn(const Tuplet* tuplet);
+bool visibleObstacleItem(const EngravingItem* item);
 
 // Dynamics that modify a specific note or chord (sforzando family), as
 // opposed to passage dynamics (p, f, mf, ...) that mark a span of music.
@@ -300,7 +316,11 @@ bool chordPitchRangesAreChordallyAdjacent(const Chord* a, const Chord* b)
         return false;
     }
 
-    constexpr int chordalAdjacentMaxPitchGap = 5;
+    // Two same-hand voices struck together read as one close grip up to a
+    // tritone apart: the F#/C dyads of Tchaikovsky Op. 39/1 m17/m19 and
+    // Goedicke m21 stack as one column. From a fifth outward the voices keep
+    // their own sides (the two-voice left hand of Tchaikovsky Op. 39/1 p1).
+    constexpr int chordalAdjacentMaxPitchGap = 6;
     const int aLow = std::min(a->downNote()->pitch(), a->upNote()->pitch());
     const int aHigh = std::max(a->downNote()->pitch(), a->upNote()->pitch());
     const int bLow = std::min(b->downNote()->pitch(), b->upNote()->pitch());
@@ -644,19 +664,29 @@ double requiredVerticalMoveFromMarkObstacles(const RectF& fingeringRect, const s
         if (obstacle.staffIdx != staffIdx || obstacle.above != above) {
             continue;
         }
-        required = std::max(required, requiredVerticalMoveFromNotationRect(fingeringRect, obstacle.rect, above, clearance));
+        required = std::max(required, requiredVerticalMoveFromNotationRect(fingeringRect, obstacle.rect, above,
+                                                                           std::max(clearance, obstacle.clearanceFloor)));
     }
     return required;
 }
 
+// Stems, flags and beams near a fingering group. Beams are flagged: a digit
+// tucked under a slur may rest on a beam at the staff-line floor.
+struct PmStructuralObstacle {
+    RectF rect;
+    bool beam = false;
+};
+
+// beamClearance < 0 applies the general clearance to beams as well.
 double requiredVerticalMoveFromStructuralObstacles(const RectF& fingeringRect,
-                                                   const std::vector<RectF>& obstacles,
-                                                   bool above, double clearance)
+                                                   const std::vector<PmStructuralObstacle>& obstacles,
+                                                   bool above, double clearance, double beamClearance = -1.0)
 {
     double required = 0.0;
-    for (const RectF& obstacle : obstacles) {
+    for (const PmStructuralObstacle& obstacle : obstacles) {
+        const double obstacleClearance = obstacle.beam && beamClearance >= 0.0 ? beamClearance : clearance;
         required = std::max(required,
-                            requiredVerticalMoveFromNotationRect(fingeringRect, obstacle, above, clearance));
+                            requiredVerticalMoveFromNotationRect(fingeringRect, obstacle.rect, above, obstacleClearance));
     }
     return required;
 }
@@ -930,10 +960,10 @@ void uniteNeighborGraceBeamDanger(RectF& danger, const std::vector<Fingering*>& 
 // group. These shapes need their own clearance model: the staff skyline can
 // keep a digit from overlapping them, but it does not guarantee the minimum
 // white space required around a fingering after the local prettify pass.
-std::vector<RectF> collectFingeringGroupStructuralObstacles(const std::vector<Fingering*>& fingerings,
+std::vector<PmStructuralObstacle> collectFingeringGroupStructuralObstacles(const std::vector<Fingering*>& fingerings,
                                                            const System* system)
 {
-    std::vector<RectF> obstacles;
+    std::vector<PmStructuralObstacle> obstacles;
     if (fingerings.empty() || !system) {
         return obstacles;
     }
@@ -951,9 +981,9 @@ std::vector<RectF> collectFingeringGroupStructuralObstacles(const std::vector<Fi
     // candidate can be tested with the preferred 0.5sp structural clearance.
     const double xLeft = groupRect.left() - 3.75 * spatium;
     const double xRight = groupRect.right() + 3.75 * spatium;
-    auto addIfLocal = [&](const RectF& rect) {
+    auto addIfLocal = [&](const RectF& rect, bool beam = false) {
         if (!rect.isNull() && rect.right() >= xLeft && rect.left() <= xRight) {
-            obstacles.push_back(rect);
+            obstacles.push_back({ rect, beam });
         }
     };
 
@@ -977,7 +1007,10 @@ std::vector<RectF> collectFingeringGroupStructuralObstacles(const std::vector<Fi
                                            + chord->pos() + segment.pos() + measure->pos();
                 const Stem* stem = chord->stem();
                 if (stem && stem->visible() && stem->ldata() && !stem->ldata()->isSkipDraw()) {
-                    addIfLocal(stem->ldata()->bbox().translated(chordOrigin + stem->pos() + stem->staffOffset()));
+                    // A beamed stem ends inside its beam: its tip is part of
+                    // the beam's rule.
+                    addIfLocal(stem->ldata()->bbox().translated(chordOrigin + stem->pos() + stem->staffOffset()),
+                               visibleObstacleItem(chord->beam()));
                 }
 
                 const Hook* hook = chord->hook();
@@ -1000,13 +1033,13 @@ std::vector<RectF> collectFingeringGroupStructuralObstacles(const std::vector<Fi
                     for (const ShapeElement& box : beamSegmentShape.elements()) {
                         const RectF rect = box.translated(beamOffset);
                         if (!rect.isNull() && rect.right() >= xLeft && rect.left() <= xRight) {
-                            obstacles.push_back(rect);
+                            obstacles.push_back({ rect, true });
                             addedSegment = true;
                         }
                     }
                 }
                 if (!addedSegment) {
-                    addIfLocal(beam->ldata()->bbox().translated(beamOffset));
+                    addIfLocal(beam->ldata()->bbox().translated(beamOffset), true);
                 }
             }
         }
@@ -1262,7 +1295,7 @@ double requiredVerticalMoveFromStaff(const RectF& fingeringRect, double staffTop
 struct FingeringGroupContext {
     const std::vector<FingeringObstacle>* obstacles = nullptr;
     const System* system = nullptr;
-    std::vector<RectF> structuralObstacles;
+    std::vector<PmStructuralObstacle> structuralObstacles;
     RectF noteDangerRect;
     RectF noteheadRect;
     Shape groupShape;
@@ -1456,6 +1489,121 @@ bool fingeringGroupFinalTuckClearsSkyline(const RectF& baseRect, const RectF& ca
     return true;
 }
 
+// The near-touch gate every under-slur tuck must pass: notes, staff edge,
+// marks, stems/flags, beams (at the staff-line floor), slurs and the skyline.
+bool fingeringUnderSlurTuckClears(const RectF& groupRect, const RectF& tucked, const FingeringGroupContext& ctx)
+{
+    const double sp = ctx.spatium;
+    const double staffIntrusion = PM_FINGERING_TUCK_STAFF_INTRUSION * sp;
+    return requiredVerticalMoveFromNotationRect(tucked, ctx.noteDangerRect, ctx.above,
+                                                PM_FINGERING_NOTE_CLEARANCE_MIN * sp) <= 0.0
+           && requiredVerticalMoveFromStaff(tucked, ctx.staffTop + staffIntrusion, ctx.staffBottom - staffIntrusion,
+                                            ctx.above, PM_FINGERING_STAFF_CLEARANCE_MIN * sp) <= 0.0
+           && requiredVerticalMoveFromMarkObstacles(tucked, *ctx.obstacles, ctx.staffIdx, ctx.above,
+                                                    PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0
+           && requiredVerticalMoveFromStructuralObstacles(tucked, ctx.structuralObstacles, ctx.above,
+                                                          PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp,
+                                                          PM_FINGERING_BEAM_CLEARANCE_TUCK * sp) <= 0.0
+           && !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
+                                    PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+           && fingeringGroupFinalTuckClearsSkyline(groupRect, tucked, ctx);
+}
+
+// Where a same-staff slur runs relative to a placed group in the group's
+// x-window: between the notes and the digits (the digits sit outside it), or
+// beyond the digits (the digits are tucked under it).
+enum class PmSlurRelation {
+    None,
+    DigitsOutside,
+    DigitsInside
+};
+
+PmSlurRelation pianomaniaSlurRelation(const RectF& placed, const FingeringGroupContext& ctx,
+                                      const SlurSegment** slurSegment = nullptr)
+{
+    if (!ctx.obstacles || ctx.noteheadRect.isNull()) {
+        return PmSlurRelation::None;
+    }
+    const double xMargin = PM_FINGERING_SLUR_X_MARGIN * ctx.spatium;
+    PmSlurRelation relation = PmSlurRelation::None;
+    for (const FingeringObstacle& obstacle : *ctx.obstacles) {
+        if (!obstacle.slurSegment || obstacle.slurSegment->ldata()->isSkipDraw() || obstacle.staffIdx != ctx.staffIdx) {
+            continue;
+        }
+        const SlurWindowSample sample = sampleSlurWithinFingeringWindow(placed, obstacle.slurSegment, xMargin, 0.0);
+        if (!sample.any) {
+            continue;
+        }
+        const bool outside = ctx.above
+                             ? sample.minY >= placed.bottom() && sample.maxY <= ctx.noteheadRect.top()
+                             : sample.maxY <= placed.top() && sample.minY >= ctx.noteheadRect.bottom();
+        if (outside) {
+            if (slurSegment) {
+                *slurSegment = obstacle.slurSegment;
+            }
+            return PmSlurRelation::DigitsOutside;
+        }
+        const bool inside = ctx.above ? sample.maxY <= placed.top() : sample.minY >= placed.bottom();
+        if (inside) {
+            relation = PmSlurRelation::DigitsInside;
+        }
+    }
+    return relation;
+}
+
+// A group left outside a slur that arches over its own notes, while its
+// slur-chain neighbours tuck under that slur (Clementi Op. 36/2 I m36: the
+// "1" above the phrase slur between digits tucked beneath it), takes the
+// pocket under the slur when the digits fit there: resting on the beam at the
+// staff-line floor, just under the slur at the tuck clearance, a stem-side
+// digit sliding at most half a space off the notehead's center over its stem.
+bool rescueFingeringGroupUnderCoveringSlur(const RectF& groupRect, const GroupPlacement& chosen,
+                                           const FingeringGroupContext& ctx, const Chord* chord,
+                                           GroupPlacement& rescued)
+{
+    if (!ctx.allowTuck || !ctx.obstacles) {
+        return false;
+    }
+    const double sp = ctx.spatium;
+    const double xMargin = PM_FINGERING_SLUR_X_MARGIN * sp;
+    const RectF placed = groupRect.translated(chosen.dx, ctx.above ? -chosen.moveAway : chosen.moveAway);
+    const SlurSegment* covering = nullptr;
+    if (pianomaniaSlurRelation(placed, ctx, &covering) != PmSlurRelation::DigitsOutside || !covering) {
+        return false;
+    }
+
+    const double target = (PM_FINGERING_SLUR_CLEARANCE_TUCK + PM_FINGERING_SLUR_TARGET_EXTRA) * sp
+                          + covering->ldata()->midThickness();
+    const bool stemSide = chord && chord->stem() && ctx.above == chord->up();
+    const double stemward = chord && !chord->up() ? -1.0 : 1.0;
+    for (const double slideSp : PM_FINGERING_UNDER_SLUR_STEMWARD_SLIDES_SP) {
+        if (!stemSide && slideSp > 0.0) {
+            break;
+        }
+        const double dx = stemward * slideSp * sp;
+        const RectF shifted = groupRect.translated(dx, 0.0);
+        const SlurWindowSample sample = sampleSlurWithinFingeringWindow(shifted, covering, xMargin, 0.0);
+        if (!sample.any) {
+            continue;
+        }
+        const double moveAway = ctx.above ? groupRect.top() - (sample.maxY + target)
+                                : (sample.minY - target) - groupRect.bottom();
+        const RectF tucked = shifted.translated(0.0, ctx.above ? -moveAway : moveAway);
+        if (!fingeringUnderSlurTuckClears(groupRect, tucked, ctx)) {
+            continue;
+        }
+        rescued = chosen;
+        rescued.dx = dx;
+        rescued.moveAway = moveAway;
+        rescued.tucked = true;
+        rescued.slurResolved = true;
+        rescued.needsTempoClearance = false;
+        rescued.tuckAllowanceUsed = 0.0;
+        return true;
+    }
+    return false;
+}
+
 bool fingeringPlacementClearsOppositeSide(const RectF& groupRect, const GroupPlacement& placement,
                                           const FingeringGroupContext& ctx)
 {
@@ -1527,7 +1675,7 @@ bool manualFingeringGroupOverlapsNotation(const std::vector<Fingering*>& fingeri
     if (!danger.isNull() && rectsOverlap(rect, danger)) {
         return true;
     }
-    const std::vector<RectF> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
+    const std::vector<PmStructuralObstacle> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
     if (requiredVerticalMoveFromStructuralObstacles(rect, structuralObstacles,
                                                     first->placement() == PlacementV::ABOVE,
                                                     PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0) {
@@ -1571,7 +1719,9 @@ bool fingeringGroupPreferredSideTupletBlocked(const std::vector<Fingering*>& fin
         const Chord* fingeringChord = fingeringNote ? fingeringNote->chord() : nullptr;
         Tuplet* tuplet = fingeringChord ? fingeringChord->tuplet() : nullptr;
         while (tuplet) {
-            const RectF markerRect = tupletMarkerSystemRect(tuplet);
+            // Only drawn tuplet ink can block a digit: a hidden tuplet
+            // (Moonlight's implied triplets) leaves its side free.
+            const RectF markerRect = tupletMarkerIsDrawn(tuplet) ? tupletMarkerSystemRect(tuplet) : RectF();
             if (!markerRect.isNull() && tuplet->vStaffIdx() == chord->vStaffIdx()
                 && rectIsAboveStaff(markerRect, tuplet) == above
                 && rect.right() >= markerRect.left() - tupletClearance
@@ -1958,6 +2108,16 @@ RectF measureElementSystemRect(const EngravingItem* item)
                                            + measure->pos() + item->pos() + item->staffOffset());
 }
 
+// Whether the tuplet prints any ink (number or bracket) a digit could hit.
+bool tupletMarkerIsDrawn(const Tuplet* tuplet)
+{
+    if (!visibleObstacleItem(tuplet)) {
+        return false;
+    }
+    const Text* number = tuplet->number();
+    return visibleObstacleItem(number) || tuplet->hasBracket();
+}
+
 RectF tupletMarkerSystemRect(const Tuplet* tuplet)
 {
     const Measure* measure = tuplet && tuplet->explicitParent() && tuplet->explicitParent()->isMeasure()
@@ -2047,8 +2207,12 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
                         if (!visibleObstacleItem(articulation)) {
                             continue;
                         }
+                        const size_t obstacleCount = obstacles.size();
                         addRectObstacle(obstacles, FingeringObstacleKind::Mark, chordAttachedItemSystemRect(chord, articulation),
                                         chord->vStaffIdx(), articulation->up());
+                        if ((articulation->isAccent() || articulation->isMarcato()) && obstacles.size() > obstacleCount) {
+                            obstacles.back().clearanceFloor = PM_FINGERING_MARK_CLEARANCE * articulation->spatium();
+                        }
                     }
                     Ornament* ornament = chord->findOrnament();
                     if (visibleObstacleItem(ornament)
@@ -2127,7 +2291,7 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
                 }
                 Tuplet* tuplet = toChordRest(item)->tuplet();
                 while (tuplet) {
-                    if (seenTuplets.insert(tuplet).second && visibleObstacleItem(tuplet)) {
+                    if (seenTuplets.insert(tuplet).second && tupletMarkerIsDrawn(tuplet)) {
                         const RectF rect = tupletMarkerSystemRect(tuplet);
                         addRectObstacle(obstacles, FingeringObstacleKind::Tuplet, rect, tuplet->vStaffIdx(),
                                         rectIsAboveStaff(rect, tuplet));
@@ -2965,7 +3129,7 @@ bool rectClearsGraceFingeringAlignment(const RectF& baseRect, const RectF& rect,
                                        const System* system, double staffTop, bool above, double spatium)
 {
     const RectF danger = fingeringGroupNotationDangerRect(fingerings, 0.2 * spatium, false);
-    const std::vector<RectF> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
+    const std::vector<PmStructuralObstacle> structuralObstacles = collectFingeringGroupStructuralObstacles(fingerings, system);
     if (requiredVerticalMoveFromNotationRect(rect, danger, above, PM_FINGERING_NOTE_CLEARANCE_MIN * spatium) > 0.0
         || requiredVerticalMoveFromMarkObstacles(rect, obstacles, staffIdx, above,
                                                  PM_FINGERING_MARK_CLEARANCE_MIN * spatium) > 0.0
@@ -3224,6 +3388,44 @@ void retryPianomaniaSlurChainTucks(std::vector<PmFingeringGroupAdjustment>& adju
     }
 }
 
+// A slur chain whose digits split around the slur — some tucked under it,
+// some lifted over it — takes the outliers under the slur when every one of
+// them fits the near-touch pocket there; otherwise the chain stays as it is.
+void rescuePianomaniaSlurChainOutliers(std::vector<PmFingeringGroupAdjustment>& adjustments,
+                                       const std::vector<size_t>& chain)
+{
+    std::vector<size_t> outside;
+    bool anyInside = false;
+    for (const size_t index : chain) {
+        const PmFingeringGroupAdjustment& adjustment = adjustments[index];
+        const RectF placed = adjustment.baseRect.translated(
+            adjustment.chosen.dx, adjustment.ctx.above ? -adjustment.chosen.moveAway : adjustment.chosen.moveAway);
+        const PmSlurRelation relation = pianomaniaSlurRelation(placed, adjustment.ctx);
+        if (relation == PmSlurRelation::DigitsOutside) {
+            outside.push_back(index);
+        } else if (relation == PmSlurRelation::DigitsInside) {
+            anyInside = true;
+        }
+    }
+    if (outside.empty() || !anyInside) {
+        return;
+    }
+
+    std::vector<std::pair<size_t, GroupPlacement>> rescues;
+    for (const size_t index : outside) {
+        const PmFingeringGroupAdjustment& adjustment = adjustments[index];
+        GroupPlacement rescued;
+        if (adjustment.flipped || !rescueFingeringGroupUnderCoveringSlur(adjustment.baseRect, adjustment.chosen,
+                                                                         adjustment.ctx, adjustment.chord, rescued)) {
+            return;
+        }
+        rescues.emplace_back(index, rescued);
+    }
+    for (const auto& [index, placement] : rescues) {
+        applyFingeringGroupPlacementDelta(adjustments[index], placement);
+    }
+}
+
 void enforcePianomaniaSlurTuckCoherence(std::vector<PmFingeringGroupAdjustment>& adjustments,
                                         const std::vector<FingeringObstacle>& obstacles)
 {
@@ -3275,6 +3477,7 @@ void enforcePianomaniaSlurTuckCoherence(std::vector<PmFingeringGroupAdjustment>&
 
                 if (chainSlur && chain.size() >= 2) {
                     retryPianomaniaSlurChainTucks(adjustments, chain);
+                    rescuePianomaniaSlurChainOutliers(adjustments, chain);
                 }
 
                 start = end + 1;
@@ -4100,6 +4303,77 @@ void movePianomaniaTextHairpinsClearOfNotation(System* system)
         hairpinSegment->mutldata()->moveY(above ? -moveAway : moveAway);
     }
 }
+}
+
+// Fingering keeps its hand's side; a tuplet number does not own a side. When
+// an automatically placed number lands over a digit on that digit's own side
+// (Promenade m1: the left-hand triplet's "1" under its beam, where the "3"
+// also sits), the digit used to be thrown to the far side of the notes. The
+// number moves to the other side of the group instead, where it is free of
+// digits, and the digits stay together.
+bool SystemLayout::pianomaniaTupletNumberYieldsToFingerings(const Tuplet* tuplet)
+{
+    if (!MScore::pianomaniaPrettifySlursFingerings || !tuplet || tuplet->direction() != DirectionV::AUTO
+        || tuplet->cross() || !tuplet->visible() || !tuplet->number() || !tuplet->number()->visible()) {
+        return false;
+    }
+    const Measure* measure = tuplet->measure();
+    const Text* number = tuplet->number();
+    if (!measure || !number->ldata()) {
+        return false;
+    }
+
+    const double sp = tuplet->spatium();
+    const RectF numberRect = number->ldata()->bbox().translated(tuplet->pos() + number->pos());
+    const double clearance = PM_FINGERING_MARK_CLEARANCE * sp;
+    const bool numberAbove = tuplet->isUp();
+    bool digitUnderNumber = false;
+    bool digitOnFarSide = false;
+
+    std::function<void(const Tuplet*)> scan = [&](const Tuplet* t) {
+        for (const DurationElement* element : t->elements()) {
+            if (element->isTuplet()) {
+                scan(toTuplet(element));
+                continue;
+            }
+            if (!element->isChord()) {
+                continue;
+            }
+            const Chord* chord = toChord(element);
+            const Segment* segment = chord->segment();
+            if (!segment || segment->measure() != measure) {
+                continue;
+            }
+            for (const Note* note : chord->notes()) {
+                if (!note->ldata()) {
+                    continue;
+                }
+                const double noteLeft = segment->x() + chord->x() + note->x() + note->ldata()->bbox().left();
+                const double noteRight = noteLeft + note->ldata()->bbox().width();
+                const bool underNumber = noteRight + clearance >= numberRect.left()
+                                         && noteLeft - clearance <= numberRect.right();
+                for (const EngravingItem* item : note->el()) {
+                    if (!item || !item->isFingering() || !item->visible()) {
+                        continue;
+                    }
+                    const Fingering* fingering = toFingering(item);
+                    const bool keepsManualSide = hasManualFingeringPlacement(fingering)
+                                                 && !MScore::pianomaniaForceNormalizeSlursFingerings;
+                    const bool digitAbove = keepsManualSide
+                                            ? fingering->placeAbove()
+                                            : pianomaniaPreferredFingeringPlacement(fingering) == PlacementV::ABOVE;
+                    if (digitAbove == numberAbove) {
+                        digitUnderNumber = digitUnderNumber || underNumber;
+                    } else {
+                        digitOnFarSide = digitOnFarSide || underNumber;
+                    }
+                }
+            }
+        }
+    };
+    scan(tuplet);
+
+    return digitUnderNumber && !digitOnFarSide;
 }
 
 void SystemLayout::adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines)
@@ -7279,6 +7553,11 @@ std::vector<VerticalInterval> staffCenteredFreeMoves(const std::vector<RectF>& c
 void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system)
 {
     constexpr double CLEARANCE_SP = 0.25;
+    // A dynamic or expression reads as touching a cross-staff beam well before
+    // the ink overlaps: readers draw the dynamic glyph slightly deeper than
+    // MuseScore does, so a 0.3sp gap here touched the beam in Practice
+    // (Moonlight m5 "pp"). Beams keep a wider margin than other notation.
+    constexpr double BEAM_CLEARANCE_SP = 0.5;
     constexpr double OVERLAP_TOLERANCE_SP = 0.05;
 
     std::set<const EngravingItem*> handled;
@@ -7369,21 +7648,28 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
                 }
             }
         }
+        const double spatium = item->spatium();
+        // Beam boxes grow by the extra beam margin, so every search below can
+        // use one clearance for all obstacles.
+        const double beamMargin = (BEAM_CLEARANCE_SP - CLEARANCE_SP) * spatium;
+        std::vector<RectF> beamObstacles;
         const PointF staffOrigin = system->pagePos() + PointF(0.0, thisStaff->y());
         for (const Beam* beam : crossBeams) {
             const PointF beamOrigin = beam->pagePos() - staffOrigin;
             const Shape beamShape = beam->shape();
             for (const ShapeElement& element : beamShape.elements()) {
-                obstacles.push_back(element.translated(beamOrigin));
+                beamObstacles.push_back(element.translated(beamOrigin).adjusted(-beamMargin, -beamMargin, beamMargin, beamMargin));
             }
         }
 
-        const double spatium = item->spatium();
         const double minMove = upperStaffBottom - chainTop;
         const double maxMove = lowerStaffTop - chainBottom;
-        if (!staffCenteredFreeMoves(chainRects, obstacles, 0.0, 0.0, -OVERLAP_TOLERANCE_SP * spatium).empty()) {
-            continue; // nothing overlaps where the chain is now
+        if (!staffCenteredFreeMoves(chainRects, obstacles, 0.0, 0.0, -OVERLAP_TOLERANCE_SP * spatium).empty()
+            && (beamObstacles.empty()
+                || !staffCenteredFreeMoves(chainRects, beamObstacles, 0.0, 0.0, CLEARANCE_SP * spatium).empty())) {
+            continue; // nothing overlaps where the chain is now, and beams keep their margin
         }
+        obstacles.insert(obstacles.end(), beamObstacles.begin(), beamObstacles.end());
 
         std::vector<VerticalInterval> free = staffCenteredFreeMoves(chainRects, obstacles, minMove, maxMove, CLEARANCE_SP * spatium);
         if (free.empty()) {

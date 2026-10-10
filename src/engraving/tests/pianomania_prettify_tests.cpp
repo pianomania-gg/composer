@@ -3960,3 +3960,247 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsMarkMovedOutsideShorterSlur)
 
     delete score;
 }
+
+namespace {
+// The single digit on the note of the given pitch in the given (1-based) measure.
+Fingering* fingeringOnPitch(Score* score, int measureNumber, int pitch, const String& text)
+{
+    Fingering* found = nullptr;
+    for (Fingering* fingering : collectFingeringsByText(score, text)) {
+        const Note* note = fingering->note();
+        if (note && note->pitch() == pitch && note->chord()->measure()->no() + 1 == measureNumber) {
+            EXPECT_EQ(found, nullptr) << "ambiguous digit " << text.toStdString() << " in m" << measureNumber;
+            found = fingering;
+        }
+    }
+    return found;
+}
+}
+
+// Test value: Tchaikovsky Op. 39 No. 1 m17/m19 (and Goedicke m21). Two
+// right-hand voices striking a tritone dyad (F#/C) together are one grip:
+// their digits stack in one column above the staff, the larger number
+// higher ("4 over 1", "4 over 2"), instead of the lower voice's digit
+// dropping below the staff where it reads as the left hand's.
+TEST_F(Engraving_PianomaniaPrettifyTests, sameHandTritoneDyadStacksAboveInOneColumn)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-same-hand-tritone-dyad.mscx");
+    ASSERT_TRUE(score);
+
+    struct Dyad {
+        int measure;
+        int upperPitch;
+        int lowerPitch;
+        String lowerDigit;
+    };
+    for (const Dyad& dyad : { Dyad { 1, 78, 72, u"1" }, Dyad { 2, 66, 60, u"2" } }) {
+        const Fingering* upper = fingeringOnPitch(score, dyad.measure, dyad.upperPitch, u"4");
+        ASSERT_TRUE(upper) << "m" << dyad.measure;
+        // The lower voice repeats its pitch later in the measure; the dyad's
+        // digit is the one on the attack shared with the upper voice.
+        const Fingering* lower = nullptr;
+        for (Fingering* fingering : collectFingeringsByText(score, dyad.lowerDigit)) {
+            if (fingering->note()->pitch() == dyad.lowerPitch
+                && fingering->note()->chord()->tick() == upper->note()->chord()->tick()) {
+                lower = fingering;
+            }
+        }
+        ASSERT_TRUE(lower) << "m" << dyad.measure;
+        ASSERT_NE(lower->note()->chord(), upper->note()->chord()) << "the dyad spans two voices";
+
+        EXPECT_EQ(upper->placement(), PlacementV::ABOVE) << "m" << dyad.measure;
+        EXPECT_EQ(lower->placement(), PlacementV::ABOVE) << "m" << dyad.measure;
+        const double sp = upper->spatium();
+        const RectF upperRect = fingeringSystemRect(upper);
+        const RectF lowerRect = fingeringSystemRect(lower);
+        // One column: centred together, "4" on top, both above the upper notehead.
+        EXPECT_NEAR(upperRect.center().x(), lowerRect.center().x(), 0.1 * sp) << "m" << dyad.measure;
+        EXPECT_LE(upperRect.bottom(), lowerRect.top() + 0.01 * sp) << "m" << dyad.measure;
+        EXPECT_LT(lowerRect.bottom(), noteSystemRect(upper->note()).top()) << "m" << dyad.measure;
+    }
+
+    delete score;
+}
+
+// Test value: Moonlight m1/m3. Hidden tuplets print nothing, so they cannot
+// push a digit off its side: the triplet's middle digit stays above with its
+// neighbours instead of dropping below the notes.
+TEST_F(Engraving_PianomaniaPrettifyTests, hiddenTupletLeavesDigitsOnHandSide)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-hidden-tuplet.mscx");
+    ASSERT_TRUE(score);
+
+    for (Tuplet* tuplet : collectTuplets(score)) {
+        ASSERT_FALSE(tuplet->visible());
+    }
+    size_t checked = 0;
+    for (const String& text : { String(u"1"), String(u"2"), String(u"3"), String(u"4"), String(u"5") }) {
+        for (const Fingering* fingering : collectFingeringsByText(score, text)) {
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE) << text.toStdString();
+            EXPECT_LT(fingeringSystemRect(fingering).bottom(), noteSystemRect(fingering->note()).top()) << text.toStdString();
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 5u);
+
+    delete score;
+}
+
+// Test value: Promenade m1/m3. A left-hand triplet beamed below its notes
+// would put its "3" where the left-hand digits go, which used to throw the
+// middle digit above the notes. The digits keep their side and the number
+// takes the other side of the group; Prettify persists that side.
+TEST_F(Engraving_PianomaniaPrettifyTests, tupletNumberYieldsSideToLeftHandDigits)
+{
+    auto assertDigitsBelowAndNumberAbove = [](Score* score) {
+        const std::vector<Tuplet*> tuplets = collectTuplets(score);
+        ASSERT_EQ(tuplets.size(), 1u);
+        const Tuplet* tuplet = tuplets.front();
+        EXPECT_TRUE(tuplet->isUp());
+        const RectF numberRect = tupletNumberSystemRect(tuplet);
+        ASSERT_FALSE(numberRect.isNull());
+
+        double noteheadsTop = std::numeric_limits<double>::max();
+        for (const DurationElement* element : tuplet->elements()) {
+            ASSERT_TRUE(element->isChord());
+            const Chord* chord = toChord(element);
+            EXPECT_FALSE(chord->up()) << "the beam stays below the triplet";
+            for (const Note* note : chord->notes()) {
+                noteheadsTop = std::min(noteheadsTop, note->pageBoundingRect().top());
+            }
+        }
+        EXPECT_LT(numberRect.bottom(), noteheadsTop);
+
+        size_t checked = 0;
+        for (const String& text : { String(u"1"), String(u"2"), String(u"3") }) {
+            for (const Fingering* fingering : collectFingeringsByText(score, text)) {
+                if (fingering->note()->chord()->measure()->no() != 0) {
+                    continue;
+                }
+                EXPECT_EQ(fingering->placement(), PlacementV::BELOW) << text.toStdString();
+                EXPECT_GT(fingeringSystemRect(fingering).top(), noteSystemRect(fingering->note()).bottom()) << text.toStdString();
+                EXPECT_FALSE(rectsOverlap(fingering->pageBoundingRect(), numberRect)) << text.toStdString();
+                ++checked;
+            }
+        }
+        EXPECT_EQ(checked, 5u);
+    };
+
+    {
+        PracticeExportFlags flags;
+        MasterScore* score = readAutoLaidOut(u"fingering-tuplet-number-yields.mscx");
+        ASSERT_TRUE(score);
+        EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::AUTO);
+        assertDigitsBelowAndNumberAbove(score);
+        delete score;
+    }
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-tuplet-number-yields.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+    EXPECT_TRUE(applyPrettifyCommand(score).changed);
+    EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::UP);
+    assertDigitsBelowAndNumberAbove(score);
+    applyPrettifyCommand(score);
+    EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::UP);
+    assertDigitsBelowAndNumberAbove(score);
+    delete score;
+}
+
+// Test value: Bartok For Children I/3 m8/m18. A digit over a marcato on the
+// same note stacks centred on the wedge with a real gap, instead of the
+// near-touch squeeze that suits staccato dots.
+TEST_F(Engraving_PianomaniaPrettifyTests, digitOverMarcatoKeepsClearGap)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-marcato-stack.mscx");
+    ASSERT_TRUE(score);
+
+    size_t checked = 0;
+    for (const Fingering* fingering : collectFingeringsByText(score, u"1")) {
+        const Chord* chord = fingering->note()->chord();
+        for (const Articulation* articulation : chord->articulations()) {
+            if (!articulation->isMarcato()) {
+                continue;
+            }
+            const double sp = fingering->spatium();
+            const RectF digitRect = fingering->pageBoundingRect();
+            const RectF marcatoRect = articulation->pageBoundingRect();
+            EXPECT_EQ(fingering->placement(), PlacementV::ABOVE);
+            EXPECT_LE(digitRect.bottom(), marcatoRect.top() - 0.25 * sp + 1e-3);
+            EXPECT_NEAR(digitRect.center().x(), marcatoRect.center().x(), 0.1 * sp);
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 1u);
+
+    delete score;
+}
+
+// Test value: Clementi Op. 36 No. 2 I m36. The "1" on the last sixteenth of a
+// beamed group fits under the phrase slur its neighbours tuck under: resting
+// on its beam at the staff-line floor, under the slur, at most half a space
+// toward its stem — not lifted over the slur.
+TEST_F(Engraving_PianomaniaPrettifyTests, digitTucksUnderPhraseSlurOnItsBeam)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"clementi-op36-no2-i-under-slur-pocket.mscz");
+    ASSERT_TRUE(score);
+
+    const Fingering* digit = fingeringOnPitch(score, 36, 67, u"1");
+    ASSERT_TRUE(digit);
+    const Chord* chord = digit->note()->chord();
+    ASSERT_TRUE(chord->up());
+    ASSERT_TRUE(chord->beam());
+    EXPECT_EQ(digit->placement(), PlacementV::ABOVE);
+    const double sp = digit->spatium();
+    const RectF digitRect = digit->pageBoundingRect();
+    const RectF noteRect = digit->note()->pageBoundingRect();
+    EXPECT_GE(digitRect.center().x(), noteRect.center().x() - 0.01 * sp);
+    EXPECT_LE(digitRect.center().x(), noteRect.center().x() + 0.5 * sp + 0.01 * sp);
+
+    // On top of the beam, with the staff-line floor.
+    const Beam* beam = chord->beam();
+    const PointF beamOrigin = beam->pagePos();
+    double beamTop = std::numeric_limits<double>::max();
+    for (const BeamSegment* beamSegment : beam->beamSegments()) {
+        const PointF start = beamSegment->line.p1() + beamOrigin;
+        const PointF end = beamSegment->line.p2() + beamOrigin;
+        for (double x : { digitRect.left(), digitRect.right() }) {
+            const double clamped = std::clamp(x, std::min(start.x(), end.x()), std::max(start.x(), end.x()));
+            const double centerY = start.y() + (end.y() - start.y()) * (clamped - start.x()) / (end.x() - start.x());
+            beamTop = std::min(beamTop, centerY - 0.5 * beam->beamWidth());
+        }
+    }
+    EXPECT_LE(digitRect.bottom(), beamTop - 0.1 * sp + 1e-3);
+
+    // Under the covering slur: every curve point over the digit is above it.
+    const Slur* covering = nullptr;
+    for (const auto& pair : score->spanner()) {
+        const Slur* slur = pair.second && pair.second->isSlur() ? toSlur(pair.second) : nullptr;
+        if (slur && slur->tick() < chord->tick() && slur->tick2() > chord->tick() && slur->track() == chord->track()) {
+            covering = slur;
+        }
+    }
+    ASSERT_TRUE(covering);
+    size_t samples = 0;
+    for (const SpannerSegment* spannerSegment : covering->spannerSegments()) {
+        const SlurSegment* segment = toSlurSegment(spannerSegment);
+        const PointF origin = segment->pagePos();
+        const CubicBezier bezier(origin + segment->ups(Grip::START).pos(), origin + segment->ups(Grip::BEZIER1).pos(),
+                                 origin + segment->ups(Grip::BEZIER2).pos(), origin + segment->ups(Grip::END).pos());
+        for (int i = 0; i <= 200; ++i) {
+            const PointF point = bezier.pointAtPercent(i / 200.0);
+            if (point.x() < digitRect.left() || point.x() > digitRect.right()) {
+                continue;
+            }
+            EXPECT_LT(point.y() + 0.5 * segment->ldata()->midThickness(), digitRect.top());
+            ++samples;
+        }
+    }
+    EXPECT_GT(samples, 0u);
+
+    delete score;
+}

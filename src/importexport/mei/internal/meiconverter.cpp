@@ -2832,7 +2832,9 @@ std::pair<libmei::Note, libmei::Accid> Convert::pitchToMEI(const engraving::Note
     Convert::PitchStruct pitch;
     pitch.pitch = note->pitch();
     pitch.tpc2 = note->tpc2();
-    if (accid) {
+    // A hidden accidental is not engraved: it leaves the alteration to
+    // @accid.ges below, so readers never draw it (Scarlatti K. 34 m8 grace G#).
+    if (accid && accid->visible()) {
         pitch.accidType = accid->accidentalType();
         pitch.accidBracket = accid->bracket();
         // Not needed because relying on accidType

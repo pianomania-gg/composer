@@ -1217,6 +1217,28 @@ void collectChordsAndRest(Segment* segment, staff_idx_t staffIdx, std::vector<Ch
             rests.push_back(toRest(e));
         }
     }
+
+    // A rest moved into this staff from another staff of the part is laid out
+    // in this staff's frame and must clear this staff's chords too (Moonlight
+    // m31: the right hand's eighth rest moved onto the left hand's whole note).
+    const Staff* staff = segment->score()->staff(staffIdx);
+    const Part* part = staff ? staff->part() : nullptr;
+    if (!part) {
+        return;
+    }
+    for (const Staff* other : part->staves()) {
+        if (other->idx() == staffIdx) {
+            continue;
+        }
+        const track_idx_t otherStart = other->idx() * VOICES;
+        for (track_idx_t track = otherStart; track < otherStart + VOICES; ++track) {
+            EngravingItem* e = segment->element(track);
+            if (e && e->isRest() && toChordRest(e)->staffMove() && toRest(e)->vStaffIdx() == staffIdx
+                && !toRest(e)->isFullMeasureRest()) {
+                rests.push_back(toRest(e));
+            }
+        }
+    }
 }
 
 void collectChordsOverlappingRests(Segment* segment, staff_idx_t staffIdx, std::vector<Chord*>& chords)

@@ -272,6 +272,11 @@ void RestLayout::resolveRestVSChord(std::vector<Rest*>& rests, std::vector<Chord
             const std::optional<bool> restUp = restVoiceDrawnUp(rest);
             bool restAbove = restUp && *restUp != chord->up() ? *restUp : rest->voice() < chord->voice();
             restAbove = restAbove || (chord->slash() && !(rest->voice() % 2));
+            if (rest->staffMove() != 0 && chord->staffMove() == 0) {
+                // A rest moved in from the staff above belongs to the upper
+                // part; one moved in from below belongs to the lower part.
+                restAbove = rest->staffMove() > 0;
+            }
             int upSign = restAbove ? -1 : 1;
             double restYOffset = rest->offset().y();
             bool ignoreYOffset = (restAbove && restYOffset > 0) || (!restAbove && restYOffset < 0);

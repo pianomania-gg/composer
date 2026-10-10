@@ -39,6 +39,8 @@ public:
     static void layoutTupletAndNestedTuplets(Tuplet* t, LayoutContext& ctx);
     static bool isTopTuplet(ChordRest* cr);
     static bool notTopTuplet(ChordRest* cr);
+    // The side an AUTO-direction tuplet takes from its chords' stems.
+    static bool autoDirectionIsUp(const Tuplet* item);
 
 private:
     static void createNumber(Tuplet* item, LayoutContext& ctx);

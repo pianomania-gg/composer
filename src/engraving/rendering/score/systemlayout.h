@@ -59,6 +59,7 @@ class System;
 class SystemText;
 class TempoText;
 class TimeSig;
+class Tuplet;
 }
 
 namespace mu::engraving::rendering::score {
@@ -84,9 +85,15 @@ public:
     static double minDistance(const System* top, const System* bottom, const LayoutContext& ctx);
 
     static void centerElementsBetweenStaves(const System* system);
+    // Moves staff-centred dynamics, expressions and hairpins off notation in
+    // the gap, keeping cross-staff beams at a wider margin.
+    static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerBigTimeSigsAcrossStaves(const System* system);
 
     static void adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines = false);
+    // Pianomania: whether a laid-out tuplet's number sits on the side its
+    // digits own (and over one of them), so the number must take the other side.
+    static bool pianomaniaTupletNumberYieldsToFingerings(const Tuplet* tuplet);
 
     static void updateSkylineForElement(EngravingItem* element, const System* system, double yMove);
     static void removeElementFromSkyline(EngravingItem* element, const System* system);
@@ -205,7 +212,6 @@ private:
     static void centerElementBetweenStaves(EngravingItem* element, const System* system);
     static void resolveSlursOverMovedMarks(System* system, const std::vector<Spanner*>& slurs,
                                            const std::map<const Articulation*, double>& markYBefore, LayoutContext& ctx);
-    static void clearStaffCenteredItemsOfNotation(const std::vector<EngravingItem*>& centeredItems, const System* system);
     static void centerMMRestBetweenStaves(MMRest* mmRest, const System* system);
 
     static bool shouldBeJustified(System* system, double curSysWidth, double targetSystemWidth, LayoutContext& ctx);

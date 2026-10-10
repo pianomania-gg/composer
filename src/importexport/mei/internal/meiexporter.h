@@ -157,6 +157,10 @@ private:
   bool writeBTrem(const engraving::TremoloSingleChord *tremolo);
   bool writeClef(const engraving::Clef *clef, const engraving::Measure *measure,
                  const engraving::Segment *seg, int staffN);
+  bool isHeaderClefChange(const engraving::Clef *clef,
+                          const engraving::Measure *measure) const;
+  void appendSnappedExpressionTextOrigin(pugi::xml_node node,
+                                         const engraving::TextBase *text) const;
   bool writeChord(const engraving::Chord *chord, const engraving::Staff *staff);
   bool writeGraceChord(const engraving::Chord *graceChord,
                        const engraving::Chord *parentChord,
