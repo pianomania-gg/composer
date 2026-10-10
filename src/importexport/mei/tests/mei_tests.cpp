@@ -3028,6 +3028,33 @@ TEST_F(Mei_Tests, mei_export_trill_extender_matches_drawn_line) {
     EXPECT_EQ(withoutLine, 1u);
 }
 
+// Kuhlau Op. 55/1 II m100: between the staves of a grand staff the barline
+// crosses a line's words, so Auto Layout widens the measure a short phrase
+// starts in until "poco a poco cresc." ends before that barline.
+TEST_F(Mei_Tests, pianomania_auto_layout_keeps_line_text_inside_its_measure) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + V32_REVIEW_FIXTURE, false));
+    ASSERT_TRUE(score);
+    Measure* first = score->firstMeasure();
+    Hairpin* line = Factory::createHairpin(score->dummy()->segment());
+    line->setHairpinType(HairpinType::CRESC_LINE);
+    line->setBeginText(u"poco a poco cresc.");
+    line->setTick(first->tick() + Fraction(3, 4)); // the measure's last beat: the phrase runs past its barline
+    line->setTick2(first->nextMeasure()->endTick());
+    line->setTrack(0);
+    line->setTrack2(0);
+    line->setAnchor(Spanner::Anchor::SEGMENT);
+    score->addSpanner(line);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score.get());
+
+    const auto* segment = static_cast<const TextLineBaseSegment*>(line->frontSegment());
+    ASSERT_TRUE(segment && segment->text());
+    const Measure* start = score->tick2measure(line->tick());
+    ASSERT_EQ(segment->system(), start->system());
+    EXPECT_LE(segment->text()->pageBoundingRect().right(), start->pageBoundingRect().right())
+        << "the phrase must end before the barline that closes its measure";
+}
+
 // Moonlight m31: a rest moved into the lower staff from the upper staff must
 // clear the lower staff's chord at the same moment instead of sitting on it.
 TEST_F(Mei_Tests, pianomania_cross_staff_rest_clears_destination_chord) {
