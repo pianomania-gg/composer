@@ -59,6 +59,7 @@ class System;
 class SystemText;
 class TempoText;
 class TimeSig;
+class Tuplet;
 }
 
 namespace mu::engraving::rendering::score {
@@ -90,6 +91,9 @@ public:
     static void centerBigTimeSigsAcrossStaves(const System* system);
 
     static void adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines = false);
+    // Pianomania: whether a laid-out tuplet's number sits on the side its
+    // digits own (and over one of them), so the number must take the other side.
+    static bool pianomaniaTupletNumberYieldsToFingerings(const Tuplet* tuplet);
 
     static void updateSkylineForElement(EngravingItem* element, const System* system, double yMove);
     static void removeElementFromSkyline(EngravingItem* element, const System* system);

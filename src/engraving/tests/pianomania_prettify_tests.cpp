@@ -4047,3 +4047,64 @@ TEST_F(Engraving_PianomaniaPrettifyTests, hiddenTupletLeavesDigitsOnHandSide)
 
     delete score;
 }
+
+// Test value: Promenade m1/m3. A left-hand triplet beamed below its notes
+// would put its "3" where the left-hand digits go, which used to throw the
+// middle digit above the notes. The digits keep their side and the number
+// takes the other side of the group; Prettify persists that side.
+TEST_F(Engraving_PianomaniaPrettifyTests, tupletNumberYieldsSideToLeftHandDigits)
+{
+    auto assertDigitsBelowAndNumberAbove = [](Score* score) {
+        const std::vector<Tuplet*> tuplets = collectTuplets(score);
+        ASSERT_EQ(tuplets.size(), 1u);
+        const Tuplet* tuplet = tuplets.front();
+        EXPECT_TRUE(tuplet->isUp());
+        const RectF numberRect = tupletNumberSystemRect(tuplet);
+        ASSERT_FALSE(numberRect.isNull());
+
+        double noteheadsTop = std::numeric_limits<double>::max();
+        for (const DurationElement* element : tuplet->elements()) {
+            ASSERT_TRUE(element->isChord());
+            const Chord* chord = toChord(element);
+            EXPECT_FALSE(chord->up()) << "the beam stays below the triplet";
+            for (const Note* note : chord->notes()) {
+                noteheadsTop = std::min(noteheadsTop, note->pageBoundingRect().top());
+            }
+        }
+        EXPECT_LT(numberRect.bottom(), noteheadsTop);
+
+        size_t checked = 0;
+        for (const String& text : { String(u"1"), String(u"2"), String(u"3") }) {
+            for (const Fingering* fingering : collectFingeringsByText(score, text)) {
+                if (fingering->note()->chord()->measure()->no() != 0) {
+                    continue;
+                }
+                EXPECT_EQ(fingering->placement(), PlacementV::BELOW) << text.toStdString();
+                EXPECT_GT(fingeringSystemRect(fingering).top(), noteSystemRect(fingering->note()).bottom()) << text.toStdString();
+                EXPECT_FALSE(rectsOverlap(fingering->pageBoundingRect(), numberRect)) << text.toStdString();
+                ++checked;
+            }
+        }
+        EXPECT_EQ(checked, 5u);
+    };
+
+    {
+        PracticeExportFlags flags;
+        MasterScore* score = readAutoLaidOut(u"fingering-tuplet-number-yields.mscx");
+        ASSERT_TRUE(score);
+        EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::AUTO);
+        assertDigitsBelowAndNumberAbove(score);
+        delete score;
+    }
+
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/fingering-tuplet-number-yields.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+    EXPECT_TRUE(applyPrettifyCommand(score).changed);
+    EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::UP);
+    assertDigitsBelowAndNumberAbove(score);
+    applyPrettifyCommand(score);
+    EXPECT_EQ(collectTuplets(score).front()->direction(), DirectionV::UP);
+    assertDigitsBelowAndNumberAbove(score);
+    delete score;
+}

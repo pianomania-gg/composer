@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_set>
@@ -4118,6 +4119,77 @@ void movePianomaniaTextHairpinsClearOfNotation(System* system)
         hairpinSegment->mutldata()->moveY(above ? -moveAway : moveAway);
     }
 }
+}
+
+// Fingering keeps its hand's side; a tuplet number does not own a side. When
+// an automatically placed number lands over a digit on that digit's own side
+// (Promenade m1: the left-hand triplet's "1" under its beam, where the "3"
+// also sits), the digit used to be thrown to the far side of the notes. The
+// number moves to the other side of the group instead, where it is free of
+// digits, and the digits stay together.
+bool SystemLayout::pianomaniaTupletNumberYieldsToFingerings(const Tuplet* tuplet)
+{
+    if (!MScore::pianomaniaPrettifySlursFingerings || !tuplet || tuplet->direction() != DirectionV::AUTO
+        || tuplet->cross() || !tuplet->visible() || !tuplet->number() || !tuplet->number()->visible()) {
+        return false;
+    }
+    const Measure* measure = tuplet->measure();
+    const Text* number = tuplet->number();
+    if (!measure || !number->ldata()) {
+        return false;
+    }
+
+    const double sp = tuplet->spatium();
+    const RectF numberRect = number->ldata()->bbox().translated(tuplet->pos() + number->pos());
+    const double clearance = PM_FINGERING_MARK_CLEARANCE * sp;
+    const bool numberAbove = tuplet->isUp();
+    bool digitUnderNumber = false;
+    bool digitOnFarSide = false;
+
+    std::function<void(const Tuplet*)> scan = [&](const Tuplet* t) {
+        for (const DurationElement* element : t->elements()) {
+            if (element->isTuplet()) {
+                scan(toTuplet(element));
+                continue;
+            }
+            if (!element->isChord()) {
+                continue;
+            }
+            const Chord* chord = toChord(element);
+            const Segment* segment = chord->segment();
+            if (!segment || segment->measure() != measure) {
+                continue;
+            }
+            for (const Note* note : chord->notes()) {
+                if (!note->ldata()) {
+                    continue;
+                }
+                const double noteLeft = segment->x() + chord->x() + note->x() + note->ldata()->bbox().left();
+                const double noteRight = noteLeft + note->ldata()->bbox().width();
+                const bool underNumber = noteRight + clearance >= numberRect.left()
+                                         && noteLeft - clearance <= numberRect.right();
+                for (const EngravingItem* item : note->el()) {
+                    if (!item || !item->isFingering() || !item->visible()) {
+                        continue;
+                    }
+                    const Fingering* fingering = toFingering(item);
+                    const bool keepsManualSide = hasManualFingeringPlacement(fingering)
+                                                 && !MScore::pianomaniaForceNormalizeSlursFingerings;
+                    const bool digitAbove = keepsManualSide
+                                            ? fingering->placeAbove()
+                                            : pianomaniaPreferredFingeringPlacement(fingering) == PlacementV::ABOVE;
+                    if (digitAbove == numberAbove) {
+                        digitUnderNumber = digitUnderNumber || underNumber;
+                    } else {
+                        digitOnFarSide = digitOnFarSide || underNumber;
+                    }
+                }
+            }
+        }
+    };
+    scan(tuplet);
+
+    return digitUnderNumber && !digitOnFarSide;
 }
 
 void SystemLayout::adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines)

@@ -33,6 +33,7 @@
 #include "dom/measure.h"
 
 #include "tlayout.h"
+#include "systemlayout.h"
 #include "autoplace.h"
 
 using namespace mu::engraving;
@@ -69,6 +70,15 @@ void TupletLayout::layout(Tuplet* item, LayoutContext& ctx)
     item->setPos(0.0, 0.0);
 
     layoutBracket(item, cr1, cr2, ctx);
+
+    // Pianomania: digits keep their side; a number laid over one of them
+    // moves to the other side of the group (bracketed there as usual).
+    if (SystemLayout::pianomaniaTupletNumberYieldsToFingerings(item)) {
+        item->setIsUp(!item->isUp());
+        item->setHasBracket(item->calcHasBracket(cr1, cr2));
+        item->setPos(0.0, 0.0);
+        layoutBracket(item, cr1, cr2, ctx);
+    }
 
     // collect bounding box
     RectF r;
@@ -217,6 +227,11 @@ void TupletLayout::computeDirection(Tuplet* item)
         return;
     }
 
+    item->setIsUp(autoDirectionIsUp(item));
+}
+
+bool TupletLayout::autoDirectionIsUp(const Tuplet* item)
+{
     int up = 0;
     for (const DurationElement* e : item->elements()) {
         if (e->isChord()) {
@@ -238,7 +253,7 @@ void TupletLayout::computeDirection(Tuplet* item)
         }
     }
 
-    item->setIsUp(up > 0);
+    return up > 0;
 }
 
 void TupletLayout::computeStartEndCR(Tuplet* item, const ChordRest** cr1, const ChordRest** cr2)

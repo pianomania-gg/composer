@@ -26,6 +26,8 @@
 #include "../dom/spanner.h"
 #include "../dom/system.h"
 #include "../dom/tempotext.h"
+#include "../dom/tuplet.h"
+#include "../rendering/score/tupletlayout.h"
 
 using namespace mu::engraving;
 using namespace mu::engraving::pm;
@@ -85,8 +87,19 @@ struct PianomaniaExpressionTarget
     PointF pos;
 };
 
+// A tuplet whose number the prettify layout moved off its stem side so the
+// digits keep theirs (SystemLayout::pianomaniaTupletNumberYieldsToFingerings).
+// The side only exists while the prettify flag is on; the replay persists it
+// as the tuplet's direction.
+struct PianomaniaTupletTarget
+{
+    Tuplet* tuplet = nullptr;
+    DirectionV direction = DirectionV::AUTO;
+};
+
 struct PianomaniaPrettifyTargets
 {
+    std::vector<PianomaniaTupletTarget> tuplets;
     std::vector<PianomaniaSlurSegmentTarget> slurSegments;
     std::vector<PianomaniaFingeringTarget> fingerings;
     std::vector<PianomaniaHairpinSegmentTarget> hairpinSegments;
@@ -301,6 +314,24 @@ PianomaniaPrettifyTargets collectPianomaniaPrettifyTargets(Score* score)
             targets.hairpinSegments.push_back(PianomaniaHairpinSegmentTarget {
                 hairpin, i, segment->pos().y(), replayEligible
             });
+        }
+    }
+
+    std::unordered_set<const Tuplet*> seenTuplets;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(SegmentType::ChordRest); segment; segment = segment->next(SegmentType::ChordRest)) {
+            for (EngravingItem* item : segment->elist()) {
+                if (!item || !item->isChordRest()) {
+                    continue;
+                }
+                for (Tuplet* tuplet = toChordRest(item)->tuplet(); tuplet; tuplet = tuplet->tuplet()) {
+                    if (!seenTuplets.insert(tuplet).second || tuplet->direction() != DirectionV::AUTO
+                        || tuplet->isUp() == rendering::score::TupletLayout::autoDirectionIsUp(tuplet)) {
+                        continue;
+                    }
+                    targets.tuplets.push_back({ tuplet, tuplet->isUp() ? DirectionV::UP : DirectionV::DOWN });
+                }
+            }
         }
     }
 
@@ -821,6 +852,11 @@ void markPianomaniaPrettifyControlledFingerings(PianomaniaPrettifyTargets& targe
 
 void applyPianomaniaPrettifyTargetPlacements(const PianomaniaPrettifyTargets& targets)
 {
+    for (const PianomaniaTupletTarget& target : targets.tuplets) {
+        if (target.tuplet && target.tuplet->direction() != target.direction) {
+            target.tuplet->undoChangeProperty(Pid::DIRECTION, PropertyValue::fromValue<DirectionV>(target.direction));
+        }
+    }
     for (const PianomaniaFingeringTarget& target : targets.fingerings) {
         Fingering* fingering = target.fingering;
         if (!fingering) {
