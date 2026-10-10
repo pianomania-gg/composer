@@ -3148,6 +3148,39 @@ bool MeiExporter::writeBTrem(const TremoloSingleChord *tremolo) {
 }
 
 /**
+ * Whether a non-generated header clef is the only record of a clef change.
+ * A source can store a change at a system start in the new system's header
+ * slot instead of before the previous barline (Promenade m51, bass after a
+ * treble passage). Dropping it leaves readers in the old clef while the notes
+ * are laid out in the new one.
+ */
+
+bool MeiExporter::isHeaderClefChange(const Clef *clef, const Measure *measure) const {
+  if (!clef || !measure || !clef->staff()) {
+    return false;
+  }
+  const Measure *previous = measure->prevMeasure();
+  if (!previous) {
+    return false; // The first measure's clef is the staffDef clef.
+  }
+
+  const ClefType written = clef->clefType();
+  const track_idx_t track = clef->track();
+  // A change already written before the previous barline needs no repeat.
+  for (const Segment *seg = previous->last(); seg; seg = seg->prev()) {
+    if (seg->tick() < measure->tick()) {
+      break;
+    }
+    const EngravingItem *item = seg->element(track);
+    if (seg->isClefType() && item && item->isClef() && !item->generated()) {
+      return toClef(item)->clefType() != written;
+    }
+  }
+
+  return clef->staff()->clef(measure->tick() - Fraction::fromTicks(1)) != written;
+}
+
+/**
  * Write a clef.
  */
 
@@ -3155,7 +3188,7 @@ bool MeiExporter::writeClef(const Clef *clef, const Measure *measure,
                             const Segment *seg, int staffN) {
   IF_ASSERT_FAILED(clef) { return false; }
 
-  if (clef->isHeader()) {
+  if (clef->isHeader() && !isHeaderClefChange(clef, measure)) {
     return true;
   }
 
@@ -3931,10 +3964,40 @@ bool MeiExporter::writeDir(const TextBase *dir, const std::string &startid) {
   }
 
   appendCenteredPmPosition(dirNode, dir);
+  appendSnappedExpressionTextOrigin(dirNode, dir);
 
   this->writeLines(dirNode, meiLines);
 
   return true;
+}
+
+/**
+ * An expression laid out after a dynamic starts where MuseScore started it,
+ * one padding past the dynamic, on the dynamic's baseline. Its ink centre
+ * (pm:xy) only reproduces that start in a reader whose font has the same
+ * width, so the left end of the first line's baseline is exported as well
+ * (pm:text-origin, inches from the page's bottom left).
+ */
+
+void MeiExporter::appendSnappedExpressionTextOrigin(pugi::xml_node node,
+                                                    const TextBase *text) const {
+  if (!node || !text || !text->isExpression()) {
+    return;
+  }
+  const EngravingItem *before = text->ldata()->itemSnappedBefore();
+  if (!before || !before->isDynamic()) {
+    return;
+  }
+  const auto &blocks = text->ldata()->blocks;
+  if (blocks.empty() || blocks.front().fragments().empty()) {
+    return;
+  }
+
+  const TextBlock &line = blocks.front();
+  const PointF origin = text->pagePos() + PointF(line.fragments().front().pos.x(), line.y());
+  const std::string originStr = formatDecimalStr(origin.x() / DPI, 3) + "," +
+                                formatDecimalStr(toBottomLeftInches(origin.y()), 3);
+  node.append_attribute("pm:text-origin") = originStr.c_str();
 }
 
 /**
