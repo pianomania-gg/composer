@@ -300,7 +300,11 @@ bool chordPitchRangesAreChordallyAdjacent(const Chord* a, const Chord* b)
         return false;
     }
 
-    constexpr int chordalAdjacentMaxPitchGap = 5;
+    // Two same-hand voices struck together read as one close grip up to a
+    // tritone apart: the F#/C dyads of Tchaikovsky Op. 39/1 m17/m19 and
+    // Goedicke m21 stack as one column. From a fifth outward the voices keep
+    // their own sides (the two-voice left hand of Tchaikovsky Op. 39/1 p1).
+    constexpr int chordalAdjacentMaxPitchGap = 6;
     const int aLow = std::min(a->downNote()->pitch(), a->upNote()->pitch());
     const int aHigh = std::max(a->downNote()->pitch(), a->upNote()->pitch());
     const int bLow = std::min(b->downNote()->pitch(), b->upNote()->pitch());

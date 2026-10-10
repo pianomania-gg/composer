@@ -3960,3 +3960,65 @@ TEST_F(Engraving_PianomaniaPrettifyTests, slurClearsMarkMovedOutsideShorterSlur)
 
     delete score;
 }
+
+namespace {
+// The single digit on the note of the given pitch in the given (1-based) measure.
+Fingering* fingeringOnPitch(Score* score, int measureNumber, int pitch, const String& text)
+{
+    Fingering* found = nullptr;
+    for (Fingering* fingering : collectFingeringsByText(score, text)) {
+        const Note* note = fingering->note();
+        if (note && note->pitch() == pitch && note->chord()->measure()->no() + 1 == measureNumber) {
+            EXPECT_EQ(found, nullptr) << "ambiguous digit " << text.toStdString() << " in m" << measureNumber;
+            found = fingering;
+        }
+    }
+    return found;
+}
+}
+
+// Test value: Tchaikovsky Op. 39 No. 1 m17/m19 (and Goedicke m21). Two
+// right-hand voices striking a tritone dyad (F#/C) together are one grip:
+// their digits stack in one column above the staff, the larger number
+// higher ("4 over 1", "4 over 2"), instead of the lower voice's digit
+// dropping below the staff where it reads as the left hand's.
+TEST_F(Engraving_PianomaniaPrettifyTests, sameHandTritoneDyadStacksAboveInOneColumn)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"fingering-same-hand-tritone-dyad.mscx");
+    ASSERT_TRUE(score);
+
+    struct Dyad {
+        int measure;
+        int upperPitch;
+        int lowerPitch;
+        String lowerDigit;
+    };
+    for (const Dyad& dyad : { Dyad { 1, 78, 72, u"1" }, Dyad { 2, 66, 60, u"2" } }) {
+        const Fingering* upper = fingeringOnPitch(score, dyad.measure, dyad.upperPitch, u"4");
+        ASSERT_TRUE(upper) << "m" << dyad.measure;
+        // The lower voice repeats its pitch later in the measure; the dyad's
+        // digit is the one on the attack shared with the upper voice.
+        const Fingering* lower = nullptr;
+        for (Fingering* fingering : collectFingeringsByText(score, dyad.lowerDigit)) {
+            if (fingering->note()->pitch() == dyad.lowerPitch
+                && fingering->note()->chord()->tick() == upper->note()->chord()->tick()) {
+                lower = fingering;
+            }
+        }
+        ASSERT_TRUE(lower) << "m" << dyad.measure;
+        ASSERT_NE(lower->note()->chord(), upper->note()->chord()) << "the dyad spans two voices";
+
+        EXPECT_EQ(upper->placement(), PlacementV::ABOVE) << "m" << dyad.measure;
+        EXPECT_EQ(lower->placement(), PlacementV::ABOVE) << "m" << dyad.measure;
+        const double sp = upper->spatium();
+        const RectF upperRect = fingeringSystemRect(upper);
+        const RectF lowerRect = fingeringSystemRect(lower);
+        // One column: centred together, "4" on top, both above the upper notehead.
+        EXPECT_NEAR(upperRect.center().x(), lowerRect.center().x(), 0.1 * sp) << "m" << dyad.measure;
+        EXPECT_LE(upperRect.bottom(), lowerRect.top() + 0.01 * sp) << "m" << dyad.measure;
+        EXPECT_LT(lowerRect.bottom(), noteSystemRect(upper->note()).top()) << "m" << dyad.measure;
+    }
+
+    delete score;
+}
