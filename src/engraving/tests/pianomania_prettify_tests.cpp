@@ -4138,3 +4138,69 @@ TEST_F(Engraving_PianomaniaPrettifyTests, digitOverMarcatoKeepsClearGap)
 
     delete score;
 }
+
+// Test value: Clementi Op. 36 No. 2 I m36. The "1" on the last sixteenth of a
+// beamed group fits under the phrase slur its neighbours tuck under: resting
+// on its beam at the staff-line floor, under the slur, at most half a space
+// toward its stem — not lifted over the slur.
+TEST_F(Engraving_PianomaniaPrettifyTests, digitTucksUnderPhraseSlurOnItsBeam)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(u"clementi-op36-no2-i-under-slur-pocket.mscz");
+    ASSERT_TRUE(score);
+
+    const Fingering* digit = fingeringOnPitch(score, 36, 67, u"1");
+    ASSERT_TRUE(digit);
+    const Chord* chord = digit->note()->chord();
+    ASSERT_TRUE(chord->up());
+    ASSERT_TRUE(chord->beam());
+    EXPECT_EQ(digit->placement(), PlacementV::ABOVE);
+    const double sp = digit->spatium();
+    const RectF digitRect = digit->pageBoundingRect();
+    const RectF noteRect = digit->note()->pageBoundingRect();
+    EXPECT_GE(digitRect.center().x(), noteRect.center().x() - 0.01 * sp);
+    EXPECT_LE(digitRect.center().x(), noteRect.center().x() + 0.5 * sp + 0.01 * sp);
+
+    // On top of the beam, with the staff-line floor.
+    const Beam* beam = chord->beam();
+    const PointF beamOrigin = beam->pagePos();
+    double beamTop = std::numeric_limits<double>::max();
+    for (const BeamSegment* beamSegment : beam->beamSegments()) {
+        const PointF start = beamSegment->line.p1() + beamOrigin;
+        const PointF end = beamSegment->line.p2() + beamOrigin;
+        for (double x : { digitRect.left(), digitRect.right() }) {
+            const double clamped = std::clamp(x, std::min(start.x(), end.x()), std::max(start.x(), end.x()));
+            const double centerY = start.y() + (end.y() - start.y()) * (clamped - start.x()) / (end.x() - start.x());
+            beamTop = std::min(beamTop, centerY - 0.5 * beam->beamWidth());
+        }
+    }
+    EXPECT_LE(digitRect.bottom(), beamTop - 0.1 * sp + 1e-3);
+
+    // Under the covering slur: every curve point over the digit is above it.
+    const Slur* covering = nullptr;
+    for (const auto& pair : score->spanner()) {
+        const Slur* slur = pair.second && pair.second->isSlur() ? toSlur(pair.second) : nullptr;
+        if (slur && slur->tick() < chord->tick() && slur->tick2() > chord->tick() && slur->track() == chord->track()) {
+            covering = slur;
+        }
+    }
+    ASSERT_TRUE(covering);
+    size_t samples = 0;
+    for (const SpannerSegment* spannerSegment : covering->spannerSegments()) {
+        const SlurSegment* segment = toSlurSegment(spannerSegment);
+        const PointF origin = segment->pagePos();
+        const CubicBezier bezier(origin + segment->ups(Grip::START).pos(), origin + segment->ups(Grip::BEZIER1).pos(),
+                                 origin + segment->ups(Grip::BEZIER2).pos(), origin + segment->ups(Grip::END).pos());
+        for (int i = 0; i <= 200; ++i) {
+            const PointF point = bezier.pointAtPercent(i / 200.0);
+            if (point.x() < digitRect.left() || point.x() > digitRect.right()) {
+                continue;
+            }
+            EXPECT_LT(point.y() + 0.5 * segment->ldata()->midThickness(), digitRect.top());
+            ++samples;
+        }
+    }
+    EXPECT_GT(samples, 0u);
+
+    delete score;
+}
