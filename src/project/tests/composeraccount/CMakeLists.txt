@@ -7,6 +7,7 @@ enable_testing()
 add_executable(composer_account_regression accounttest.cpp ../../internal/composersession.h)
 target_compile_definitions(composer_account_regression PRIVATE
     PIANOMANIA_COMPOSER_PROFILE="account-regression"
+    PIANOMANIA_COMPOSER_SERVICE_ENVIRONMENT="account-regression"
     PIANOMANIA_COMPOSER_SERVICE_URL="https://composer-test.invalid")
 target_link_libraries(composer_account_regression PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
 if(WIN32)

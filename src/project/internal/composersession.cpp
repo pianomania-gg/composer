@@ -35,8 +35,8 @@
 namespace mu::project::composer {
 namespace {
 QString service() { return QStringLiteral(PIANOMANIA_COMPOSER_SERVICE_URL); }
-QString environment() { return QStringLiteral(PIANOMANIA_COMPOSER_PROFILE); }
-QString vaultName() { return "PianomaniaComposer/" + environment() + "/" + QCryptographicHash::hash(service().toUtf8(), QCryptographicHash::Sha256).toHex(); }
+QString environment() { return QStringLiteral(PIANOMANIA_COMPOSER_SERVICE_ENVIRONMENT); }
+QString vaultName() { return "PianomaniaComposer/" + QStringLiteral(PIANOMANIA_COMPOSER_PROFILE) + "/" + QCryptographicHash::hash(service().toUtf8(), QCryptographicHash::Sha256).toHex(); }
 QJsonObject session;
 bool loaded = false;
 bool selectAccountOnNextSignIn = false;
