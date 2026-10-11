@@ -45,22 +45,11 @@ Item {
 
         var items = menuModel.items
         for (var i in items) {
-            var item = items[i]
-            var menu = makeMenu(item)
+            var menu = makeMenu(items[i])
 
             menuBar.addMenu(menu)
 
             menu.load()
-
-            item.subitemsChanged.connect(function(subitems, menuId) {
-                for (var l in menuBar.menus) {
-                    var menu = menuBar.menus[l]
-                    if (menu.id === menuId) {
-                        menu.subitems = subitems
-                        menu.load()
-                    }
-                }
-            })
         }
 
         menuModel.itemsChanged.connect(function() {
@@ -77,6 +66,13 @@ Item {
 
         setUpMenu(menu, menuInfo)
 
+        menuInfo.subitemsChanged.connect(function(subitems, menuId) {
+            if (menu.id === menuId) {
+                menu.subitems = subitems
+                menu.load()
+            }
+        })
+
         return menu
     }
 
@@ -85,13 +81,6 @@ Item {
         menu.title = menuInfo.title
         menu.enabled = menuInfo.enabled
         menu.subitems = menuInfo.subitems
-
-        menuInfo.subitemsChanged.connect(function(subitems, menuId) {
-            if (menu.id === menuId) {
-                menu.subitems = subitems
-                menu.load()
-            }
-        })
     }
 
     function makeMenuItem(parentMenu, itemInfo) {
@@ -119,18 +108,25 @@ Item {
             property string id: ""
             property var subitems: []
 
+            function shownSubitems() {
+                let shown = []
+                for (var i in subitems) {
+                    if (Boolean(subitems[i])) {
+                        shown.push(subitems[i])
+                    }
+                }
+                return shown
+            }
+
+            function isSubmenu(itemInfo) {
+                return Boolean(itemInfo.subitems) && itemInfo.subitems.length > 0
+            }
+
             function load() {
                 clear()
 
-                for (var i in subitems) {
-                    var item = subitems[i]
-                    if (!Boolean(item)) {
-                        continue
-                    }
-
-                    var isMenu = Boolean(item.subitems) && item.subitems.length > 0
-
-                    if (isMenu) {
+                for (let item of shownSubitems()) {
+                    if (isSubmenu(item)) {
                         let menu = root.makeMenu(item)
                         addMenu(menu)
                         menu.load()
@@ -142,14 +138,25 @@ Item {
             }
 
             function update() {
-                for (var i in subitems) {
-                    let item = subitems[i]
-                    let isMenu = Boolean(item.subitems) && item.subitems.length > 0
+                let shown = shownSubitems()
 
-                    if (isMenu) {
-                        root.setUpMenu(items[i].subMenu, item)
+                // Open recent and similar items turn into submenus once they have entries, and back
+                // when emptied. Rebuild instead of updating native items that no longer match.
+                let matches = shown.length === items.length
+                for (let i = 0; matches && i < shown.length; ++i) {
+                    matches = isSubmenu(shown[i]) === Boolean(items[i].subMenu)
+                }
+
+                if (!matches) {
+                    load()
+                    return
+                }
+
+                for (let i = 0; i < shown.length; ++i) {
+                    if (items[i].subMenu) {
+                        root.setUpMenu(items[i].subMenu, shown[i])
                     } else {
-                        root.setUpMenuItem(items[i], item)
+                        root.setUpMenuItem(items[i], shown[i])
                     }
                 }
             }

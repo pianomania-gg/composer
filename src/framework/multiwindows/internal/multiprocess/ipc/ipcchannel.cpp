@@ -149,22 +149,22 @@ async::Channel<Msg> IpcChannel::msgReceived() const
 
 void IpcChannel::setupConnection()
 {
-    if (!m_selfSocket->connect(SERVER_NAME)) {
-        IpcLock lock(SERVER_NAME);
+    if (!m_selfSocket->connect(serverName())) {
+        IpcLock lock(serverName());
         lock.lock();
 
         //! NOTE Check again
-        if (!m_selfSocket->connect(SERVER_NAME)) {
+        if (!m_selfSocket->connect(serverName())) {
             //! NOTE If it was not possible to connect to the server, then it no there or was, but it was closed.
             //! In this case, we will become a server
             LOGI() << "starting ipc server";
             m_server = new IpcServer();
-            m_server->listen(SERVER_NAME);
+            m_server->listen(serverName());
         }
         lock.unlock();
 
         //! NOTE Connect to self server
-        if (!m_selfSocket->connect(SERVER_NAME)) {
+        if (!m_selfSocket->connect(serverName())) {
             LOGE() << "failed to connect to ipc server";
         }
     }

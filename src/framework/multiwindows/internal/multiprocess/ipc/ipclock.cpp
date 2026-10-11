@@ -21,13 +21,14 @@
  */
 #include "ipclock.h"
 
+#include <QCoreApplication>
 #include <QSystemSemaphore>
 
 using namespace muse::ipc;
 
 IpcLock::IpcLock(const QString& name)
 {
-    m_locker = new QSystemSemaphore("musescore-" + name, 1 /*allowed lock count*/, QSystemSemaphore::Open);
+    m_locker = new QSystemSemaphore(QCoreApplication::applicationName() + "-" + name, 1 /*allowed lock count*/, QSystemSemaphore::Open);
 }
 
 IpcLock::~IpcLock()

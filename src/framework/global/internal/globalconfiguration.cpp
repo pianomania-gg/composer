@@ -118,8 +118,9 @@ io::path_t GlobalConfiguration::userBackupPath() const
 
 io::path_t GlobalConfiguration::userDataPath() const
 {
-    static io::path_t p = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/" + QCoreApplication::applicationName();
-    return p;
+    // Plugins, sound fonts, styles and templates live with the app's other data, not in Documents:
+    // creating and scanning them there at startup made macOS ask for Documents access before any window appeared.
+    return userAppDataPath() + "/User Data";
 }
 
 io::path_t GlobalConfiguration::homePath() const

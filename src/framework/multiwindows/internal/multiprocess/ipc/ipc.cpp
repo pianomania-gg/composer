@@ -28,8 +28,14 @@
 #include <QJsonArray>
 
 #include <QLocalSocket>
+#include <QCoreApplication>
 
 #include "ipclog.h"
+
+QString muse::ipc::serverName()
+{
+    return QCoreApplication::applicationName() + "-ipc";
+}
 
 void muse::ipc::serialize(const Msg& msg, QByteArray& data)
 {
