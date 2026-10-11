@@ -25,6 +25,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QJsonArray>
+#include <QStandardPaths>
 
 #include "settings.h"
 
@@ -81,7 +82,7 @@ void ProjectConfiguration::init()
         m_userTemplatesPathChanged.send(val.toPath());
     });
 
-    settings()->setDefaultValue(USER_PROJECTS_PATH, Val(globalConfiguration()->userDataPath() + "/Scores"));
+    settings()->setDefaultValue(USER_PROJECTS_PATH, Val(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)));
 
     settings()->valueChanged(USER_PROJECTS_PATH).onReceive(nullptr, [this](const Val& val) {
         m_userScoresPathChanged.send(val.toPath());
@@ -138,10 +139,6 @@ void ProjectConfiguration::init()
 
     if (!userTemplatesPath().empty()) {
         fileSystem()->makePath(userTemplatesPath());
-    }
-
-    if (!userProjectsPath().empty()) {
-        fileSystem()->makePath(userProjectsPath());
     }
 
     fileSystem()->makePath(cloudProjectsPath());
