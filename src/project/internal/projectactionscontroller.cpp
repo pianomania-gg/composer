@@ -108,8 +108,6 @@ void ProjectActionsController::init()
 #ifndef PIANOMANIA_COMPOSER_PRODUCTION
     dispatcher()->reg(this, "file-export-pianomania", this, &ProjectActionsController::exportPianomania);
 #endif
-    dispatcher()->reg(this, "file-import-pdf", this, &ProjectActionsController::importPdf);
-    dispatcher()->reg(this, "file-import-audio-to-score", this, &ProjectActionsController::importAudioToScore);
 
     dispatcher()->reg(this, "print", this, &ProjectActionsController::printScore);
 
@@ -154,8 +152,6 @@ bool ProjectActionsController::canReceiveAction(const ActionCode& code) const
         static const std::unordered_set<ActionCode> DONT_REQUIRE_OPEN_PROJECT {
             "file-new",
             "file-open",
-            "file-import-pdf",
-            "file-import-audio-to-score",
             "continue-last-session",
             "clear-recent",
             "composer-account",
@@ -958,16 +954,6 @@ void ProjectActionsController::warnProjectCannotBeOpened(const Ret& ret, const m
     }
 
     interactive()->error(title, body);
-}
-
-void ProjectActionsController::importPdf()
-{
-    interactive()->openUrl("https://musescore.com/import");
-}
-
-void ProjectActionsController::importAudioToScore()
-{
-    interactive()->openUrl("https://musescore.com/upload?format=audio2score");
 }
 
 void ProjectActionsController::clearRecentScores()

@@ -52,8 +52,8 @@ qt_add_qml_module(preferences_qml
         preferencepageitem.h
         preferencesmodel.cpp
         preferencesmodel.h
-        saveandpublishpreferencesmodel.cpp
-        saveandpublishpreferencesmodel.h
+        savepreferencesmodel.cpp
+        savepreferencesmodel.h
         scorepreferencesmodel.cpp
         scorepreferencesmodel.h
         videopreferencesmodel.cpp
@@ -73,7 +73,7 @@ qt_add_qml_module(preferences_qml
         PercussionPreferencesPage.qml
         PreferencesDialog.qml
         PreferencesPage.qml
-        SaveAndPublishPreferencesPage.qml
+        SavePreferencesPage.qml
         ScorePreferencesPage.qml
         ShortcutsPreferencesPage.qml
         ThemeSamplesList.qml
@@ -84,7 +84,6 @@ qt_add_qml_module(preferences_qml
         internal/AdvancedTopSection.qml
         internal/AudioApiSection.qml
         internal/AudioEngineSection.qml
-        internal/AutomaticUpdateSection.qml
         internal/AutoSaveSection.qml
         internal/BaseSection.qml
         internal/BrailleAdvancedSection.qml
@@ -119,9 +118,7 @@ qt_add_qml_module(preferences_qml
         internal/PreferencesButtonsPanel.qml
         internal/PreferencesMenu.qml
         internal/ProgramStartSection.qml
-        internal/PublishMuseScoreComSection.qml
         internal/RemoteControlSection.qml
-        internal/SaveToCloudSection.qml
         internal/ScrollPagesSection.qml
         internal/ThemeAdditionalOptionsSection.qml
         internal/ThemesSection.qml

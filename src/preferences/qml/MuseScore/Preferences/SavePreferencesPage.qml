@@ -21,30 +21,40 @@
  */
 import QtQuick
 
-import Muse.Ui
 import Muse.UiComponents
+import MuseScore.Preferences
 
-BaseSection {
+import "internal"
+
+PreferencesPage {
     id: root
 
-    title: qsTrc("preferences", "Publish to MuseScore.com")
+    SavePreferencesModel {
+        id: preferencesModel
+    }
 
-    property alias alsoShareAudioCom: alsoShareAudioComCheckBox.checked
+    Component.onCompleted: {
+        preferencesModel.load()
+    }
 
-    signal alsoShareAudioComChangeRequested(bool share)
-
-    CheckBox {
-        id: alsoShareAudioComCheckBox
-
+    Column {
         width: parent.width
+        spacing: root.sectionsSpacing
 
-        text: qsTrc("preferences", "Always prompt to share on Audio.com after publishing to MuseScore.com")
+        AutoSaveSection {
+            isAutoSaveEnabled: preferencesModel.isAutoSaveEnabled
+            autoSaveInterval: preferencesModel.autoSaveInterval
 
-        navigation.name: "AlsoShareAudioComCheckBox"
-        navigation.panel: root.navigation
+            navigation.section: root.navigationSection
+            navigation.order: root.navigationOrderStart + 1
 
-        onClicked: {
-            root.alsoShareAudioComChangeRequested(!checked)
+            onAutoSaveEnabledChanged: function(enabled) {
+                preferencesModel.isAutoSaveEnabled = enabled
+            }
+
+            onIntervalChanged: function(minutes) {
+                preferencesModel.autoSaveInterval = minutes
+            }
         }
     }
 }

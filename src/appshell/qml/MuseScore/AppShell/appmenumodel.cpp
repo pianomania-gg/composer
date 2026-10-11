@@ -220,8 +220,6 @@ MenuItem* AppMenuModel::makeFileMenu()
         makeMenuItem("file-save-as"),
         makeMenu(TranslatableString("appshell/menu/file", "Save o&ther"), makeSaveOtherSubItems()),
         makeSeparator(),
-        makeMenuItem("file-import-pdf"),
-        makeMenuItem("file-import-audio-to-score"),
         makeMenuItem("file-export"),
         makeSeparator(),
         makeMenuItem("composer-account"),
@@ -485,7 +483,6 @@ MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
 
     helpItems << makeMenuItem("composer-guide");
     helpItems << makeMenuItem("online-handbook");
-    helpItems << makeMenuItem("ask-help");
     helpItems << makeSeparator();
 
     if (addDiagnosticsSubMenu) {
@@ -496,7 +493,6 @@ MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
     helpItems << makeMenuItem("about-musescore", MenuItemRole::AboutRole);
     helpItems << makeMenuItem("about-qt", MenuItemRole::AboutQtRole);
     helpItems << makeMenuItem("about-musicxml");
-    helpItems << makeMenuItem("accessibility-statement");
     helpItems << makeSeparator();
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MACOS)

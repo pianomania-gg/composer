@@ -33,7 +33,6 @@
 #include "project/iprojectconfiguration.h"
 #include "notation/inotationconfiguration.h"
 #include "playback/iplaybackconfiguration.h"
-#include "languages/ilanguagesconfiguration.h"
 
 #include "iappshellconfiguration.h"
 
@@ -47,7 +46,6 @@ class AppShellConfiguration : public IAppShellConfiguration, public muse::Contex
     muse::GlobalInject<project::IProjectConfiguration> projectConfiguration;
     muse::GlobalInject<notation::INotationConfiguration> notationConfiguration;
     muse::GlobalInject<playback::IPlaybackConfiguration> playbackConfiguration;
-    muse::GlobalInject<muse::languages::ILanguagesConfiguration> languagesConfiguration;
     muse::ContextInject<muse::IApplication> application = { this };
 
 public:
@@ -74,8 +72,6 @@ public:
     muse::async::Notification startupScorePathChanged() const override;
 
     std::string handbookUrl() const override;
-    std::string askForHelpUrl() const override;
-    std::string accessibilityStatementUrl() const override;
     std::string museScoreUrl() const override;
     std::string museScoreForumUrl() const override;
     std::string museScoreContributionUrl() const override;
@@ -107,10 +103,6 @@ public:
     muse::Ret setSessionProjectsPaths(const muse::io::paths_t& paths) override;
 
 private:
-    std::string utmParameters(const std::string& utmMedium) const;
-
-    std::string currentLanguageCode() const;
-
     muse::io::path_t sessionDataPath() const;
     muse::io::path_t sessionFilePath() const;
 

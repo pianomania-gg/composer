@@ -55,8 +55,6 @@ public:
     virtual muse::async::Notification startupScorePathChanged() const = 0;
 
     virtual std::string handbookUrl() const = 0;
-    virtual std::string askForHelpUrl() const = 0;
-    virtual std::string accessibilityStatementUrl() const = 0;
     virtual std::string museScoreUrl() const = 0;
     virtual std::string museScoreForumUrl() const = 0;
     virtual std::string museScoreContributionUrl() const = 0;

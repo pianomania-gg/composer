@@ -83,18 +83,8 @@ const UiActionList ApplicationUiActions::m_actions = {
     UiAction("online-handbook",
              mu::context::UiCtxAny,
              mu::context::CTX_ANY,
-             TranslatableString("action", "Online &handbook"),
-             TranslatableString("action", "Open online handbook")
-             ),
-    UiAction("ask-help",
-             mu::context::UiCtxAny,
-             mu::context::CTX_ANY,
-             TranslatableString("action", "As&k for help")
-             ),
-    UiAction("accessibility-statement",
-             mu::context::UiCtxAny,
-             mu::context::CTX_ANY,
-             TranslatableString("action", "Accessibility &statement")
+             TranslatableString("action", "Composer &guide"),
+             TranslatableString("action", "Open Pianomania Composer guide")
              ),
     UiAction("revert-factory",
              mu::context::UiCtxAny,

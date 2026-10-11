@@ -57,10 +57,6 @@ void GeneralPreferencesModel::load()
     configuration()->welcomeDialogShowOnStartupChanged().onNotify(this, [this]() {
         emit showWelcomeDialogChanged();
     });
-
-    updateConfiguration()->needCheckForUpdateChanged().onNotify(this, [this]() {
-        emit needCheckForNewAppVersionChanged(needCheckForNewAppVersion());
-    });
 }
 
 void GeneralPreferencesModel::checkUpdateForCurrentLanguage()
@@ -268,7 +264,7 @@ void GeneralPreferencesModel::setStartupScorePath(const QString& scorePath)
 
 QStringList GeneralPreferencesModel::scorePathFilter() const
 {
-    return { muse::qtrc("preferences", "MuseScore file") + " (*.mscz)",
+    return { muse::qtrc("preferences", "Composer score") + " (*.mscz)",
              muse::qtrc("preferences", "All") + " (*)" };
 }
 
@@ -284,29 +280,4 @@ void GeneralPreferencesModel::setShowWelcomeDialog(bool show)
     }
 
     configuration()->setWelcomeDialogShowOnStartup(show);
-}
-
-bool GeneralPreferencesModel::isAppUpdatable() const
-{
-    return updateConfiguration()->isAppUpdatable();
-}
-
-bool GeneralPreferencesModel::needCheckForNewAppVersion() const
-{
-    return updateConfiguration()->needCheckForUpdate();
-}
-
-void GeneralPreferencesModel::setNeedCheckForNewAppVersion(bool value)
-{
-    if (value == needCheckForNewAppVersion()) {
-        return;
-    }
-
-    updateConfiguration()->setNeedCheckForUpdate(value);
-    emit needCheckForNewAppVersionChanged(value);
-}
-
-QString GeneralPreferencesModel::museScorePrivacyPolicyUrl() const
-{
-    return QString::fromStdString(updateConfiguration()->museScorePrivacyPolicyUrl());
 }

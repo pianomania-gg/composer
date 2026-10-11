@@ -147,7 +147,7 @@ void PreferencesModel::load(const QString& currentPageId)
         if (lastOpenedPageId.isEmpty()) {
             setCurrentPageId("general");
         } else {
-            setCurrentPageId(lastOpenedPageId);
+            setCurrentPageId(lastOpenedPageId == "cloud" ? "save" : lastOpenedPageId);
         }
     }
 
@@ -163,8 +163,8 @@ void PreferencesModel::load(const QString& currentPageId)
         makeItem("canvas", QT_TRANSLATE_NOOP("preferences", "Canvas"), IconCode::Code::NEW_FILE,
                  "Preferences/CanvasPreferencesPage.qml"),
 
-        makeItem("cloud", QT_TRANSLATE_NOOP("preferences", "Save & publish"), IconCode::Code::CLOUD_FILE,
-                 "Preferences/SaveAndPublishPreferencesPage.qml"),
+        makeItem("save", QT_TRANSLATE_NOOP("preferences", "Save"), IconCode::Code::SAVE,
+                 "Preferences/SavePreferencesPage.qml"),
 
         makeItem("note-input", QT_TRANSLATE_NOOP("preferences", "Note input"), IconCode::Code::EDIT,
                  "Preferences/NoteInputPreferencesPage.qml"),

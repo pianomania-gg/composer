@@ -146,8 +146,6 @@ private:
     RecentFile makeRecentFile(INotationProjectPtr project);
 
 
-    void importPdf();
-    void importAudioToScore();
 
     void clearRecentScores();
 
