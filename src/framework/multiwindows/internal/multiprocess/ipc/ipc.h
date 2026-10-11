@@ -34,11 +34,10 @@
 class QLocalSocket;
 
 namespace muse::ipc {
-#ifdef MUSE_APP_UNSTABLE
-static const QString SERVER_NAME("musescore-app-ipc-" MUSE_APP_VERSION_MAJOR "-development");
-#else
-static const QString SERVER_NAME("musescore-app-ipc-" MUSE_APP_VERSION_MAJOR);
-#endif
+//! NOTE Named after the application, so each Composer profile has its own channel.
+//! The upstream "musescore-app-ipc-4" name was shared with MuseScore Studio and every other Composer build,
+//! so running two of them together let one apply the other's settings, locks and open-score checks.
+QString serverName();
 
 using ID = QString;
 
