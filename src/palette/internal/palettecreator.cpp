@@ -141,6 +141,8 @@ std::shared_ptr<C> makeElement(mu::engraving::Score* score, Args&&... args)
     return makeElementImplWrapper<C>::makeElementImpl(score, std::forward<Args>(args)...);
 }
 
+// Keep complete prototype trees. AuthoringPaletteProxy and PaletteWidget filter
+// creation views without deleting stored variants, so flag-off restores them.
 PaletteTreePtr PaletteCreator::newMasterPaletteTree()
 {
     PaletteTreePtr tree = std::make_shared<PaletteTree>();

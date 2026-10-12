@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "newscoremodel.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 #include "ui/view/musicalsymbolcodes.h"
 #include "log.h"
 
@@ -48,6 +49,23 @@ QString NewScoreModel::preferredScoreCreationMode() const
 bool NewScoreModel::createScore(const QVariant& info)
 {
     ProjectCreateOptions options = parseOptions(info.toMap());
+
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("project");
+    if (!options.templatePath.empty()) {
+        if (!policy->mayCreateTemplate(options.templatePath)) {
+            return false;
+        }
+    } else {
+        for (PartInstrument& instrument : options.scoreOptions.parts) {
+            if (!instrument.instrumentTemplate.isValid()
+                || !policy->mayCreateInstrument(instrument.instrumentTemplate.id.toStdString())) {
+                return false;
+            }
+
+            instrument.isExistingPart = false;
+            instrument.partId = {};
+        }
+    }
 
     auto project = notationCreator()->newProject(iocContext());
     Ret ret = project->createNew(options);
@@ -113,6 +131,7 @@ ProjectCreateOptions NewScoreModel::parseOptions(const QVariantMap& info) const
 
         String instrumentId = objMap["instrumentId"].toString();
         pi.instrumentTemplate = instrumentsRepository()->instrumentTemplate(instrumentId);
+        pi.partId = muse::ID(objMap["partId"].toString());
         pi.isExistingPart = objMap["isExistingPart"].toBool();
         pi.isSoloist = objMap["isSoloist"].toBool();
 

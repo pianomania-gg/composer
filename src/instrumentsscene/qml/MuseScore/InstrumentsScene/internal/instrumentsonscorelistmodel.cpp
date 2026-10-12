@@ -23,6 +23,7 @@
 #include "instrumentsonscorelistmodel.h"
 
 #include "async/notifylist.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include "log.h"
 
@@ -225,11 +226,12 @@ void InstrumentsOnScoreListModel::addInstruments(const QStringList& instrumentId
 {
     TRACEFUNC;
 
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
     ItemList items = this->items();
 
     for (const QString& id : instrumentIdList) {
         const InstrumentTemplate& templ = repository()->instrumentTemplate(id);
-        if (!templ.isValid()) {
+        if (!templ.isValid() || !policy->mayCreateInstrument(templ.id.toStdString())) {
             continue;
         }
 
@@ -262,6 +264,9 @@ QVariantList InstrumentsOnScoreListModel::instruments() const
 {
     TRACEFUNC;
 
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    IMasterNotationPtr master = context()->currentMasterNotation();
+    INotationPartsPtr activeParts = master ? master->parts() : nullptr;
     QVariantList result;
 
     for (const Item* item : items()) {
@@ -270,11 +275,25 @@ QVariantList InstrumentsOnScoreListModel::instruments() const
             continue;
         }
 
+        bool isVerifiedExistingPart = false;
+        if (instrument->isExistingPart && activeParts) {
+            const Part* activePart = activeParts->part(instrument->partId);
+            isVerifiedExistingPart = activePart && activePart->instrument()
+                                     && activePart->instrument()->id() == instrument->id;
+        }
+
+        const String creationInstrumentId = instrument->isExistingPart
+                                            ? String::fromQString(instrument->id)
+                                            : instrument->instrumentTemplate.id;
+        if (!isVerifiedExistingPart && !policy->mayCreateInstrument(creationInstrumentId.toStdString())) {
+            continue;
+        }
+
         QVariantMap obj;
         obj["partId"] = instrument->partId.toQString();
         obj["isSoloist"] = instrument->isSoloist;
-        obj["isExistingPart"] = instrument->isExistingPart;
-        obj["instrumentId"] = instrument->isExistingPart ? instrument->id : instrument->instrumentTemplate.id.toQString();
+        obj["isExistingPart"] = isVerifiedExistingPart;
+        obj["instrumentId"] = isVerifiedExistingPart ? instrument->id : creationInstrumentId.toQString();
 
         result << obj;
     }

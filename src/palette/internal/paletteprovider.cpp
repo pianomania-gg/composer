@@ -21,6 +21,8 @@
  */
 
 #include "paletteprovider.h"
+#include <utility>
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include <QFileDialog>
 #include <QStandardItemModel>
@@ -42,6 +44,8 @@
 
 using namespace muse;
 using namespace mu::palette;
+
+namespace { std::string_view authoringPaletteOrigin(Palette::Type type); }
 using namespace mu::engraving;
 
 // ========================================================
@@ -590,6 +594,12 @@ bool UserPaletteController::applyPaletteElement(const QModelIndex& index, Qt::Ke
         return false;
     }
 
+    const auto type = index.parent().data(PaletteTreeModel::PaletteTypeRole).value<Palette::Type>();
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    const auto origin = authoringPaletteOrigin(type);
+    if (!policy->mayCreateElement(*cell->element, origin)) {
+        return false;
+    }
     return notation->interaction()->applyPaletteElement(cell->element.get(), modifiers);
 }
 
@@ -597,17 +607,76 @@ bool UserPaletteController::applyPaletteElement(const QModelIndex& index, Qt::Ke
 // PaletteProvider
 // ========================================================
 
+namespace {
+std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+{
+    using Type = mu::palette::Palette::Type;
+    switch (type) {
+    case Type::Guitar: return "guitar";
+    case Type::Accordion: return "accordion";
+    case Type::Handbells: return "handbells";
+    case Type::Harp: return "harp";
+    case Type::BagpipeEmbellishment: return "bagpipe-embellishment";
+    case Type::FretboardDiagram: return "fretboard-diagram";
+    default: return {};
+    }
+}
+
+bool authoringPaletteIndexAllowed(const QAbstractItemModel* model, const QModelIndex& index)
+{
+    auto policy = muse::modularity::globalIoc()->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    const auto* cell = model->data(index, mu::palette::PaletteTreeModel::PaletteCellRole).value<const mu::palette::PaletteCell*>();
+    if (cell && cell->element) {
+        const auto type = model->data(index.parent(), mu::palette::PaletteTreeModel::PaletteTypeRole).value<mu::palette::Palette::Type>();
+        return policy->mayCreateElement(*cell->element, authoringPaletteOrigin(type));
+    }
+    const int count = model->rowCount(index);
+    if (count == 0) {
+        return true;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (authoringPaletteIndexAllowed(model, model->index(i, 0, index))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template<class Base>
+class AuthoringPaletteProxy final : public Base, public muse::async::Asyncable
+{
+public:
+    template<class... Args>
+    explicit AuthoringPaletteProxy(Args&&... args) : Base(std::forward<Args>(args)...)
+    {
+        auto policy = muse::modularity::globalIoc()->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+        policy->changed().onNotify(this, [this]() { this->invalidateFilter(); });
+    }
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex& parent) const override
+    {
+        const auto* model = this->sourceModel();
+        return model && authoringPaletteIndexAllowed(model, model->index(row, 0, parent)) && Base::filterAcceptsRow(row, parent);
+    }
+};
+}
+
 void PaletteProvider::init()
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    policy->changed().onNotify(this, [this]() {
+        m_mainPalette = nullptr;
+        emit mainPaletteChanged();
+    });
     m_userPaletteModel = new PaletteTreeModel(std::make_shared<PaletteTree>(), iocContext(), this);
     connect(m_userPaletteModel, &PaletteTreeModel::treeChanged, this, &PaletteProvider::notifyAboutUserPaletteChanged);
 
     m_masterPaletteModel = new PaletteTreeModel(PaletteCreator(iocContext()).newMasterPaletteTree(), iocContext(), this);
 
-    m_searchFilterModel = new PaletteCellFilterProxyModel(this);
+    m_searchFilterModel = new AuthoringPaletteProxy<PaletteCellFilterProxyModel>(this);
     m_searchFilterModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
 
-    m_visibilityFilterModel = new QSortFilterProxyModel(this);
+    m_visibilityFilterModel = new AuthoringPaletteProxy<QSortFilterProxyModel>(this);
     m_visibilityFilterModel->setFilterRole(PaletteTreeModel::VisibleRole);
     m_visibilityFilterModel->setFilterFixedString("true");
     m_visibilityFilterModel->setSourceModel(m_userPaletteModel);
@@ -702,7 +771,7 @@ FilterPaletteTreeModel* PaletteProvider::customElementsPaletteModel()
     if (!m_customPoolPalette) {
         PaletteCellFilter* filter = new VisibilityCellFilter(/* acceptedValue */ false);
         filter->addChainedFilter(new CustomizedCellFilter(/* acceptedValue */ true));
-        m_customPoolPalette = new FilterPaletteTreeModel(filter, m_userPaletteModel, this);
+        m_customPoolPalette = new AuthoringPaletteProxy<FilterPaletteTreeModel>(filter, m_userPaletteModel, this);
     }
     return m_customPoolPalette;
 }
@@ -735,7 +804,7 @@ FilterPaletteTreeModel* PaletteProvider::poolPaletteModel(const QModelIndex& ind
         return nullptr;
     }
 
-    FilterPaletteTreeModel* m = new FilterPaletteTreeModel(filter, m_masterPaletteModel);
+    FilterPaletteTreeModel* m = new AuthoringPaletteProxy<FilterPaletteTreeModel>(filter, m_masterPaletteModel);
     QQmlEngine::setObjectOwnership(m, QQmlEngine::JavaScriptOwnership);
     return m;
 }
@@ -769,6 +838,9 @@ QAbstractItemModel* PaletteProvider::availableExtraPalettesModel() const
     const int masterRows = m_masterPaletteModel->rowCount();
     for (int row = 0; row < masterRows; ++row) {
         const QModelIndex idx = m_masterPaletteModel->index(row, 0);
+        if (!authoringPaletteIndexAllowed(m_masterPaletteModel, idx)) {
+            continue;
+        }
         // add everything that cannot be found in user palette
         if (!convertIndex(idx, m_userPaletteModel).isValid()) {
             const QString name = m_masterPaletteModel->data(idx, Qt::DisplayRole).toString();
@@ -782,6 +854,9 @@ QAbstractItemModel* PaletteProvider::availableExtraPalettesModel() const
     const int userRows = m_userPaletteModel->rowCount();
     for (int row = 0; row < userRows; ++row) {
         const QModelIndex idx = m_userPaletteModel->index(row, 0);
+        if (!authoringPaletteIndexAllowed(m_userPaletteModel, idx)) {
+            continue;
+        }
         // add invisible custom palettes
         const bool visible = m_userPaletteModel->data(idx, PaletteTreeModel::VisibleRole).toBool();
         const bool custom = m_userPaletteModel->data(idx, PaletteTreeModel::CustomRole).toBool();
@@ -801,6 +876,10 @@ QAbstractItemModel* PaletteProvider::availableExtraPalettesModel() const
 bool PaletteProvider::addPalette(const QPersistentModelIndex& index)
 {
     if (!index.isValid()) {
+        return false;
+    }
+
+    if (!authoringPaletteIndexAllowed(index.model(), index)) {
         return false;
     }
 

@@ -24,9 +24,13 @@
 #include "io/file.h"
 
 #include "engraving/dom/masterscore.h"
+#include "engraving/dom/instrument.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/part.h"
+#include "engraving/dom/staff.h"
 #include "engraving/dom/text.h"
 #include "engraving/dom/sig.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 #include "notation/notationtypes.h"
 
 #include "qml/MuseScore/NotationScene/abstractelementpopupmodel.h"
@@ -601,6 +605,25 @@ bool NotationActionController::canReceiveAction(const ActionCode& code) const
     // notation contains at least one part.
     if (!masterNotation->hasParts()) {
         return false;
+    }
+
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    if (!policy->mayCreateAction(code)) {
+        const EngravingItem* selected = selectedElement();
+        const mu::engraving::Score* activeScore = currentNotationScore();
+
+        const Instrument* instrument = selected && selected->staff()
+                                       ? selected->staff()->part()->instrument(selected->tick()) : nullptr;
+        if (code == "edit-strings" && instrument && instrument->hasStrings()
+            && policy->mayEditExisting(selected, activeScore)) {
+            // Keep the complete string editor available for a live imported string instrument.
+        } else if (code.rfind("fret-", 0) == 0 && !isNoteInputMode() && selected && selected->isNote() && selected->staff()
+                   && selected->staff()->isTabStaff(selected->tick())
+                   && policy->mayEditExisting(selected, activeScore)) {
+            // Outside note input, fret actions edit the selected live tablature note.
+        } else {
+            return false;
+        }
     }
 
     auto iter = m_isEnabledMap.find(code);

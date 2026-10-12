@@ -39,6 +39,11 @@ target_sources(notation PRIVATE
     inotationaccessibility.h
     inotationmidiinput.h
     notationtypes.h
+    iauthoringcapabilitypolicy.h
+    internal/authoringcapabilitypolicy.cpp
+    internal/authoringcapabilitypolicy.h
+    internal/authoringcapabilitypolicydata.h
+    internal/authoringpolicycore.h
     inotationconfiguration.h
     notationerrors.h
     inotationplayback.h
@@ -130,4 +135,9 @@ target_link_libraries(notation PRIVATE
 
 if(MUE_BUILD_NOTATION_TESTS)
     add_subdirectory(tests)
+    set(MODULE_TEST notation_authoring_test)
+    set(MODULE_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/authoringcapabilitypolicy_tests.cpp)
+    set(MODULE_TEST_LINK notation engraving)
+    set(MODULE_TEST_DATA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    include(SetupGTest)
 endif()

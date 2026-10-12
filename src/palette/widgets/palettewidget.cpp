@@ -21,6 +21,7 @@
  */
 
 #include "palettewidget.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include <cmath>
 
@@ -71,6 +72,24 @@ using namespace muse;
 using namespace muse::io;
 using namespace mu::palette;
 using namespace mu::engraving;
+
+namespace {
+std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+{
+    using Type = mu::palette::Palette::Type;
+    switch (type) {
+    case Type::Guitar: return "guitar";
+    case Type::Accordion: return "accordion";
+    case Type::Handbells: return "handbells";
+    case Type::Harp: return "harp";
+    case Type::BagpipeEmbellishment: return "bagpipe-embellishment";
+    case Type::FretboardDiagram: return "fretboard-diagram";
+    default: return {};
+    }
+}
+}
+
+
 using namespace muse::draw;
 using namespace muse::actions;
 
@@ -86,6 +105,12 @@ PaletteWidget::PaletteWidget(QWidget* parent)
 
     setReadOnly(false);
     setMouseTracking(true);
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    policy->changed().onNotify(this, [this]() {
+        m_currentIdx = -1;
+        setFilterText(QString());
+        update();
+    });
 }
 
 void PaletteWidget::setPalette(PalettePtr palette)
@@ -99,6 +124,7 @@ void PaletteWidget::setPalette(PalettePtr palette)
 
     //! NOTE: need for accessibility
     m_palette->setParent(this);
+    setFilterText(QString());
 
     update();
 }
@@ -280,55 +306,41 @@ bool PaletteWidget::isFilterActive()
 /// Returns `true` if all cells are filtered.
 bool PaletteWidget::setFilterText(const QString& text)
 {
-    m_isFilterActive = false;
     setMouseTracking(true);
-    QString t = text.toLower();
-    bool res = true;
+    const QString t = text.toLower();
+    const bool paletteNameMatches = name().startsWith(t, Qt::CaseInsensitive);
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    const auto origin = authoringPaletteOrigin(m_palette->type());
     m_filteredCells.clear();
-    // if palette name is searched for, display all elements in the palette
-    if (name().startsWith(t, Qt::CaseInsensitive)) {
-        const PaletteCellPtr& c = cells().front();
-        for (const PaletteCellPtr& cell : cells()) {
-            m_filteredCells.push_back(cell);
-        }
-
-        const bool contains = t.isEmpty() || c;
-        if (!contains) {
-            m_isFilterActive = true;
-        }
-        if (contains && res) {
-            res = false;
-        }
-    }
-
     for (const PaletteCellPtr& cell : cells()) {
-        const QStringList h = cell->name.toLower().split(" ");
-        const QStringList n = t.split(" ");
-        bool c = false;
-        for (const QString& hs : h) {
-            for (const QString& ns : n) {
-                if (!ns.trimmed().isEmpty()) {
-                    c = hs.trimmed().startsWith(ns.trimmed());
+        if (!cell || !cell->element || !policy->mayCreateElement(*cell->element, origin)) {
+            continue;
+        }
+        bool matches = t.isEmpty() || paletteNameMatches;
+        if (!matches) {
+            const QStringList words = cell->name.toLower().split(" ");
+            const QStringList queryWords = t.split(" ");
+            for (const QString& word : words) {
+                for (const QString& query : queryWords) {
+                    if (!query.trimmed().isEmpty() && word.trimmed().startsWith(query.trimmed())) {
+                        matches = true;
+                        break;
+                    }
+                }
+                if (matches) {
+                    break;
                 }
             }
-            if (c) {
-                break;
-            }
         }
-        if (t.isEmpty() || c) {
+        if (matches) {
             m_filteredCells.push_back(cell);
         }
-        const bool contains = t.isEmpty() || c;
-        if (!contains) {
-            m_isFilterActive = true;
-        }
-        if (contains && res) {
-            res = false;
-        }
     }
+    m_isFilterActive = m_filteredCells.size() != cells().size();
     setFixedHeight(heightForWidth(width()));
     updateGeometry();
-    return res;
+    update();
+    return m_filteredCells.empty();
 }
 
 // ====================================================
@@ -467,6 +479,11 @@ void PaletteWidget::applyElementAtIndex(int index, Qt::KeyboardModifiers modifie
         return;
     }
 
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    const auto origin = authoringPaletteOrigin(m_palette->type());
+    if (!policy->mayCreateElement(*cell->element, origin)) {
+        return;
+    }
     notation->interaction()->applyPaletteElement(cell->element.get(), modifiers);
     mainWindow()->qWindow()->requestActivate();
 }
@@ -741,6 +758,11 @@ void PaletteWidget::mouseMoveEvent(QMouseEvent* ev)
         && (ev->pos() - m_dragStartPosition).manhattanLength() > QApplication::startDragDistance()) {
         PaletteCellPtr cell = cellAt(m_currentIdx);
         if (cell && cell->element) {
+            auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+            const auto origin = authoringPaletteOrigin(m_palette->type());
+            if (!cell->element || !policy->mayCreateElement(*cell->element, origin)) {
+                return;
+            }
             QDrag* drag         = new QDrag(this);
             QMimeData* mimeData = new QMimeData;
             const ElementPtr el   = cell->element;

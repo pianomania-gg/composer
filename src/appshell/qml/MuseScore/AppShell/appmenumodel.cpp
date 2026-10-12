@@ -20,6 +20,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "appmenumodel.h"
+#include <algorithm>
+#include <functional>
+#include <map>
+#include "notation/iauthoringcapabilitypolicy.h"
+#include "notation/inotationelements.h"
+#include "notation/inotationinteraction.h"
+#include "notation/inotationselection.h"
+#include "engraving/dom/staff.h"
 #include "project/internal/composersession.h"
 
 #include "types/translatablestring.h"
@@ -57,6 +65,15 @@ AppMenuModel::AppMenuModel(QObject* parent)
 #endif
 }
 
+namespace {
+class AuthoringMenuSubscription final : public QObject, public muse::async::Asyncable
+{
+public:
+    explicit AuthoringMenuSubscription(QObject* parent) : QObject(parent) {}
+    std::shared_ptr<muse::async::Asyncable> selectionReceiver;
+};
+}
+
 void AppMenuModel::load()
 {
     TRACEFUNC;
@@ -88,7 +105,81 @@ void AppMenuModel::load()
 #endif
     }
 
-    setItems(items);
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("appshell");
+    auto completeChildren = std::make_shared<std::map<MenuItem*, MenuItemList>>();
+    std::function<bool(MenuItem*)> recordCreationContainers = [&](MenuItem* item) {
+        if (!item) {
+            return false;
+        }
+        bool affected = policy->isRestrictedAction(item->action().code);
+        const auto children = item->subitems();
+        for (auto* child : children) {
+            affected = recordCreationContainers(child) || affected;
+        }
+        if (affected && !children.empty()) {
+            completeChildren->emplace(item, children);
+        }
+        return affected;
+    };
+    for (auto* item : items) {
+        recordCreationContainers(item);
+    }
+
+    // Keep the original child lists only for containers with denied creation actions.
+    // Account, recent-file, and plugin updates keep using their live menu objects.
+    auto refreshCreation = [this, policy, items, completeChildren]() {
+        const auto notation = globalContext()->currentNotation();
+        const auto* selected = notation ? notation->interaction()->selection()->element() : nullptr;
+        const auto* activeScore = notation ? notation->elements()->msScore() : nullptr;
+        const bool existingPercussion = selected && selected->staff() && selected->staff()->isDrumStaff(selected->tick())
+            && policy->mayEditExisting(selected, activeScore);
+        std::function<void(MenuItemList&)> filterCreation = [&](MenuItemList& source) {
+            for (auto it = source.begin(); it != source.end();) {
+                MenuItem* item = *it;
+                if (!item) {
+                    it = source.erase(it);
+                    continue;
+                }
+                const auto original = completeChildren->find(item);
+                MenuItemList children = original == completeChildren->end() ? item->subitems() : original->second;
+                const bool wasMenu = !children.empty();
+                if (original != completeChildren->end()) {
+                    filterCreation(children);
+                    item->setSubitems(children);
+                }
+                const auto& code = item->action().code;
+                const bool existingEditor = existingPercussion && (code == "customize-kit" || code == "toggle-percussion-panel");
+                const bool denied = !code.empty() && !policy->mayCreateAction(code) && !existingEditor;
+                const bool emptyCreationContainer = original != completeChildren->end() && wasMenu
+                    && std::all_of(children.begin(), children.end(), [](const MenuItem* child) {
+                        return child->action().code.empty() && child->action().title.isEmpty() && child->subitems().empty();
+                    });
+                if (denied || emptyCreationContainer) {
+                    it = source.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        };
+        MenuItemList visible = items;
+        filterCreation(visible);
+        setItems(visible);
+    };
+    if (auto* oldSubscription = findChild<QObject*>(QStringLiteral("_authoringCreationMenus"))) {
+        delete oldSubscription;
+    }
+    auto* subscription = new AuthoringMenuSubscription(this);
+    subscription->setObjectName(QStringLiteral("_authoringCreationMenus"));
+    policy->changed().onNotify(subscription, refreshCreation);
+    auto observeSelection = [this, subscription, refreshCreation]() {
+        subscription->selectionReceiver = std::make_shared<muse::async::Asyncable>();
+        if (const auto notation = globalContext()->currentNotation()) {
+            notation->interaction()->selectionChanged().onNotify(subscription->selectionReceiver.get(), refreshCreation);
+        }
+        refreshCreation();
+    };
+    globalContext()->currentNotationChanged().onNotify(subscription, observeSelection);
+    observeSelection();
 
     setupConnections();
 

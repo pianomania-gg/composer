@@ -26,6 +26,7 @@
 #include "types/translatablestring.h"
 #include "ui/view/iconcodes.h"
 #include "context/shortcutcontext.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 using namespace mu;
 using namespace mu::notation;
@@ -2883,6 +2884,11 @@ NotationUiActions::NotationUiActions(std::shared_ptr<NotationActionController> c
 
 void NotationUiActions::init()
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    policy->changed().onNotify(this, [this]() {
+        updateActionsEnabled(actionsList());
+    });
+
     m_controller->currentNotationNoteInputChanged().onNotify(this, [this]() {
         m_actionCheckedChanged.send({ NOTE_INPUT_ACTION_CODE });
     });

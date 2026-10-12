@@ -23,6 +23,7 @@
 
 #include "internal/applicationuiactions.h"
 #include "dockwindow/idockwindow.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include "async/async.h"
 
@@ -57,7 +58,12 @@ void NotationPageModel::init()
 
     for (const ActionCode& actionCode : ApplicationUiActions::toggleDockActions().keys()) {
         DockName dockName = ApplicationUiActions::toggleDockActions()[actionCode];
-        dispatcher()->reg(this, actionCode, [=]() { toggleDock(dockName); });
+        dispatcher()->reg(this, actionCode, [this, actionCode, dockName]() {
+            if (actionCode == "toggle-percussion-panel" && !mayTogglePercussionPanel()) {
+                return;
+            }
+            toggleDock(dockName);
+        });
     }
 
     globalContext()->currentNotationChanged().onNotify(this, [this]() {
@@ -94,6 +100,21 @@ void NotationPageModel::init()
     });
 
     m_inited = true;
+}
+
+bool NotationPageModel::mayTogglePercussionPanel() const
+{
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("appshell");
+    if (policy->mayCreateAction("toggle-percussion-panel")) {
+        return true;
+    }
+
+    const INotationPtr notation = globalContext()->currentNotation();
+    const INotationSelectionPtr selection = notation ? notation->interaction()->selection() : nullptr;
+    const EngravingItem* item = selection ? selection->element() : nullptr;
+    const engraving::Score* score = notation && notation->elements() ? notation->elements()->msScore() : nullptr;
+    return item && item->staff() && item->staff()->isDrumStaff(item->tick())
+           && policy->mayEditExisting(item, score);
 }
 
 QString NotationPageModel::notationToolBarName() const

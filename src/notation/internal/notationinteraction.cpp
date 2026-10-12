@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "notationinteraction.h"
+#include "../iauthoringcapabilitypolicy.h"
 
 #include "log.h"
 
@@ -2313,6 +2314,10 @@ void NotationInteraction::cleanupDrumsetChanges(mu::engraving::InstrumentChange*
 bool NotationInteraction::applyPaletteElement(mu::engraving::EngravingItem* element, Qt::KeyboardModifiers modifiers)
 {
     IF_ASSERT_FAILED(element) {
+        return false;
+    }
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notation");
+    if (!policy->mayCreateElement(*element)) {
         return false;
     }
 

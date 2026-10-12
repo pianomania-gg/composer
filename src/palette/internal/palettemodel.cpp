@@ -21,6 +21,7 @@
  */
 
 #include "palettemodel.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include <QMimeData>
 
@@ -38,6 +39,24 @@
 using namespace mu;
 using namespace mu::palette;
 using namespace mu::engraving;
+
+namespace {
+std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+{
+    using Type = mu::palette::Palette::Type;
+    switch (type) {
+    case Type::Guitar: return "guitar";
+    case Type::Accordion: return "accordion";
+    case Type::Handbells: return "handbells";
+    case Type::Harp: return "harp";
+    case Type::BagpipeEmbellishment: return "bagpipe-embellishment";
+    case Type::FretboardDiagram: return "fretboard-diagram";
+    default: return {};
+    }
+}
+}
+
+
 
 //---------------------------------------------------------
 //   PaletteTreeModel::PaletteTreeModel
@@ -353,6 +372,12 @@ QVariant PaletteTreeModel::data(const QModelIndex& index, int role) const
         }
         case MimeDataRole: {
             QVariantMap map;
+            auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+            const Palette* owner = iptrToPalette(index.internalPointer());
+            const auto origin = owner ? authoringPaletteOrigin(owner->type()) : std::string_view();
+            if (cell->element && !policy->mayCreateElement(*cell->element, origin)) {
+                return map;
+            }
             if (cell->element) {
                 map[mimeSymbolFormat] = cell->element->mimeData().toQByteArray();
             }
@@ -589,6 +614,12 @@ QMimeData* PaletteTreeModel::mimeData(const QModelIndexList& indexes) const
     if (const Palette* pp = findPalette(indexes[0])) {
         mime->setData(Palette::mimeDataFormat, pp->toMimeData());
     } else if (PaletteCellConstPtr cell = findCell(indexes[0])) {
+        auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+        const Palette* owner = iptrToPalette(indexes[0].internalPointer());
+        const auto origin = owner ? authoringPaletteOrigin(owner->type()) : std::string_view();
+        if (!cell->element || !policy->mayCreateElement(*cell->element, origin)) {
+            return mime;
+        }
         mime->setData(mimeSymbolFormat, cell->element->mimeData().toQByteArray());
     }
 

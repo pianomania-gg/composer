@@ -21,6 +21,8 @@
  */
 
 #include "layoutpaneltreemodel.h"
+#include "notation/iauthoringcapabilitypolicy.h"
+#include "engraving/dom/instrument.h"
 
 #include <algorithm>
 
@@ -57,6 +59,8 @@ void LayoutPanelTreeModel::classBegin()
 
 void LayoutPanelTreeModel::init()
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    policy->changed().onNotify(this, [this]() { load(); });
     m_partsNotifyReceiver = std::make_shared<muse::async::Asyncable>();
 
     m_selectionModel = new ItemMultiSelectionModel(this);
@@ -1051,8 +1055,11 @@ AbstractLayoutPanelTreeItem* LayoutPanelTreeModel::buildMasterPartItem(const Par
         partItem->appendChild(staffItem);
     }
 
-    auto addStaffControlItem = buildAddStaffControlItem(partItem->id(), partItem);
-    partItem->appendChild(addStaffControlItem);
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    if (masterPart->instrument() && policy->mayCreateInstrument(masterPart->instrument()->id().toStdString())) {
+        auto addStaffControlItem = buildAddStaffControlItem(partItem->id(), partItem);
+        partItem->appendChild(addStaffControlItem);
+    }
 
     setupStavesConnections(partItem->id());
 

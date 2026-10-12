@@ -45,6 +45,8 @@ public:
     }
 
     void init();
+    bool canReceiveAction(const muse::actions::ActionCode& code) const override;
+    muse::async::Channel<muse::actions::ActionCodeList> actionsReceiveAvailableChanged() const;
 
     muse::ValCh<bool> isMasterPaletteOpened() const;
 

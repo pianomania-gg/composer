@@ -21,6 +21,8 @@
  */
 #include "notationcontextmenumodel.h"
 
+#include <functional>
+
 #include "types/translatablestring.h"
 
 #include "ui/view/iconcodes.h"
@@ -29,6 +31,7 @@
 
 #include "engraving/dom/gradualtempochange.h"
 #include "engraving/dom/fret.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 using namespace mu::notation;
 using namespace muse;
@@ -40,6 +43,46 @@ void NotationContextMenuModel::loadItems(int elementType)
     AbstractMenuModel::load();
 
     MenuItemList items = makeItemsByElementType(static_cast<ElementType>(elementType));
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    const EngravingItem* existingItem = currentElement();
+    const auto& hitContext = hitElementContext();
+    const auto* existingStaff = hitContext.element ? hitContext.staff : (existingItem ? existingItem->staff() : nullptr);
+    const INotationPtr notation = globalContext()->currentNotation();
+    const engraving::Score* activeScore = notation && notation->elements() ? notation->elements()->msScore() : nullptr;
+    const bool existingPercussionContext = policy->mayEditExisting(existingItem, activeScore)
+                                           && existingStaff && existingStaff->score() == activeScore
+                                           && existingStaff->isDrumStaff(existingItem->tick());
+
+    std::function<void(MenuItemList&)> filterDenied
+        = [&policy, existingPercussionContext, &filterDenied](MenuItemList& source) {
+        for (auto it = source.begin(); it != source.end();) {
+            MenuItem* item = *it;
+            if (!item) {
+                it = source.erase(it);
+                continue;
+            }
+            MenuItemList subitems = item->subitems();
+            const bool wasMenu = !subitems.empty();
+            if (!subitems.empty()) {
+                filterDenied(subitems);
+                item->setSubitems(subitems);
+            }
+
+            const ActionCode& code = item->action().code;
+            bool denied = !code.empty() && !policy->mayCreateAction(code);
+            if (denied && code == "customize-kit") {
+                denied = !existingPercussionContext;
+            }
+
+            const bool emptyMenu = code.empty() && wasMenu && subitems.empty();
+            if (denied || emptyMenu) {
+                it = source.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    filterDenied(items);
     setItems(items);
 }
 

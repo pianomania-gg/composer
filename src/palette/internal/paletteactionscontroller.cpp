@@ -21,6 +21,11 @@
  */
 
 #include "paletteactionscontroller.h"
+#include "notation/iauthoringcapabilitypolicy.h"
+#include "notation/inotationelements.h"
+#include "notation/inotationselection.h"
+#include "engraving/dom/staff.h"
+#include "engraving/dom/engravingitem.h"
 
 using namespace mu::palette;
 using namespace muse;
@@ -34,6 +39,18 @@ static const muse::UriQuery CUSTOMIZE_KIT_URI("musescore://palette/customizekit"
 
 void PaletteActionsController::init()
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    policy->changed().onNotify(this, [this]() {
+        m_actionsReceiveAvailableChanged.send({ "customize-kit" });
+    });
+    globalContext()->currentNotationChanged().onNotify(this, [this]() {
+        if (auto current = interaction()) {
+            current->selectionChanged().onNotify(this, [this]() {
+                m_actionsReceiveAvailableChanged.send({ "customize-kit" });
+            });
+        }
+        m_actionsReceiveAvailableChanged.send({ "customize-kit" });
+    });
     dispatcher()->reg(this, "masterpalette", this, &PaletteActionsController::toggleMasterPalette);
     dispatcher()->reg(this, "show-keys", this, &PaletteActionsController::toggleSpecialCharactersDialog);
     dispatcher()->reg(this, "time-signature-properties", this, &PaletteActionsController::openTimeSignaturePropertiesDialog);
@@ -100,6 +117,9 @@ void PaletteActionsController::openTimeSignaturePropertiesDialog()
 
 void PaletteActionsController::openCustomizeKitDialog()
 {
+    if (!canReceiveAction("customize-kit")) {
+        return;
+    }
     interactive()->open(CUSTOMIZE_KIT_URI);
 }
 
@@ -107,4 +127,29 @@ mu::notation::INotationInteractionPtr PaletteActionsController::interaction() co
 {
     const notation::INotationPtr notation = globalContext()->currentNotation();
     return notation ? notation->interaction() : nullptr;
+}
+
+bool PaletteActionsController::canReceiveAction(const ActionCode& code) const
+{
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    if (code != "customize-kit" || policy->mayCreateAction(code)) {
+        return true;
+    }
+    const auto notation = globalContext()->currentNotation();
+    const auto current = interaction();
+    if (!notation || !notation->elements() || !current) {
+        return false;
+    }
+    const auto& hitContext = current->hitElementContext();
+    const auto selection = current->selection();
+    const auto* item = hitContext.element ? hitContext.element : (selection ? selection->element() : nullptr);
+    const auto* staff = hitContext.element ? hitContext.staff : (item ? item->staff() : nullptr);
+    const auto* activeScore = notation->elements()->msScore();
+    return policy->mayEditExisting(item, activeScore) && staff && staff->score() == activeScore
+        && staff->isDrumStaff(item->tick());
+}
+
+muse::async::Channel<ActionCodeList> PaletteActionsController::actionsReceiveAvailableChanged() const
+{
+    return m_actionsReceiveAvailableChanged;
 }
