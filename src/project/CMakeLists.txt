@@ -129,6 +129,11 @@ endif()
 target_link_libraries(project PRIVATE notation)
 muse_module_add_qrc(project resources/composer_backgrounds.qrc)
 muse_module_add_qrc(project resources/composer_song_details.qrc)
+install(FILES
+    resources/song-details/Inter-OFL.txt
+    resources/song-details/Barlow-OFL.txt
+    DESTINATION ${Mscore_SHARE_NAME}${Mscore_INSTALL_NAME}licenses/song-details
+)
 
 # Pianomania coordinated export drives the MEI and MIDI exporters directly.
 target_link_libraries(project PRIVATE iex_midi iex_mei)
