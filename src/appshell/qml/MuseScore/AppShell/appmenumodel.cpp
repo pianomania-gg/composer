@@ -482,7 +482,6 @@ MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
     }
 
     helpItems << makeMenuItem("composer-guide");
-    helpItems << makeMenuItem("online-handbook");
     helpItems << makeSeparator();
 
     if (addDiagnosticsSubMenu) {
