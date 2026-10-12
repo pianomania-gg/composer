@@ -138,85 +138,45 @@ StyledDialogView {
                 border.color: "#36475e"
                 clip: true
 
-                Item {
-                    anchors.fill: parent
+                Column {
                     visible: prv.isWelcome
+                    anchors.centerIn: parent
+                    width: parent.width - 64
+                    spacing: 28
 
-                    Column {
-                        anchors.top: parent.top
-                        anchors.topMargin: 36
+                    Row {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        width: parent.width - 64
-                        spacing: 16
+                        spacing: 10
 
                         StyledTextLabel {
-                            width: parent.width
-                            text: "PIANOMANIA"
-                            color: "#a6c8ef"
-                            font: ui.theme.tabBoldFont
-                        }
-                        StyledTextLabel {
-                            width: parent.width
-                            text: qsTrc("appshell/welcome", "Make it your music")
-                            color: "#f1f4f8"
-                            font.pixelSize: 36
-                            font.bold: true
-                        }
-                        StyledTextLabel {
-                            width: parent.width
-                            text: qsTrc("appshell/welcome", "Write and arrange for piano")
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTrc("appshell/welcome", "Powered by")
                             color: "#c3cede"
                             font: ui.theme.largeBodyFont
                         }
+                        Image {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 28
+                            height: 28
+                            source: "resources/mu_logo.svg"
+                            sourceSize: Qt.size(56, 56)
+                        }
+                        Image {
+                            anchors.verticalCenter: parent.verticalCenter
+                            height: 22
+                            width: 143
+                            source: "qrc:/resources/welcomedialog/MuseScoreStudioWordmark.png"
+                            fillMode: Image.PreserveAspectFit
+                            mipmap: true
+                        }
                     }
-
-                    Item {
-                        anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 32
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        width: 448
-                        height: 182
-
-                        Repeater {
-                            model: [0, 4, 7, 9, 11]
-                            Rectangle {
-                                required property int index
-                                required property int modelData
-                                x: modelData * 32 + 5
-                                y: index % 2 === 0 ? 6 : 26
-                                width: 20
-                                height: index % 2 === 0 ? 36 : 24
-                                radius: 5
-                                color: "#a6c8ef"
-                                opacity: 0.65
-                            }
-                        }
-                        Row {
-                            anchors.bottom: parent.bottom
-                            spacing: 2
-                            Repeater {
-                                model: 14
-                                Rectangle {
-                                    required property int index
-                                    width: 30
-                                    height: 116
-                                    radius: 4
-                                    color: [0, 4, 7, 9, 11].indexOf(index) >= 0 ? "#a6c8ef" : "#f1f4f8"
-                                }
-                            }
-                        }
-                        Repeater {
-                            model: [0, 1, 3, 4, 5, 7, 8, 10, 11, 12]
-                            Rectangle {
-                                required property int modelData
-                                x: (modelData + 1) * 32 - 11
-                                y: 66
-                                width: 20
-                                height: 72
-                                radius: 3
-                                color: "#171e2d"
-                            }
-                        }
+                    StyledTextLabel {
+                        width: parent.width
+                        text: qsTrc("appshell/welcome", "Add your own music to Pianomania!")
+                        color: "#f1f4f8"
+                        font.pixelSize: 36
+                        font.bold: true
+                        wrapMode: Text.WordWrap
                     }
                 }
 

@@ -33,8 +33,8 @@ static std::vector<QVariantMap> welcomeDialogData()
     welcome.insert("title", muse::qtrc("appshell/welcome", "Welcome to Pianomania Composer"));
     welcome.insert("isWelcome", true);
     welcome.insert("description", muse::qtrc("appshell/welcome",
-        "Follow this quick tutorial or check out the full Composer guide below on our website."));
-    welcome.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+        "Follow this quick tutorial or check out the full guide on our website."));
+    welcome.insert("buttonText", muse::qtrc("appshell/welcome", "Composer Guide"));
     welcome.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
     QVariantMap account;
@@ -44,7 +44,7 @@ static std::vector<QVariantMap> welcomeDialogData()
     account.insert("menuHint", muse::qtrc("appshell/welcome", "Use your game account. Composer remembers you."));
     account.insert("description", muse::qtrc("appshell/welcome",
         "Open a piano score, then choose File > Sign in to Pianomania. Use the same account as the game. Composer remembers your sign-in. Masterworks is required to export."));
-    account.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    account.insert("buttonText", muse::qtrc("appshell/welcome", "Composer Guide"));
     account.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
     QVariantMap exportSong;
@@ -54,7 +54,7 @@ static std::vector<QVariantMap> welcomeDialogData()
     exportSong.insert("menuHint", muse::qtrc("appshell/welcome", "Find it below your Pianomania account in the File menu."));
     exportSong.insert("description", muse::qtrc("appshell/welcome",
         "Choose File > Export Pianomania file (.pm), just below your Pianomania account. Choose a PNG or JPEG cover image, then save your .pm file."));
-    exportSong.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    exportSong.insert("buttonText", muse::qtrc("appshell/welcome", "Composer Guide"));
     exportSong.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
     QVariantMap play;
@@ -62,7 +62,7 @@ static std::vector<QVariantMap> welcomeDialogData()
     play.insert("imageUrl", "qrc:/resources/welcomedialog/ImportSong.png");
     play.insert("description", muse::qtrc("appshell/welcome",
         "Move the .pm file to the device you play on. In Pianomania, open Profile > Composer > Import .pm file. Use the same account, then find your song in Song Select."));
-    play.insert("buttonText", muse::qtrc("appshell/welcome", "Full Composer Guide"));
+    play.insert("buttonText", muse::qtrc("appshell/welcome", "Composer Guide"));
     play.insert("destinationUrl", "https://pianomania.gg/docs/composer");
 
     return { welcome, account, exportSong, play };
