@@ -24,6 +24,7 @@ SOFTWARE.
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <condition_variable>
 
 #include <gtest/gtest.h>
 
@@ -74,4 +75,111 @@ TEST(QueuePool_Tests, Force)
     for (auto& t : threads) {
         t.join();
     }
+}
+
+TEST(QueuePool_Tests, UnregisterWaitsForActiveMessageProcessing)
+{
+    QueuePool* pool = QueuePool::instance();
+    Queue queue;
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::thread::id receiverId;
+    bool receiverReady = false;
+    bool startProcessing = false;
+    bool handlerEntered = false;
+    bool releaseHandler = false;
+    bool unregisterStarted = false;
+    bool unregisterFinished = false;
+
+    queue.port1()->onMessage([&](const CallMsg&) {
+        std::unique_lock<std::mutex> lock(mutex);
+        handlerEntered = true;
+        changed.notify_all();
+        changed.wait(lock, [&]() { return releaseHandler; });
+    });
+
+    std::thread receiver([&]() {
+        const auto threadId = std::this_thread::get_id();
+        pool->regPort(threadId, queue.port1());
+        bool shouldProcess = false;
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            receiverId = threadId;
+            receiverReady = true;
+            changed.notify_all();
+            changed.wait(lock, [&]() { return startProcessing || releaseHandler; });
+            shouldProcess = startProcessing && !releaseHandler;
+        }
+
+        if (shouldProcess) {
+            // tryLock may fail spuriously; retry without creating another message.
+            for (int attempt = 0; attempt < 128; ++attempt) {
+                pool->processMessages(threadId);
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    if (handlerEntered || releaseHandler) {
+                        break;
+                    }
+                }
+                std::this_thread::yield();
+            }
+        }
+
+        pool->unregPort(threadId, queue.port1());
+    });
+
+    bool receiverObserved = false;
+    bool handlerObserved = false;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        receiverObserved = changed.wait_for(lock, std::chrono::seconds(2), [&]() { return receiverReady; });
+        if (receiverObserved) {
+            queue.port2()->send(CallMsg {});
+            startProcessing = true;
+            changed.notify_all();
+            handlerObserved = changed.wait_for(lock, std::chrono::seconds(2), [&]() { return handlerEntered; });
+        }
+    }
+
+    std::thread remover;
+    bool unregisterObserved = false;
+    bool completedBeforeRelease = false;
+    if (handlerObserved) {
+        remover = std::thread([&]() {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                unregisterStarted = true;
+                changed.notify_all();
+            }
+            pool->unregPort(receiverId, queue.port1());
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                unregisterFinished = true;
+                changed.notify_all();
+            }
+        });
+
+        std::unique_lock<std::mutex> lock(mutex);
+        unregisterObserved = changed.wait_for(lock, std::chrono::seconds(2), [&]() { return unregisterStarted; });
+        if (unregisterObserved) {
+            completedBeforeRelease = changed.wait_for(lock, std::chrono::milliseconds(250), [&]() { return unregisterFinished; });
+        }
+    }
+
+    // Release and join both threads before any assertion, including timeout failures.
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseHandler = true;
+        changed.notify_all();
+    }
+    receiver.join();
+    if (remover.joinable()) {
+        remover.join();
+    }
+
+    EXPECT_TRUE(receiverObserved);
+    EXPECT_TRUE(handlerObserved);
+    EXPECT_TRUE(unregisterObserved);
+    EXPECT_FALSE(completedBeforeRelease);
+    EXPECT_TRUE(unregisterFinished);
 }
