@@ -42,12 +42,9 @@ DockPage {
     uri: "musescore://home"
 
     onSetParamsRequested: function(params) {
-        if (Boolean(params["section"])) {
-            setCurrentCentral(params["section"])
-
-            if (Boolean(params["subSection"])) {
-                subSection = params["subSection"]
-            }
+        setCurrentCentral(params["section"] || "scores")
+        if (Boolean(params["subSection"])) {
+            subSection = params["subSection"]
         }
     }
 
@@ -64,40 +61,12 @@ DockPage {
 
         switch (name) {
         case "scores": root.central = scoresComp; break
+        case "plugins":
         case "extensions": root.central = extensionsComp; break
         }
     }
 
-    panels: [
-        DockPanel {
-            id: menuPanel
-
-            objectName: "homeMenu"
-
-            readonly property int maxFixedWidth: 260
-            readonly property int minFixedWidth: 76
-            readonly property bool iconsOnly: root.window
-                                                ? root.window.width < (root.window.minimumWidth + maxFixedWidth - minFixedWidth)
-                                                : false
-            readonly property int currentFixedWidth: iconsOnly ? minFixedWidth : maxFixedWidth
-
-            width: currentFixedWidth
-            minimumWidth: currentFixedWidth
-            maximumWidth: currentFixedWidth
-
-            floatable: false
-            closable: false
-
-            HomeMenu {
-                currentPageName: root.section
-                iconsOnly: menuPanel.iconsOnly
-
-                onSelected: function(name) {
-                    root.setCurrentCentral(name)
-                }
-            }
-        }
-    ]
+    panels: []
 
     central: scoresComp
 
@@ -110,7 +79,9 @@ DockPage {
     Component {
         id: extensionsComp
 
-        PluginsPage {}
+        PluginsPage {
+            onBackRequested: root.setCurrentCentral("scores")
+        }
     }
 
 }

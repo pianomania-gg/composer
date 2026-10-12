@@ -72,8 +72,6 @@ private:
 
     void onStartupPageOpened(StartupModeType modeType);
 
-    void showStartupDialogsIfNeed(StartupModeType modeType);
-    bool shouldShowWelcomeDialog(StartupModeType modeType) const;
 
     void openScore(const project::ProjectFile& file);
 

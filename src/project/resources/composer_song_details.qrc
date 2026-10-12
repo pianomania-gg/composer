@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/composer/song-details">
+        <file alias="Inter-Regular.ttf">song-details/Inter-Regular.ttf</file>
+        <file alias="Inter-Medium.ttf">song-details/Inter-Medium.ttf</file>
+        <file alias="BarlowCondensed-ExtraBoldItalic.ttf">song-details/BarlowCondensed-ExtraBoldItalic.ttf</file>
+        <file alias="Inter-OFL.txt">song-details/Inter-OFL.txt</file>
+        <file alias="Barlow-OFL.txt">song-details/Barlow-OFL.txt</file>
+        <file alias="check.svg">song-details/check.svg</file>
+        <file alias="arrow-down.svg">song-details/arrow-down.svg</file>
+    </qresource>
+</RCC>

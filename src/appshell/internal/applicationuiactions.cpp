@@ -75,6 +75,11 @@ const UiActionList ApplicationUiActions::m_actions = {
              mu::context::CTX_ANY,
              TranslatableString("action", "About &MusicXML…")
              ),
+    UiAction("composer-guide",
+             mu::context::UiCtxAny,
+             mu::context::CTX_ANY,
+             TranslatableString("action", "Composer guide")
+             ),
     UiAction("online-handbook",
              mu::context::UiCtxAny,
              mu::context::CTX_ANY,

@@ -31,6 +31,7 @@ FocusScope {
     id: root
 
     property alias color: background.color
+    signal backRequested()
 
     QtObject {
         id: prv
@@ -80,6 +81,15 @@ FocusScope {
             width: parent.width
 
             spacing: 12
+
+            FlatButton {
+                text: qsTrc("project", "Recent scores")
+                icon: IconCode.CHEVRON_LEFT
+                orientation: Qt.Horizontal
+                navigation.panel: navTopPanel
+                navigation.order: 0
+                onClicked: root.backRequested()
+            }
 
             StyledTextLabel {
                 id: pageTitle
