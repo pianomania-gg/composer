@@ -103,8 +103,6 @@ private:
     void openAboutMusicXMLDialog();
 
     void openOnlineHandbookPage();
-    void openAskForHelpPage();
-    void openAccessibilityStatementPage();
     void openPreferencesDialog();
     void doOpenPreferencesDialog();
 

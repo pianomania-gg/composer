@@ -131,19 +131,5 @@ PreferencesPage {
             }
         }*/
 
-        SeparatorLine { }
-
-        AutomaticUpdateSection {
-            isAppUpdatable: preferencesModel.isAppUpdatable()
-            needCheckForNewAppVersion: preferencesModel.needCheckForNewAppVersion
-            museScorePrivacyPolicyUrl: preferencesModel.museScorePrivacyPolicyUrl()
-
-            navigation.section: root.navigationSection
-            navigation.order: root.navigationOrderStart + 5
-
-            onNeedCheckForNewAppVersionChangeRequested: function(check) {
-                preferencesModel.needCheckForNewAppVersion = check
-            }
-        }
     }
 }

@@ -19,16 +19,16 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-#include "saveandpublishpreferencesmodel.h"
+#include "savepreferencesmodel.h"
 
 using namespace mu::preferences;
 
-SaveAndPublishPreferencesModel::SaveAndPublishPreferencesModel(QObject* parent)
+SavePreferencesModel::SavePreferencesModel(QObject* parent)
     : QObject(parent), muse::Contextable(muse::iocCtxForQmlObject(this))
 {
 }
 
-void SaveAndPublishPreferencesModel::load()
+void SavePreferencesModel::load()
 {
     projectConfiguration()->autoSaveEnabledChanged().onReceive(this, [this](bool enabled) {
         emit autoSaveEnabledChanged(enabled);
@@ -37,28 +37,19 @@ void SaveAndPublishPreferencesModel::load()
     projectConfiguration()->autoSaveIntervalChanged().onReceive(this, [this](int minutes) {
         emit autoSaveIntervalChanged(minutes);
     });
-
-    projectConfiguration()->alsoShareAudioComChanged().onReceive(this, [this](bool share) {
-        emit alsoShareAudioComChanged(share);
-    });
 }
 
-bool SaveAndPublishPreferencesModel::isAutoSaveEnabled() const
+bool SavePreferencesModel::isAutoSaveEnabled() const
 {
     return projectConfiguration()->isAutoSaveEnabled();
 }
 
-int SaveAndPublishPreferencesModel::autoSaveInterval() const
+int SavePreferencesModel::autoSaveInterval() const
 {
     return projectConfiguration()->autoSaveIntervalMinutes();
 }
 
-bool SaveAndPublishPreferencesModel::alsoShareAudioCom() const
-{
-    return projectConfiguration()->alsoShareAudioCom();
-}
-
-void SaveAndPublishPreferencesModel::setAutoSaveEnabled(bool enabled)
+void SavePreferencesModel::setAutoSaveEnabled(bool enabled)
 {
     if (enabled == isAutoSaveEnabled()) {
         return;
@@ -67,20 +58,11 @@ void SaveAndPublishPreferencesModel::setAutoSaveEnabled(bool enabled)
     projectConfiguration()->setAutoSaveEnabled(enabled);
 }
 
-void SaveAndPublishPreferencesModel::setAutoSaveInterval(int minutes)
+void SavePreferencesModel::setAutoSaveInterval(int minutes)
 {
     if (minutes == autoSaveInterval()) {
         return;
     }
 
     projectConfiguration()->setAutoSaveInterval(minutes);
-}
-
-void SaveAndPublishPreferencesModel::setAlsoShareAudioCom(bool share)
-{
-    if (share == alsoShareAudioCom()) {
-        return;
-    }
-
-    projectConfiguration()->setAlsoShareAudioCom(share);
 }

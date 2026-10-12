@@ -71,8 +71,6 @@ void ApplicationActionController::init()
     dispatcher()->reg(this, "composer-guide", [this]() {
         interactive()->openUrl("https://pianomania.gg/docs/composer");
     });
-    dispatcher()->reg(this, "ask-help", this, &ApplicationActionController::openAskForHelpPage);
-    dispatcher()->reg(this, "accessibility-statement", this, &ApplicationActionController::openAccessibilityStatementPage);
     dispatcher()->reg(this, "preference-dialog", this, &ApplicationActionController::openPreferencesDialog);
 
     dispatcher()->reg(this, "revert-factory", this, &ApplicationActionController::revertToFactorySettings);
@@ -298,18 +296,6 @@ void ApplicationActionController::openOnlineHandbookPage()
 {
     std::string handbookUrl = configuration()->handbookUrl();
     interactive()->openUrl(handbookUrl);
-}
-
-void ApplicationActionController::openAskForHelpPage()
-{
-    std::string askForHelpUrl = configuration()->askForHelpUrl();
-    interactive()->openUrl(askForHelpUrl);
-}
-
-void ApplicationActionController::openAccessibilityStatementPage()
-{
-    std::string accessibilityStatementUrl = configuration()->accessibilityStatementUrl();
-    interactive()->openUrl(accessibilityStatementUrl);
 }
 
 void ApplicationActionController::openPreferencesDialog()
