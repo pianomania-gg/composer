@@ -1356,6 +1356,56 @@ bool MeiExporter::writeHeader() {
     this->writeSurfaceSizeInches(meiHead);
   }
 
+  // Song details live in the signed MEI header, including when an imported MEI
+  // supplied an older header. Score geometry and event identities stay unchanged.
+  if (m_score->metaTag(u"pianomaniaSongDetailsVersion") == u"1") {
+    auto head = m_mei.child("meiHead");
+    auto fileDesc = head.child("fileDesc");
+    if (!fileDesc) fileDesc = head.prepend_child("fileDesc");
+    auto titleStmt = fileDesc.child("titleStmt");
+    if (!titleStmt) titleStmt = fileDesc.prepend_child("titleStmt");
+    auto title = titleStmt.child("title");
+    for (auto candidate : titleStmt.children("title")) {
+      if (std::string(candidate.attribute("type").value()) == "main") { title = candidate; break; }
+    }
+    if (!title) title = titleStmt.prepend_child("title");
+    title.text().set(m_score->metaTag(u"workTitle").toStdString().c_str());
+    if (!title.attribute("type")) title.append_attribute("type") = "main";
+    auto respStmt = titleStmt.child("respStmt");
+    if (!respStmt) respStmt = titleStmt.append_child("respStmt");
+    for (auto statement : titleStmt.children("respStmt")) {
+      for (auto person = statement.child("persName"); person;) {
+        auto next = person.next_sibling("persName");
+        const std::string role = person.attribute("role").value();
+        if (role == "composer" || role == "arranger") statement.remove_child(person);
+        person = next;
+      }
+    }
+    for (const auto& role : { QString("composer"), QString("arranger") }) {
+      for (const auto& name : m_score->metaTag(String::fromQString(role)).toQString().split('\n', Qt::SkipEmptyParts)) {
+        auto person = respStmt.append_child("persName");
+        person.append_attribute("role") = role.toStdString().c_str();
+        person.text().set(name.trimmed().toStdString().c_str());
+      }
+    }
+    auto notes = fileDesc.child("notesStmt");
+    if (!notes) notes = fileDesc.append_child("notesStmt");
+    for (auto annot = notes.child("annot"); annot;) {
+      auto next = annot.next_sibling("annot");
+      const std::string type = annot.attribute("type").value();
+      if (type == "pianomania-song-details-version" || type == "pianomania-difficulty-rating") notes.remove_child(annot);
+      annot = next;
+    }
+    auto version = notes.append_child("annot");
+    version.append_attribute("type") = "pianomania-song-details-version";
+    version.text().set("1");
+    const auto rating = m_score->metaTag(u"pianomaniaDifficultyRating");
+    if (!rating.isEmpty()) {
+      auto difficulty = notes.append_child("annot");
+      difficulty.append_attribute("type") = "pianomania-difficulty-rating";
+      difficulty.text().set(rating.toStdString().c_str());
+    }
+  }
   return true;
 }
 

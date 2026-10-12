@@ -225,6 +225,7 @@ MenuItem* AppMenuModel::makeFileMenu()
         makeMenuItem("file-export"),
         makeSeparator(),
         makeMenuItem("composer-account"),
+        makeMenuItem("composer-song-details"),
         makeMenuItem("file-export-composer"),
 #ifndef PIANOMANIA_COMPOSER_PRODUCTION
         makeMenuItem("file-export-pianomania"),
@@ -240,6 +241,7 @@ MenuItem* AppMenuModel::makeFileMenu()
 
     for (MenuItem* item : fileItems) {
         if (item->action().code == "file-export-composer" || item->action().code == "composer-account"
+            || item->action().code == "composer-song-details"
             || item->action().code == "file-export-pianomania") {
             item->setSection("accent");
         }
@@ -481,6 +483,7 @@ MenuItem* AppMenuModel::makeHelpMenu(bool addDiagnosticsSubMenu)
         helpItems << makeSeparator();
     }
 
+    helpItems << makeMenuItem("composer-guide");
     helpItems << makeMenuItem("online-handbook");
     helpItems << makeMenuItem("ask-help");
     helpItems << makeSeparator();

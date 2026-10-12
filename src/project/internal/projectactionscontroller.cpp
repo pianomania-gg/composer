@@ -32,6 +32,7 @@
 #include <QSettings>
 #include "composerpackage.h"
 #include "composerbackgrounddialog.h"
+#include "composersongdetails.h"
 #include "composersession.h"
 #include <QCheckBox>
 #include <QDialog>
@@ -102,6 +103,7 @@ void ProjectActionsController::init()
 
     dispatcher()->reg(this, "file-export", this, &ProjectActionsController::exportScore);
     dispatcher()->reg(this, "file-export-composer", this, &ProjectActionsController::exportComposer);
+    dispatcher()->reg(this, "composer-song-details", [this]() { editComposerSongDetails(); });
     dispatcher()->reg(this, "composer-account", []() { composer::showAccount(QApplication::activeWindow()); });
 #ifndef PIANOMANIA_COMPOSER_PRODUCTION
     dispatcher()->reg(this, "file-export-pianomania", this, &ProjectActionsController::exportPianomania);
@@ -997,12 +999,45 @@ void ProjectActionsController::exportScore()
     }
 }
 
+bool ProjectActionsController::editComposerSongDetails()
+{
+    const auto project = currentNotationProject();
+    if (!project) return false;
+    auto meta = project->metaInfo();
+    composer::SongDetails details;
+    details.title = meta.title;
+    for (const auto& role : { QString("composer"), QString("arranger") }) {
+        const auto names = (role == "composer" ? meta.composer : meta.arranger).split('\n', Qt::SkipEmptyParts);
+        for (const auto& name : names) details.credits.append({role, name.trimmed()});
+    }
+    if (meta.additionalTags.contains(composer::DifficultyRatingTag)) {
+        bool valid = false;
+        const int rating = meta.additionalTags.value(composer::DifficultyRatingTag).toString().toInt(&valid);
+        if (valid && rating >= 0 && rating <= 999) details.difficultyRating = rating;
+    }
+    const auto selected = composer::chooseSongDetails(QApplication::activeWindow(), details);
+    if (!selected) return false;
+    meta.title = selected->title;
+    QStringList composers, arrangers;
+    for (const auto& credit : selected->credits) {
+        (credit.role == "composer" ? composers : arrangers).append(credit.name);
+    }
+    meta.composer = composers.join('\n');
+    meta.arranger = arrangers.join('\n');
+    meta.additionalTags[composer::SongDetailsVersionTag] = "1";
+    if (selected->difficultyRating) meta.additionalTags[composer::DifficultyRatingTag] = QString::number(*selected->difficultyRating);
+    else meta.additionalTags.remove(composer::DifficultyRatingTag);
+    project->setMetaInfo(meta, true);
+    return true;
+}
+
 void ProjectActionsController::exportComposer()
 {
     QWidget* parent = QApplication::activeWindow();
     try {
         auto notation = currentNotation();
         if (!notation || !notation->elements()->msScore()) return;
+        if (!editComposerSongDetails()) return;
         QSettings settings;
         QString directory = settings.value("composer/exportDirectory", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).toString();
         if (!QDir(directory).exists()) directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);

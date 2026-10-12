@@ -85,6 +85,8 @@ const UiActionList ProjectUiActions::m_actions = {
              ),
     UiAction("composer-account", mu::context::UiCtxAny, mu::context::CTX_ANY,
              TranslatableString("action", "Pianomania account…"), TranslatableString("action", "Pianomania account…")),
+    UiAction("composer-song-details", mu::context::UiCtxAny, mu::context::CTX_ANY,
+             TranslatableString("action", "Song details…"), TranslatableString("action", "Song details…")),
     UiAction("file-export-composer", mu::context::UiCtxAny, mu::context::CTX_ANY,
              TranslatableString("action", "Export Pianomania file (.pm)…"), TranslatableString("action", "Export Pianomania file (.pm)…"),
              IconCode::Code::SHARE_FILE),

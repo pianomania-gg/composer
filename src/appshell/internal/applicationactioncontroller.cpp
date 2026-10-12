@@ -68,6 +68,9 @@ void ApplicationActionController::init()
     dispatcher()->reg(this, "about-qt", this, &ApplicationActionController::openAboutQtDialog);
     dispatcher()->reg(this, "about-musicxml", this, &ApplicationActionController::openAboutMusicXMLDialog);
     dispatcher()->reg(this, "online-handbook", this, &ApplicationActionController::openOnlineHandbookPage);
+    dispatcher()->reg(this, "composer-guide", [this]() {
+        interactive()->openUrl("https://pianomania.gg/docs/composer");
+    });
     dispatcher()->reg(this, "ask-help", this, &ApplicationActionController::openAskForHelpPage);
     dispatcher()->reg(this, "accessibility-statement", this, &ApplicationActionController::openAccessibilityStatementPage);
     dispatcher()->reg(this, "preference-dialog", this, &ApplicationActionController::openPreferencesDialog);

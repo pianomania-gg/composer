@@ -168,6 +168,7 @@ private:
 
     void exportScore();
     void exportComposer();
+    bool editComposerSongDetails();
     void exportPianomania();
     void exportPianomaniaAssets(const notation::INotationPtr& notation, const muse::io::path_t& basePath,
                                 bool exportPdf, bool exportMidi, bool exportMei);

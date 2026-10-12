@@ -35,7 +35,6 @@ using namespace mu::appshell;
 using namespace muse;
 using namespace muse::actions;
 
-static const muse::UriQuery WELCOME_DIALOG_URI("musescore://welcomedialog");
 static const muse::Uri HOME_URI("musescore://home");
 static const muse::Uri NOTATION_URI("musescore://notation");
 
@@ -211,30 +210,6 @@ void StartupScenario::onStartupPageOpened(StartupModeType modeType)
     } break;
     }
 
-    showStartupDialogsIfNeed(modeType);
-}
-
-void StartupScenario::showStartupDialogsIfNeed(StartupModeType modeType)
-{
-    if (shouldShowWelcomeDialog(modeType)) {
-        interactive()->open(WELCOME_DIALOG_URI).onResolve(this, [this](const Val&) {
-            configuration()->setWelcomeDialogLastShownVersion(configuration()->museScoreVersion());
-        });
-    }
-}
-
-bool StartupScenario::shouldShowWelcomeDialog(StartupModeType modeType) const
-{
-    if (!configuration()->welcomeDialogShowOnStartup()) {
-        return false;
-    }
-
-    if (multiwindowsProvider()->windowCount() != 1) {
-        return false;
-    }
-
-    const Uri& startupUri = startupPageUri(modeType);
-    return interactive()->currentUri().val == startupUri;
 }
 
 void StartupScenario::openScore(const project::ProjectFile& file)
