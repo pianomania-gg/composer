@@ -67,6 +67,8 @@ target_sources(project PRIVATE
     internal/projectautosaver.h
     internal/pianomaniaexport.cpp
     internal/pianomaniaexport.h
+    internal/notationcompatibility.cpp
+    internal/notationcompatibility.h
     internal/composerpackage.cpp
     internal/composerpackage.h
     internal/composerbackgrounddialog.cpp
@@ -138,6 +140,7 @@ install(FILES
 # Pianomania coordinated export drives the MEI and MIDI exporters directly.
 target_link_libraries(project PRIVATE iex_midi iex_mei)
 target_link_libraries(project PRIVATE Qt::Network Qt::Widgets)
+target_link_libraries(project PRIVATE Qt::Qml)
 if(WIN32)
     target_link_libraries(project PRIVATE Advapi32)
 elseif(APPLE)
@@ -150,6 +153,7 @@ endif()
 
 if (MUE_BUILD_PROJECT_TESTS)
     add_subdirectory(tests)
+    target_sources(project_test PRIVATE tests/notationcompatibilitytest.cpp)
 endif()
 
 if (MUE_BUILD_PROJECT_QML)

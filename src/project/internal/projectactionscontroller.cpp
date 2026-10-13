@@ -59,6 +59,11 @@
 #include "engraving/engravingerrors.h"
 
 #include "pianomaniaexport.h"
+#include "notationcompatibility.h"
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QXmlStreamReader>
+#include "notation/inotationinteraction.h"
 #include "projecterrors.h"
 #include "projectextensionpoints.h"
 
@@ -77,6 +82,92 @@ static const muse::Uri PROJECT_PROPERTIES_URI("musescore://project/properties");
 
 static constexpr int RETRY_SAVE_BTN_ID = int(IInteractive::Button::CustomButton);
 static constexpr int SAVE_AS_BTN_ID    = RETRY_SAVE_BTN_ID + 1;
+namespace {
+struct CompatibilityNavigation {
+    QHash<QString, int> measureOrdinals;
+    std::function<bool(int, bool)> navigate;
+};
+
+QStringList compatibilityMeasureSignature(mu::engraving::Score* score, bool includeIdentity)
+{
+    QStringList signature;
+    if (!score) return signature;
+    for (auto* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        const QString identity = includeIdentity && measure->eid().isValid()
+            ? QString::fromStdString(measure->eid().toStdString()) : QString();
+        signature.append(identity + QString("|%1/%2|%3/%4|%5|%6")
+            .arg(measure->tick().numerator()).arg(measure->tick().denominator())
+            .arg(measure->ticks().numerator()).arg(measure->ticks().denominator())
+            .arg(measure->no()).arg(measure->irregular() ? 1 : 0));
+    }
+    return signature;
+}
+
+CompatibilityNavigation compatibilityNavigation(const std::shared_ptr<mu::context::IGlobalContext>& context,
+                                                const mu::notation::INotationPtr& notation,
+                                                const QByteArray& exportedMei = {},
+                                                mu::engraving::Score* exportedScore = nullptr)
+{
+    CompatibilityNavigation result;
+    if (!context || !notation || !notation->elements() || !notation->elements()->msScore()) return result;
+    auto* score = notation->elements()->msScore();
+    const QStringList signature = compatibilityMeasureSignature(score, true);
+    std::vector<mu::engraving::Measure*> measures;
+    for (auto* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        if (!measure->eid().isValid()) return {};
+        const int ordinal = int(measures.size());
+        result.measureOrdinals.insert(QString::fromStdString(measure->eid().toStdString()), ordinal);
+        measures.push_back(measure);
+    }
+    if (measures.empty()) return {};
+    if (!exportedMei.isEmpty()) {
+        // Validate the written snapshot sequence before associating canonical measure IDs with its ordinals.
+        if (!exportedScore || compatibilityMeasureSignature(exportedScore, false) != compatibilityMeasureSignature(score, false)) return {};
+        std::vector<mu::engraving::Measure*> exportedMeasures;
+        for (auto* measure = exportedScore->firstMeasure(); measure; measure = measure->nextMeasure()) exportedMeasures.push_back(measure);
+        QXmlStreamReader reader(exportedMei);
+        QSet<QString> seen;
+        int ordinal = 0;
+        while (!reader.atEnd()) {
+            reader.readNext();
+            if (!reader.isStartElement() || reader.name() != "measure") continue;
+            if (reader.namespaceUri() != "http://www.music-encoding.org/ns/mei" || ordinal >= int(exportedMeasures.size())) return {};
+            const auto attributes = reader.attributes();
+            const QString identity = attributes.value("http://www.w3.org/XML/1998/namespace", "id").toString();
+            if (identity.isEmpty() || seen.contains(identity)) return {};
+            auto* measure = exportedMeasures[ordinal];
+            if (attributes.hasAttribute("n")) {
+                if (attributes.value("n") != QString::number(measure->no() + 1)) return {};
+            } else if (!measure->irregular()) return {};
+            seen.insert(identity);
+            result.measureOrdinals.insert(identity, ordinal);
+            if (measure->eid().isValid()) result.measureOrdinals.insert(QString::fromStdString(measure->eid().toStdString()), ordinal);
+            ++ordinal;
+        }
+        if (reader.hasError() || ordinal != int(measures.size())) return {};
+    }
+    std::weak_ptr<mu::context::IGlobalContext> weakContext = context;
+    std::weak_ptr<mu::notation::INotation> weakNotation = notation;
+    result.navigate = [weakContext, weakNotation, signature](int ordinal, bool perform) {
+        const auto context = weakContext.lock();
+        const auto notation = weakNotation.lock();
+        if (!context || !notation || context->currentNotation() != notation || !notation->isOpen() || !notation->elements()) return false;
+        auto* score = notation->elements()->msScore();
+        if (!score || compatibilityMeasureSignature(score, true) != signature || ordinal < 0) return false;
+        auto* measure = score->firstMeasure();
+        for (int index = 0; measure && index < ordinal; ++index) measure = measure->nextMeasure();
+        const auto interaction = notation->interaction();
+        if (!measure || !interaction) return false;
+        if (perform) {
+            interaction->select({measure}, mu::notation::SelectType::REPLACE);
+            interaction->showItem(measure);
+        }
+        return true;
+    };
+    return result;
+}
+}
+
 
 void ProjectActionsController::init()
 {
@@ -353,7 +444,22 @@ Ret ProjectActionsController::doFinishOpenProject()
 {
     extensionsProvider()->performPointAsync(EXEC_ONPOST_PROJECT_OPENED);
 
-    return openPageIfNeed(NOTATION_PAGE_URI);
+    Ret opened = openPageIfNeed(NOTATION_PAGE_URI);
+    auto notation = currentNotation();
+    if (opened && notation && notation->elements()->msScore()) {
+        auto inventory = notationcompatibility::inventoryScore(notation->elements()->msScore(),
+                                                               currentNotationProject()->path().toQString());
+        const auto navigation = compatibilityNavigation(globalContext(), notation);
+        if (notationcompatibility::SummaryModel::instance()->setReport(inventory.report, navigation.measureOrdinals, navigation.navigate)) {
+            static const Uri compatibilityUri("musescore://project/notation-compatibility");
+            if (!interactive()->isOpened(compatibilityUri).val) {
+                UriQuery query(compatibilityUri);
+                query.addParam("modal", Val(false));
+                interactive()->open(query);
+            }
+        }
+    }
+    return opened;
 }
 
 const ProjectBeingDownloaded& ProjectActionsController::projectBeingDownloaded() const
@@ -1024,6 +1130,17 @@ void ProjectActionsController::exportComposer()
         auto notation = currentNotation();
         if (!notation || !notation->elements()->msScore()) return;
         if (!editComposerSongDetails()) return;
+        auto sourceCompatibility = notationcompatibility::inventoryScore(notation->elements()->msScore(),
+                                                                         currentNotationProject()->path().toQString());
+        const auto sourceNavigation = compatibilityNavigation(globalContext(), notation);
+        if (notationcompatibility::SummaryModel::instance()->setReport(sourceCompatibility.report, sourceNavigation.measureOrdinals, sourceNavigation.navigate)) {
+            static const Uri compatibilityUri("musescore://project/notation-compatibility");
+            if (!interactive()->isOpened(compatibilityUri).val) {
+                UriQuery query(compatibilityUri);
+                query.addParam("modal", Val(false));
+                interactive()->open(query);
+            }
+        }
         QSettings settings;
         QString directory = settings.value("composer/exportDirectory", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).toString();
         if (!QDir(directory).exists()) directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -1043,9 +1160,34 @@ void ProjectActionsController::exportComposer()
         QString base = temporary.path() + "/song";
         auto result = pianomania::exportPianomaniaBundle(snapshot.get(), muse::io::path_t("composer.mscz"),
             muse::io::path_t(base), muse::io::path_t(base + ".mei"), false);
-        if (!result.ret) throw std::runtime_error("The score could not be exported for Pianomania.");
+        if (!result.ret) {
+            if (result.ret.text().rfind("Score compatibility admission rejected:", 0) == 0) {
+                LOGE() << result.ret.text();
+                throw std::runtime_error("Pianomania couldn’t read this score. Check the score before trying again.");
+            }
+            if (result.ret.text().rfind("Coordinated Pianomania export", 0) == 0) {
+                LOGE() << result.ret.text();
+                throw std::runtime_error("Couldn’t export this score for Pianomania. Please try again.");
+            }
+            throw std::runtime_error("The score could not be exported for Pianomania.");
+        }
         if (!pianomania::writePianomaniaManifest(muse::io::path_t(temporary.path() + "/manifest.json"), result.val))
             throw std::runtime_error("Could not create the export manifest.");
+        auto compatibilityManifest = QJsonDocument::fromJson(QByteArray::fromStdString(result.val.manifestJson)).object();
+        auto exportCompatibility = compatibilityManifest["notation_compatibility"].toObject();
+        QFile exportedMei(base + ".mei");
+        const QByteArray meiBytes = exportedMei.open(QIODevice::ReadOnly) ? exportedMei.readAll() : QByteArray();
+        const auto exportNavigation = meiBytes.isEmpty() ? CompatibilityNavigation()
+            : compatibilityNavigation(globalContext(), notation, meiBytes, snapshot.get());
+        if (!exportCompatibility.isEmpty() && notationcompatibility::SummaryModel::instance()->setReport(exportCompatibility,
+                exportNavigation.measureOrdinals, exportNavigation.navigate)) {
+            static const Uri compatibilityUri("musescore://project/notation-compatibility");
+            if (!interactive()->isOpened(compatibilityUri).val) {
+                UriQuery query(compatibilityUri);
+                query.addParam("modal", Val(false));
+                interactive()->open(query);
+            }
+        }
         QVector<composer::Section> sections;
         auto add = [&](quint8 type, const QString& name) {
             QFile file(temporary.path() + "/" + name);

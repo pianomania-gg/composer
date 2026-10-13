@@ -103,6 +103,7 @@ qt_add_qml_module(project_qml
         internal/ScoresPage/ScoreThumbnail.qml
         Message.qml
         NewScoreDialog.qml
+        NotationCompatibilitySummary.qml
         ProjectPropertiesDialog.qml
         ScoresGridView.qml
         ScoresListView.qml
