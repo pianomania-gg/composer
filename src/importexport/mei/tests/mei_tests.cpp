@@ -54,6 +54,7 @@
 #include "engraving/dom/dynamic.h"
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
+#include "engraving/dom/glissando.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/keysig.h"
 #include "engraving/dom/line.h"
@@ -3565,6 +3566,60 @@ TEST_F(Mei_Tests, mei_pianomania_arpeggio_centers_follow_rendered_exported_heads
             }
         }
     }
+}
+
+}
+
+namespace mu::iex::mei {
+
+// Test value: Detects a glissando segment that MuseScore lays out without drawing (no forward
+// extent) failing the whole export, or taking the glissando's drawn segments with it.
+TEST_F(Mei_Tests, mei_export_glissando_skips_only_segments_musescore_does_not_draw)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-gliss-system-break.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    Glissando* gliss = nullptr;
+    score->scanElements([&gliss](EngravingItem* item) {
+        if (!gliss && item->isGlissandoSegment()) {
+            gliss = static_cast<GlissandoSegment*>(item)->glissando();
+        }
+    });
+    ASSERT_NE(gliss, nullptr);
+    ASSERT_EQ(gliss->spannerSegments().size(), 2u);
+    auto* first = static_cast<GlissandoSegment*>(gliss->frontSegment());
+    auto* second = static_cast<GlissandoSegment*>(gliss->backSegment());
+    ASSERT_GT(first->pos2().x(), 0.0);
+    ASSERT_GT(second->pos2().x(), 0.0);
+
+    std::string tag;
+    const auto exportSegments = [&score, &tag]() {
+        std::string text;
+        EXPECT_TRUE(pmWriteMeiToString(score.get(), true, text));
+        const std::vector<std::string> tags = collectStartTags(text, "gliss");
+        EXPECT_EQ(tags.size(), 1u);
+        tag = tags.empty() ? std::string() : tags.front();
+        return collectStartTags(text, "pm:gliss-segment");
+    };
+    const std::vector<std::string> drawn = exportSegments();
+    ASSERT_EQ(drawn.size(), 2u);
+
+    // TDraw returns early for a glissando segment whose end is not to the right of its start.
+    second->setPos2(PointF(0.0, second->pos2().y()));
+    std::vector<std::string> exported = exportSegments();
+    ASSERT_EQ(exported.size(), 1u);
+    EXPECT_EQ(xmlAttributeValue(exported.front(), "start"), xmlAttributeValue(drawn.front(), "start"));
+    EXPECT_EQ(xmlAttributeValue(exported.front(), "end"), xmlAttributeValue(drawn.front(), "end"));
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-start-center").has_value());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-end-center").has_value());
+
+    first->setPos2(PointF(-first->spatium(), first->pos2().y()));
+    exported = exportSegments();
+    EXPECT_TRUE(exported.empty());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-start-center").has_value());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-end-center").has_value());
+    EXPECT_EQ(xmlAttributeValue(tag, "pm:gliss-play"), "true");
 }
 
 }

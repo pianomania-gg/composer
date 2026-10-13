@@ -6199,8 +6199,12 @@ bool MeiExporter::writeGliss(const Glissando *gliss,
       if (!base->isGlissandoSegment()) { LOGE() << "MEI glissando contains a foreign segment"; return false; }
       const auto *seg = static_cast<const GlissandoSegment *>(base);
       const PointF origin = seg->pagePos(), delta = seg->pos2();
+      // TDraw draws nothing for a segment whose end is not to the right of its start.
+      if (delta.x() <= 0) {
+        continue;
+      }
       const double length = std::hypot(delta.x(), delta.y());
-      if (!std::isfinite(length) || length <= 0 || delta.x() <= 0) { LOGE() << "MEI glissando has invalid rendered length"; return false; }
+      if (!std::isfinite(length)) { LOGE() << "MEI glissando has invalid rendered length"; return false; }
       const Page *page = seg->system() ? seg->system()->page() : nullptr;
       const auto &pages = m_score->pages();
       const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
