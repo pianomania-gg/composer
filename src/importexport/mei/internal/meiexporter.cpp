@@ -32,6 +32,7 @@
 #include <unordered_set>
 
 #include "global/containers.h"
+#include "draw/fontmetrics.h"
 
 #include "log.h"
 #include "types/datetime.h"
@@ -5912,6 +5913,89 @@ bool MeiExporter::writeGliss(const Glissando *gliss,
   libmei::Gliss meiGliss = Convert::glissToMEI(gliss);
   meiGliss.SetStartid(startid);
   meiGliss.Write(glissNode, this->getXmlIdFor(gliss, 'g'));
+  glissNode.append_attribute("visible") = gliss->visible() ? "true" : "false";
+  glissNode.append_attribute("pm:gliss-play") = gliss->playSpanner() ? "true" : "false";
+  if (gliss->showText() && !gliss->text().empty()) {
+    glissNode.append_child(pugi::node_pcdata).set_value(gliss->text().toStdString().c_str());
+  }
+  if (configuration()->meiExportLayout()) {
+    const Note *start = gliss->startElement() && gliss->startElement()->isNote() ? toNote(gliss->startElement()) : nullptr;
+    const Note *end = gliss->endElement() && gliss->endElement()->isNote() ? toNote(gliss->endElement()) : nullptr;
+    if (!start || !end) { LOGE() << "MEI glissando requires exact note endpoints"; return false; }
+    const auto point = [this](const PointF &p) {
+      return formatDecimalStr(p.x() / DPI, 6) + "," + formatDecimalStr(toBottomLeftInches(p.y()), 6);
+    };
+    const auto headCenter = [](const Note *note) -> std::optional<PointF> {
+      const SymId symbol = note->ldata()->cachedNoteheadSym.value();
+      if (symbol == SymId::noSym) return std::nullopt;
+      const RectF ink = note->symBbox(symbol).translated(note->pagePos());
+      if (!std::isfinite(ink.center().x()) || !std::isfinite(ink.center().y()) || ink.width() <= 0 || ink.height() <= 0)
+        return std::nullopt;
+      return ink.center();
+    };
+    const auto startCenter = headCenter(start), endCenter = headCenter(end);
+    if (!startCenter.has_value() || !endCenter.has_value()) { LOGE() << "MEI glissando needs rendered endpoint heads"; return false; }
+    glissNode.append_attribute("pm:gliss-start-center") = point(*startCenter).c_str();
+    glissNode.append_attribute("pm:gliss-end-center") = point(*endCenter).c_str();
+    const auto placed = segmentsOnScorePages(gliss);
+    if (placed.empty()) { LOGE() << "MEI glissando has no placed segments"; return false; }
+    for (const SpannerSegment *base : placed) {
+      if (!base->isGlissandoSegment()) { LOGE() << "MEI glissando contains a foreign segment"; return false; }
+      const auto *seg = static_cast<const GlissandoSegment *>(base);
+      const PointF origin = seg->pagePos(), delta = seg->pos2();
+      const double length = std::hypot(delta.x(), delta.y());
+      if (!std::isfinite(length) || length <= 0 || delta.x() <= 0) { LOGE() << "MEI glissando has invalid rendered length"; return false; }
+      const Page *page = seg->system() ? seg->system()->page() : nullptr;
+      const auto &pages = m_score->pages();
+      const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
+      if (!page || pageIt == pages.cend()) { LOGE() << "MEI glissando segment has no score page"; return false; }
+      pugi::xml_node node = glissNode.append_child("pm:gliss-segment");
+      node.append_attribute("page") = static_cast<int>(std::distance(pages.cbegin(), pageIt));
+      node.append_attribute("start") = point(origin).c_str();
+      node.append_attribute("end") = point(origin + delta).c_str();
+      node.append_attribute("width") = formatDecimalStr(seg->absoluteFromSpatium(seg->lineWidth()) / DPI, 6).c_str();
+      const auto rotate = [&delta, length](const PointF &p) {
+        return PointF((p.x()*delta.x()-p.y()*delta.y())/length, (p.x()*delta.y()+p.y()*delta.x())/length);
+      };
+      const auto corners = [&point, &origin, &rotate](const RectF &ink, const PointF &position) {
+        return point(origin+rotate(position+PointF(ink.left(),ink.top()))) + ";"
+            + point(origin+rotate(position+PointF(ink.right(),ink.top()))) + ";"
+            + point(origin+rotate(position+PointF(ink.left(),ink.bottom()))) + ";"
+            + point(origin+rotate(position+PointF(ink.right(),ink.bottom())));
+      };
+      if (gliss->glissandoType() == GlissandoType::WAVY) {
+        const RectF ink = seg->symBbox(SymId::wiggleGlissando);
+        const double advance = seg->symAdvance(SymId::wiggleGlissando);
+        if (!std::isfinite(advance) || advance <= 0) { LOGE() << "MEI glissando glyph has no advance"; return false; }
+        const int count = static_cast<int>(length / advance);
+        const double x = (length-count*advance)*0.5;
+        for (int i=0; i<count; ++i) {
+          pugi::xml_node glyph = node.append_child("pm:glyph");
+          glyph.append_attribute("name") = "wiggleGlissando";
+          glyph.append_attribute("font") = m_score->engravingFont()->family().c_str();
+          glyph.append_attribute("corners") = corners(ink, PointF(x+i*advance,-(ink.y()+ink.height()*0.5))).c_str();
+        }
+      }
+      if (gliss->showText() && !gliss->text().empty()) {
+        muse::draw::Font font(gliss->fontFace(), muse::draw::Font::Type::Unknown);
+        font.setPointSizeF(gliss->fontSize()*seg->spatium()/seg->defaultSpatium());
+        font.setBold(gliss->fontStyle() & FontStyle::Bold);
+        font.setItalic(gliss->fontStyle() & FontStyle::Italic);
+        font.setUnderline(gliss->fontStyle() & FontStyle::Underline);
+        font.setStrike(gliss->fontStyle() & FontStyle::Strike);
+        muse::draw::FontMetrics metrics(font);
+        const RectF ink = metrics.boundingRect(gliss->text());
+        if (ink.width() < length) {
+          const double yOffset = ink.height()+ink.y()+seg->spatium()*(gliss->glissandoType()==GlissandoType::WAVY ? 0.4 : 0.1);
+          pugi::xml_node text = node.append_child("pm:text");
+          text.append_attribute("font") = gliss->fontFace().toStdString().c_str();
+          text.append_attribute("font-style") = static_cast<int>(gliss->fontStyle());
+          text.append_attribute("corners") = corners(ink, PointF((length-ink.width())*0.5,-yOffset)).c_str();
+          text.append_child(pugi::node_pcdata).set_value(gliss->text().toStdString().c_str());
+        }
+      }
+    }
+  }
   this->addNodeToOpenControlEvents(glissNode, gliss, startid);
   return true;
 }
