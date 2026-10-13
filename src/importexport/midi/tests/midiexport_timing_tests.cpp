@@ -301,6 +301,10 @@ private slots:
     void writtenAfterGraceTurnPlaysAtTrillSpeed();
     void gracePairPlaysBeforeTheBeat();
     void shortWrittenGracePlaysBeforeTheBeat();
+    void rolledChordDirectionsRemainOrdinaryWrittenAttacks();
+    void bracketsAndPlaybackDisabledRollsAttackSimultaneously();
+    void arpeggiatedDisabledNotesHaveNoAttacks();
+    void repeatedRollsRetainOrdinaryWrittenAttacks();
 
 private:
     bool exportFixture(const QString& fixtureName, MidiFile& midiFile, std::vector<ExportedMidiNote>& notes);
@@ -309,6 +313,82 @@ private:
 void MidiExportTimingTests::initTestCase()
 {
     setRootDir(QString(iex_midi_tests_DATA_ROOT));
+}
+
+void MidiExportTimingTests::rolledChordDirectionsRemainOrdinaryWrittenAttacks()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_play_flags.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    for (int measure : { 0, 1, 2, 4, 5 }) {
+        const std::vector<ExportedMidiNote> attacks = notesInRange(notes, measure * measureTicks, (measure + 1) * measureTicks);
+        QCOMPARE(attacks.size(), size_t(3));
+        const bool descending = measure == 2 || measure == 5;
+        QCOMPARE(attacks[0].pitch, descending ? 72 : 65);
+        QCOMPARE(attacks[1].pitch, 69);
+        QCOMPARE(attacks[2].pitch, descending ? 65 : 72);
+        QVERIFY(attacks[0].start < attacks[1].start);
+        QVERIFY(attacks[1].start < attacks[2].start);
+        for (const ExportedMidiNote& attack : attacks) {
+            QCOMPARE(attack.offVelocity, 64);
+            QVERIFY(attack.duration() > 0);
+        }
+    }
+}
+
+void MidiExportTimingTests::bracketsAndPlaybackDisabledRollsAttackSimultaneously()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_play_flags.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    for (int measure : { 3, 6, 8 }) {
+        const std::vector<ExportedMidiNote> attacks = notesInRange(notes, measure * measureTicks, (measure + 1) * measureTicks);
+        QCOMPARE(attacks.size(), size_t(3));
+        QCOMPARE(attacks[0].start, attacks[1].start);
+        QCOMPARE(attacks[1].start, attacks[2].start);
+        for (const ExportedMidiNote& attack : attacks) {
+            QCOMPARE(attack.offVelocity, 64);
+        }
+    }
+}
+
+void MidiExportTimingTests::arpeggiatedDisabledNotesHaveNoAttacks()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_play_flags.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    const std::vector<ExportedMidiNote> attacks = notesInRange(notes, 7 * measureTicks, 8 * measureTicks);
+    QCOMPARE(attacks.size(), size_t(2));
+    QVERIFY(notesForPitch(attacks, 65).empty());
+    QCOMPARE(notesForPitch(attacks, 69).size(), size_t(1));
+    QCOMPARE(notesForPitch(attacks, 72).size(), size_t(1));
+}
+
+void MidiExportTimingTests::repeatedRollsRetainOrdinaryWrittenAttacks()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_repeat_identity.mscx", midiFile, notes));
+    QCOMPARE(notes.size(), size_t(8));
+    QCOMPARE(notesForPitch(notes, 65).size(), size_t(4));
+    QCOMPARE(notesForPitch(notes, 69).size(), size_t(2));
+    QCOMPARE(notesForPitch(notes, 72).size(), size_t(2));
+    for (const ExportedMidiNote& attack : notes) {
+        QCOMPARE(attack.offVelocity, 64);
+        QVERIFY(attack.duration() > 0);
+    }
+    const int measureTicks = 4 * 480;
+    const auto first = notesInRange(notes, 0, measureTicks);
+    const auto second = notesInRange(notes, measureTicks, 2 * measureTicks);
+    QCOMPARE(first.size(), size_t(4));
+    QCOMPARE(second.size(), size_t(4));
+    for (size_t index = 0; index < first.size(); ++index) {
+        QCOMPARE(first[index].pitch, second[index].pitch);
+        QCOMPARE(first[index].start + measureTicks, second[index].start);
+    }
 }
 
 bool MidiExportTimingTests::exportFixture(const QString& fixtureName, MidiFile& midiFile, std::vector<ExportedMidiNote>& notes)

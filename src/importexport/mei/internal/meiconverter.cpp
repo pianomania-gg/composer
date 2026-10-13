@@ -260,13 +260,17 @@ void Convert::arpegFromMEI(engraving::Arpeggio* arpeggio, const libmei::Arpeg& m
     if (meiArpeg.HasOrder()) {
         switch (meiArpeg.GetOrder()) {
         case (libmei::arpegLog_ORDER_down):
-            arpeggio->setArpeggioType(engraving::ArpeggioType::DOWN);
+            arpeggio->setArpeggioType(meiArpeg.HasLform() && meiArpeg.GetLform() == libmei::LINEFORM_solid
+                                         ? engraving::ArpeggioType::DOWN_STRAIGHT : engraving::ArpeggioType::DOWN);
             break;
         case (libmei::arpegLog_ORDER_nonarp):
             arpeggio->setArpeggioType(engraving::ArpeggioType::BRACKET);
             break;
         case (libmei::arpegLog_ORDER_up):
-            arpeggio->setArpeggioType(engraving::ArpeggioType::UP);
+            arpeggio->setArpeggioType(meiArpeg.HasLform() && meiArpeg.GetLform() == libmei::LINEFORM_solid
+                                         ? engraving::ArpeggioType::UP_STRAIGHT
+                                         : (meiArpeg.HasArrow() && meiArpeg.GetArrow() == libmei::BOOLEAN_false
+                                                ? engraving::ArpeggioType::NORMAL : engraving::ArpeggioType::UP));
             break;
         default:
             break;
@@ -283,16 +287,35 @@ libmei::Arpeg Convert::arpegToMEI(const engraving::Arpeggio* arpeggio)
 
     // @arrow and @order
     switch (arpeggio->arpeggioType()) {
+    case (engraving::ArpeggioType::NORMAL):
+        meiArpeg.SetOrder(libmei::arpegLog_ORDER_up);
+        meiArpeg.SetArrow(libmei::BOOLEAN_false);
+        meiArpeg.SetLform(libmei::LINEFORM_wavy);
+        break;
     case (engraving::ArpeggioType::DOWN):
         meiArpeg.SetOrder(libmei::arpegLog_ORDER_down);
         meiArpeg.SetArrow(libmei::BOOLEAN_true);
+        meiArpeg.SetLform(libmei::LINEFORM_wavy);
         break;
     case (engraving::ArpeggioType::UP):
         meiArpeg.SetOrder(libmei::arpegLog_ORDER_up);
         meiArpeg.SetArrow(libmei::BOOLEAN_true);
+        meiArpeg.SetLform(libmei::LINEFORM_wavy);
         break;
     case (engraving::ArpeggioType::BRACKET):
         meiArpeg.SetOrder(libmei::arpegLog_ORDER_nonarp);
+        meiArpeg.SetArrow(libmei::BOOLEAN_false);
+        meiArpeg.SetLform(libmei::LINEFORM_solid);
+        break;
+    case (engraving::ArpeggioType::UP_STRAIGHT):
+        meiArpeg.SetOrder(libmei::arpegLog_ORDER_up);
+        meiArpeg.SetArrow(libmei::BOOLEAN_true);
+        meiArpeg.SetLform(libmei::LINEFORM_solid);
+        break;
+    case (engraving::ArpeggioType::DOWN_STRAIGHT):
+        meiArpeg.SetOrder(libmei::arpegLog_ORDER_down);
+        meiArpeg.SetArrow(libmei::BOOLEAN_true);
+        meiArpeg.SetLform(libmei::LINEFORM_solid);
         break;
     default:
         break;

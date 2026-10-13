@@ -30,6 +30,7 @@
 #include <cfloat>
 #include <cmath>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -43,6 +44,8 @@
 
 #include "engraving/dom/masterscore.h"
 #include "engraving/dom/articulation.h"
+#include "engraving/dom/arpeggio.h"
+#include "engraving/dom/chordbracket.h"
 #include "engraving/dom/accidental.h"
 #include "engraving/dom/excerpt.h"
 #include "engraving/dom/beam.h"
@@ -57,6 +60,7 @@
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
 #include "engraving/dom/page.h"
+#include "engraving/dom/part.h"
 #include "engraving/dom/pedal.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/segment.h"
@@ -76,6 +80,7 @@
 #include "modularity/ioc.h"
 #include "importexport/mei/imeiconfiguration.h"
 #include "importexport/mei/internal/meireader.h"
+#include "importexport/mei/internal/meiconverter.h"
 #include "importexport/mei/internal/meiwriter.h"
 #include "importexport/mei/pmmeiexport.h"
 
@@ -293,6 +298,251 @@ TEST_F(Mei_Tests, mei_accid_02) {
 
 TEST_F(Mei_Tests, mei_arpeg_01) {
     meiReadTest("arpeg-01");
+}
+
+static std::vector<Arpeggio*> sourceArpeggios(MasterScore* score)
+{
+    std::vector<Arpeggio*> result;
+    score->scanElements([&result](EngravingItem* item) {
+        if (item->isArpeggio() || item->isChordBracket()) {
+            result.push_back(static_cast<Arpeggio*>(item));
+        }
+    });
+    std::sort(result.begin(), result.end(), [](const Arpeggio* left, const Arpeggio* right) {
+        if (left->tick() != right->tick()) {
+            return left->tick() < right->tick();
+        }
+        return left->track() < right->track();
+    });
+    return result;
+}
+
+static std::vector<std::string> splitArpeggioValues(const std::string& value, char separator)
+{
+    std::vector<std::string> values;
+    std::istringstream stream(value);
+    std::string token;
+    while (std::getline(stream, token, separator)) {
+        if (!token.empty()) {
+            values.push_back(token);
+        }
+    }
+    return values;
+}
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_variants_keep_direction_style_and_play)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-variants.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    const std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+    ASSERT_EQ(sources.size(), 8u);
+
+    std::string text;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text));
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_EQ(tags.size(), sources.size());
+    const std::array<const char*, 8> styles = { "wavy", "wavy", "wavy", "bracket", "straight", "straight", "wavy", "wavy" };
+    const std::array<const char*, 8> orders = { "up", "up", "down", "nonarp", "up", "down", "up", "up" };
+    const std::array<const char*, 8> arrows = { "false", "true", "true", "false", "true", "true", "false", "false" };
+    for (size_t index = 0; index < tags.size(); ++index) {
+        EXPECT_EQ(xmlAttributeValue(tags[index], "pm:arpeggio-style"), styles[index]);
+        EXPECT_EQ(xmlAttributeValue(tags[index], "order"), orders[index]);
+        EXPECT_EQ(xmlAttributeValue(tags[index], "arrow"), arrows[index]);
+        EXPECT_EQ(xmlAttributeValue(tags[index], "pm:arpeggio-play"), index == 6 ? "false" : "true");
+        EXPECT_EQ(xmlAttributeValue(tags[index], "pm:arpeggio-geometry-version"), "1");
+        EXPECT_EQ(xmlAttributeValue(tags[index], "pm:arpeggio-font"), score->engravingFont()->family());
+        EXPECT_EQ(xmlAttributeValue(tags[index], "lform"), index >= 3 && index <= 5 ? "solid" : "wavy");
+
+        const libmei::Arpeg converted = Convert::arpegToMEI(sources[index]);
+        std::unique_ptr<Arpeggio> imported(Factory::createArpeggio(sources[index]->chord()));
+        bool warning = false;
+        Convert::arpegFromMEI(imported.get(), converted, warning);
+        EXPECT_FALSE(warning);
+        EXPECT_EQ(imported->arpeggioType(), sources[index]->arpeggioType());
+    }
+    EXPECT_EQ(collectStartTags(text, "fermata").size(), 2u);
+}
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_members_preserve_exact_exported_note_identities)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-anchors.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    const std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+    ASSERT_EQ(sources.size(), 15u);
+
+    std::string text;
+    std::vector<PmMeiNoteRecord> records;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text, &records));
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_EQ(tags.size(), sources.size());
+    std::map<const Note*, PmMeiNoteRecord> recordsByNote;
+    for (const PmMeiNoteRecord& record : records) {
+        recordsByNote.emplace(record.note, record);
+    }
+
+    for (const Arpeggio* source : sources) {
+        std::vector<std::string> anchors;
+        std::vector<std::string> members;
+        for (track_idx_t track = source->track(); track <= source->endTrack(); ++track) {
+            const EngravingItem* item = source->chord()->segment()->element(track);
+            if (!item || !item->isChord()) {
+                continue;
+            }
+            std::vector<const Note*> exportedNotes;
+            for (const Note* note : toChord(item)->notes()) {
+                const Staff* staff = note->staff();
+                const bool required = note->visible() && staff && staff->show() && staff->part() && staff->part()->show();
+                if (required) {
+                    ASSERT_TRUE(recordsByNote.count(note));
+                    exportedNotes.push_back(note);
+                    members.push_back("#" + recordsByNote.at(note).scoreEventId);
+                } else {
+                    EXPECT_FALSE(recordsByNote.count(note));
+                }
+            }
+            if (exportedNotes.empty()) {
+                continue;
+            }
+            const PmMeiNoteRecord& record = recordsByNote.at(exportedNotes.front());
+            anchors.push_back("#" + (exportedNotes.size() > 1 ? record.chordId : record.scoreEventId));
+        }
+        ASSERT_FALSE(anchors.empty());
+        const auto tag = std::find_if(tags.cbegin(), tags.cend(), [&anchors](const std::string& candidate) {
+            return xmlAttributeValue(candidate, "startid") == anchors.front();
+        });
+        ASSERT_NE(tag, tags.cend());
+        EXPECT_EQ(splitArpeggioValues(xmlAttributeValue(*tag, "pm:arpeggio-members").value_or(""), ' '), members);
+        EXPECT_EQ(splitArpeggioValues(xmlAttributeValue(*tag, "plist").value_or(""), ' '),
+                  std::vector<std::string>(anchors.cbegin() + 1, anchors.cend()));
+    }
+}
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_nonlayout_export_preserves_semantics_without_geometry)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-variants.mscx", false));
+    ASSERT_TRUE(score);
+    std::string text;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), false, text));
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_EQ(tags.size(), 8u);
+    for (const std::string& tag : tags) {
+        EXPECT_TRUE(xmlAttributeValue(tag, "startid").has_value());
+        EXPECT_TRUE(xmlAttributeValue(tag, "pm:arpeggio-members").has_value());
+        EXPECT_TRUE(xmlAttributeValue(tag, "pm:arpeggio-style").has_value());
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:arpeggio-geometry-version").has_value());
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:arpeggio-bounds").has_value());
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:arpeggio-anchor-center").has_value());
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:arpeggio-member-centers").has_value());
+    }
+    EXPECT_EQ(xmlAttributeValue(tags[5], "order"), "down");
+    EXPECT_EQ(xmlAttributeValue(tags[5], "lform"), "solid");
+}
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_members_follow_hidden_staff_export_policy)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-anchors.mscx", false));
+    ASSERT_TRUE(score);
+    ASSERT_GE(score->nstaves(), 2u);
+    score->staff(1)->setVisible(false);
+    std::string text;
+    std::vector<PmMeiNoteRecord> records;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), false, text, &records));
+    std::set<std::string> visibleIds;
+    for (const PmMeiNoteRecord& record : records) {
+        ASSERT_NE(record.note->staff(), score->staff(1));
+        visibleIds.insert("#" + record.scoreEventId);
+    }
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_FALSE(tags.empty());
+    for (const std::string& tag : tags) {
+        const auto members = splitArpeggioValues(xmlAttributeValue(tag, "pm:arpeggio-members").value_or(""), ' ');
+        ASSERT_FALSE(members.empty());
+        for (const std::string& member : members) {
+            EXPECT_TRUE(visibleIds.count(member));
+        }
+    }
+    EXPECT_FALSE(score->staff(1)->visible());
+}
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_geometry_matches_laid_out_signs)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-variants.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    const std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+    std::string text;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text));
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_EQ(tags.size(), sources.size());
+    for (size_t index = 0; index < tags.size(); ++index) {
+        const RectF bounds = sources[index]->pageBoundingRect();
+        const double pageHeight = score->style().styleD(Sid::pageHeight);
+        const std::array<double, 4> expected = { bounds.left() / DPI, pageHeight - bounds.top() / DPI,
+                                              bounds.right() / DPI, pageHeight - bounds.bottom() / DPI };
+        const std::vector<std::string> actual = splitArpeggioValues(xmlAttributeValue(tags[index], "pm:arpeggio-bounds").value_or(""), ',');
+        ASSERT_EQ(actual.size(), expected.size());
+        for (size_t coordinate = 0; coordinate < expected.size(); ++coordinate) {
+            const double value = std::stod(actual[coordinate]);
+            EXPECT_TRUE(std::isfinite(value));
+            EXPECT_NEAR(value, expected[coordinate], 0.000002);
+        }
+        const std::vector<std::string> lines = splitArpeggioValues(xmlAttributeValue(tags[index], "pm:arpeggio-lines").value_or(""), ';');
+        const std::vector<std::string> glyphs = splitArpeggioValues(xmlAttributeValue(tags[index], "pm:arpeggio-glyphs").value_or(""), ';');
+        if (sources[index]->arpeggioType() == ArpeggioType::BRACKET) {
+            EXPECT_EQ(lines.size(), 3u);
+            EXPECT_TRUE(glyphs.empty());
+        } else if (sources[index]->arpeggioType() == ArpeggioType::UP_STRAIGHT || sources[index]->arpeggioType() == ArpeggioType::DOWN_STRAIGHT) {
+            EXPECT_EQ(lines.size(), 1u);
+            ASSERT_EQ(glyphs.size(), 1u);
+            EXPECT_EQ(splitArpeggioValues(glyphs.front(), ',').front(),
+                      sources[index]->arpeggioType() == ArpeggioType::UP_STRAIGHT ? "arrowheadBlackUp" : "arrowheadBlackDown");
+        } else {
+            EXPECT_TRUE(lines.empty());
+            EXPECT_EQ(glyphs.size(), sources[index]->ldata()->symbols.size());
+            for (const std::string& glyph : glyphs) {
+                const std::vector<std::string> values = splitArpeggioValues(glyph, ',');
+                ASSERT_EQ(values.size(), 8u);
+                EXPECT_EQ(values[3], sources[index]->arpeggioType() == ArpeggioType::DOWN ? "-90" : "90");
+            }
+        }
+    }
+}
+
+TEST_F(Mei_Tests, mei_pianomania_current_chordbracket_exports_owned_hooks_and_side)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-chordbracket-current.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    const std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+    ASSERT_EQ(sources.size(), 4u);
+    for (Arpeggio* source : sources) {
+        ASSERT_TRUE(source->isChordBracket());
+    }
+    std::string text;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text));
+    const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+    ASSERT_EQ(tags.size(), sources.size());
+    const std::array<size_t, 4> expectedLineCounts = { 3, 2, 2, 3 };
+    for (size_t index = 0; index < tags.size(); ++index) {
+        EXPECT_EQ(xmlAttributeValue(tags[index], "order"), "nonarp");
+        EXPECT_EQ(xmlAttributeValue(tags[index], "pm:arpeggio-style"), "bracket");
+        const std::vector<std::string> lines = splitArpeggioValues(xmlAttributeValue(tags[index], "pm:arpeggio-lines").value_or(""), ';');
+        ASSERT_EQ(lines.size(), expectedLineCounts[index]);
+        const std::vector<std::string> spine = splitArpeggioValues(lines.back(), ',');
+        const std::vector<std::string> origin = splitArpeggioValues(xmlAttributeValue(tags[index], "pm:xy").value_or(""), ',');
+        ASSERT_EQ(spine.size(), 4u);
+        ASSERT_EQ(origin.size(), 2u);
+        const ChordBracket* bracket = toChordBracket(sources[index]);
+        const double halfWidth = bracket->style().styleMM(Sid::chordBracketLineWidth) * 0.5;
+        const double relativeX = bracket->rightSide() ? bracket->absoluteFromSpatium(bracket->hookLength()) - halfWidth : halfWidth;
+        EXPECT_NEAR(std::stod(spine[0]) - std::stod(origin[0]), relativeX / DPI, 0.000002);
+    }
 }
 
 TEST_F(Mei_Tests, mei_artic_01) {
@@ -3179,6 +3429,82 @@ TEST_F(Mei_Tests, mei_export_snapped_expression_carries_text_origin) {
     EXPECT_NEAR(xy[0], left[0], 0.3 * spInches);
     EXPECT_LE(xy[1], left[1]);
     EXPECT_GE(xy[1], bottom[1]);
+}
+
+}
+
+namespace mu::iex::mei {
+
+TEST_F(Mei_Tests, mei_pianomania_arpeggio_centers_follow_rendered_exported_heads)
+{
+    const std::array<const char16_t*, 3> fixtures = {
+        u"pianomania-arpeggio-variants.mscx", u"pianomania-arpeggio-anchors.mscx",
+        u"pianomania-chordbracket-current.mscx"
+    };
+    for (const char16_t* fixture : fixtures) {
+        for (bool hideLowerStaff : { false, true }) {
+            std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + fixture, false));
+            ASSERT_TRUE(score);
+            if (hideLowerStaff && score->nstaves() < 2) {
+                continue;
+            }
+            std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+            ASSERT_FALSE(sources.empty());
+            Chord* modified = sources.front()->chord();
+            ASSERT_GE(modified->notes().size(), 2u);
+            modified->notes()[0]->setOffset(PointF(modified->spatium() * 0.75, 0.0));
+            modified->notes()[1]->setUserMirror(DirectionH::LEFT);
+            if (hideLowerStaff) {
+                score->staff(1)->setVisible(false);
+            }
+            score->setLayoutAll();
+            score->doLayout();
+            std::string text;
+            std::vector<PmMeiNoteRecord> records;
+            ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text, &records));
+            std::unordered_map<std::string, const Note*> noteById;
+            for (const PmMeiNoteRecord& record : records) {
+                noteById.emplace("#" + record.scoreEventId, record.note);
+            }
+            const double pageHeight = score->style().styleD(Sid::pageHeight);
+            const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+            ASSERT_FALSE(tags.empty());
+            for (const std::string& tag : tags) {
+                const std::vector<std::string> ids = splitArpeggioValues(
+                    xmlAttributeValue(tag, "pm:arpeggio-members").value_or(""), ' ');
+                const std::vector<std::string> centers = splitArpeggioValues(
+                    xmlAttributeValue(tag, "pm:arpeggio-member-centers").value_or(""), ';');
+                ASSERT_EQ(centers.size(), ids.size());
+                ASSERT_FALSE(ids.empty());
+                ASSERT_TRUE(noteById.count(ids.front()));
+                const Chord* firstChord = noteById.at(ids.front())->chord();
+                std::optional<RectF> expectedAnchor;
+                for (size_t index = 0; index < ids.size(); ++index) {
+                    ASSERT_TRUE(noteById.count(ids[index]));
+                    const Note* note = noteById.at(ids[index]);
+                    const SymId head = note->ldata()->cachedNoteheadSym.value();
+                    ASSERT_NE(head, SymId::noSym);
+                    const RectF ink = note->symBbox(head).translated(note->pagePos());
+                    const std::vector<std::string> values = splitArpeggioValues(centers[index], ',');
+                    ASSERT_EQ(values.size(), 2u);
+                    EXPECT_NEAR(std::stod(values[0]), ink.center().x() / DPI, 0.000002);
+                    EXPECT_NEAR(std::stod(values[1]), pageHeight - ink.center().y() / DPI, 0.000002);
+                    if (note->chord() == firstChord) {
+                        expectedAnchor = expectedAnchor.has_value() ? expectedAnchor->united(ink) : ink;
+                    }
+                    if (hideLowerStaff) {
+                        EXPECT_NE(note->staff(), score->staff(1));
+                    }
+                }
+                ASSERT_TRUE(expectedAnchor.has_value());
+                const std::vector<std::string> anchor = splitArpeggioValues(
+                    xmlAttributeValue(tag, "pm:arpeggio-anchor-center").value_or(""), ',');
+                ASSERT_EQ(anchor.size(), 2u);
+                EXPECT_NEAR(std::stod(anchor[0]), expectedAnchor->center().x() / DPI, 0.000002);
+                EXPECT_NEAR(std::stod(anchor[1]), pageHeight - expectedAnchor->center().y() / DPI, 0.000002);
+            }
+        }
+    }
 }
 
 }
