@@ -388,6 +388,30 @@ QJsonObject mu::project::notationcompatibility::analyzeMei(const QByteArray& mei
     QJsonObject report = source.report;
     report["findings"] = QJsonArray();
     report["meiDigest"] = sha256(mei);
+    // Exported report identity follows the existing canonical score, not native EID allocation.
+    report["scoreIdentity"] = report["meiDigest"].toString();
+    const auto publicSourceId = [&sourceToCanonical](const QString& id) {
+        return sourceToCanonical.value(QString(id).replace('/', '.').replace('+', '-'));
+    };
+    const auto publicSourceLocation = [&publicSourceId](QJsonObject location) {
+        const QString publicId = publicSourceId(location["itemIdentity"].toString());
+        if (!publicId.isEmpty()) location["itemIdentity"] = publicId;
+        else if (location.contains("inventoryOrdinal"))
+            location["itemIdentity"] = "source:" + QString::number(location["inventoryOrdinal"].toInt());
+        const QString measure = publicSourceId(location["measureId"].toString());
+        if (!measure.isEmpty()) location["measureId"] = measure;
+        else if (!location["measureId"].toString().isEmpty())
+            location["measureId"] = "source-measure:" + location["displayedMeasureNumber"].toString();
+        QJsonArray anchors;
+        for (const QJsonValue& value : location["anchorIds"].toArray()) {
+            const QString anchor = publicSourceId(value.toString());
+            // Preserve unbound source-anchor presence without inventing a written-note ID.
+            anchors.append(anchor.isEmpty() ? "source:" + QString::number(location["inventoryOrdinal"].toInt())
+                           + ":anchor:" + QString::number(anchors.size()) : anchor);
+        }
+        location["anchorIds"] = anchors;
+        return location;
+    };
     bool inspectedSource = values(source.report["inspectedStages"].toArray()).contains("source");
     report["inspectedStages"] = inspectedSource ? QJsonArray{"source", "export", "parse"} : QJsonArray{"parse"};
     QJsonObject capabilities = catalog();
@@ -510,11 +534,7 @@ QJsonObject mu::project::notationcompatibility::analyzeMei(const QByteArray& mei
         auto item = value.toObject(); auto location = item["location"].toObject();
         if (!item["expectedExport"].toBool()) continue;
         QString publicId = sourceToCanonical.value(location["itemIdentity"].toString().replace('/', '.').replace('+', '-'));
-        QJsonArray anchors;
-        for (const QJsonValue& anchor : location["anchorIds"].toArray()) {
-            QString id = sourceToCanonical.value(anchor.toString().replace('/', '.').replace('+', '-')); if (!id.isEmpty()) anchors.append(id);
-        }
-        location["anchorIds"] = anchors;
+        location = publicSourceLocation(location);
         if (!publicId.isEmpty() && byId.contains(publicId)) {
             const auto& exported = items[byId[publicId]];
             if (exported.name == "arpeg" && arpeggioVariant(exported.attributes) != item["variant"].toString())
@@ -529,6 +549,14 @@ QJsonObject mu::project::notationcompatibility::analyzeMei(const QByteArray& mei
     for (const QJsonValue& value : source.report["findings"].toArray()) {
         auto row = value.toObject();
         if (row["observedBehavior"] == "unverified") {
+            QJsonArray locations, examples;
+            for (const QJsonValue& value : row["locations"].toArray()) {
+                auto location = publicSourceLocation(value.toObject());
+                locations.append(location);
+                if (examples.size() < 3) examples.append(location["itemIdentity"]);
+            }
+            row["locations"] = locations;
+            row["representativeExamples"] = examples;
             auto findings = report["findings"].toArray(); findings.append(row); report["findings"] = findings;
         }
     }

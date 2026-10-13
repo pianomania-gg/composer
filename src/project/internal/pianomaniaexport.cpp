@@ -1325,8 +1325,6 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         return rv;
     }
 
-    const auto compatibilitySource = mu::project::notationcompatibility::inventoryScore(score, sourcePath.toQString());
-
     rv.val.source = QFileInfo(sourcePath.toQString()).fileName().toStdString();
     rv.val.basePath = basePath;
     rv.val.meiPath = meiPath;
@@ -1465,6 +1463,8 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
                                 std::string("Coordinated Pianomania manifest retains an internal identity"));
         return rv;
     }
+    // MEI export has assigned native IDs and all playback scopes have restored authored flags.
+    const auto compatibilitySource = mu::project::notationcompatibility::inventoryScore(score, sourcePath.toQString());
     // Only the existing coordinated manifest-model checks can establish native
     // tremolo ownership. Runtime consumers still require their own verified bridge.
     const auto compatibilityReport = mu::project::notationcompatibility::analyzeMei(
