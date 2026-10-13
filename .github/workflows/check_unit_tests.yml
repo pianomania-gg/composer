@@ -14,6 +14,7 @@ on:
 
 jobs:
   run_tests:
+    name: Unit tests
     runs-on: ubuntu-22.04
     steps:
     - name: Cancel Previous Runs
