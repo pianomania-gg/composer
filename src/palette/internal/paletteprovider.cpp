@@ -45,7 +45,7 @@
 using namespace muse;
 using namespace mu::palette;
 
-namespace { std::string_view authoringPaletteOrigin(Palette::Type type); }
+namespace { std::string_view authoringProviderPaletteOrigin(Palette::Type type); }
 using namespace mu::engraving;
 
 // ========================================================
@@ -596,7 +596,7 @@ bool UserPaletteController::applyPaletteElement(const QModelIndex& index, Qt::Ke
 
     const auto type = index.parent().data(PaletteTreeModel::PaletteTypeRole).value<Palette::Type>();
     auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    const auto origin = authoringPaletteOrigin(type);
+    const auto origin = authoringProviderPaletteOrigin(type);
     if (!policy->mayCreateElement(*cell->element, origin)) {
         return false;
     }
@@ -608,7 +608,7 @@ bool UserPaletteController::applyPaletteElement(const QModelIndex& index, Qt::Ke
 // ========================================================
 
 namespace {
-std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+std::string_view authoringProviderPaletteOrigin(mu::palette::Palette::Type type)
 {
     using Type = mu::palette::Palette::Type;
     switch (type) {
@@ -628,7 +628,7 @@ bool authoringPaletteIndexAllowed(const QAbstractItemModel* model, const QModelI
     const auto* cell = model->data(index, mu::palette::PaletteTreeModel::PaletteCellRole).value<const mu::palette::PaletteCell*>();
     if (cell && cell->element) {
         const auto type = model->data(index.parent(), mu::palette::PaletteTreeModel::PaletteTypeRole).value<mu::palette::Palette::Type>();
-        return policy->mayCreateElement(*cell->element, authoringPaletteOrigin(type));
+        return policy->mayCreateElement(*cell->element, authoringProviderPaletteOrigin(type));
     }
     const int count = model->rowCount(index);
     if (count == 0) {

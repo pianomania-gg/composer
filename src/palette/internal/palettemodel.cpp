@@ -41,7 +41,7 @@ using namespace mu::palette;
 using namespace mu::engraving;
 
 namespace {
-std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+std::string_view authoringModelPaletteOrigin(mu::palette::Palette::Type type)
 {
     using Type = mu::palette::Palette::Type;
     switch (type) {
@@ -374,7 +374,7 @@ QVariant PaletteTreeModel::data(const QModelIndex& index, int role) const
             QVariantMap map;
             auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
             const Palette* owner = iptrToPalette(index.internalPointer());
-            const auto origin = owner ? authoringPaletteOrigin(owner->type()) : std::string_view();
+            const auto origin = owner ? authoringModelPaletteOrigin(owner->type()) : std::string_view();
             if (cell->element && !policy->mayCreateElement(*cell->element, origin)) {
                 return map;
             }
@@ -616,7 +616,7 @@ QMimeData* PaletteTreeModel::mimeData(const QModelIndexList& indexes) const
     } else if (PaletteCellConstPtr cell = findCell(indexes[0])) {
         auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
         const Palette* owner = iptrToPalette(indexes[0].internalPointer());
-        const auto origin = owner ? authoringPaletteOrigin(owner->type()) : std::string_view();
+        const auto origin = owner ? authoringModelPaletteOrigin(owner->type()) : std::string_view();
         if (!cell->element || !policy->mayCreateElement(*cell->element, origin)) {
             return mime;
         }

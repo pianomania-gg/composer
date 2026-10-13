@@ -74,7 +74,7 @@ using namespace mu::palette;
 using namespace mu::engraving;
 
 namespace {
-std::string_view authoringPaletteOrigin(mu::palette::Palette::Type type)
+std::string_view authoringWidgetPaletteOrigin(mu::palette::Palette::Type type)
 {
     using Type = mu::palette::Palette::Type;
     switch (type) {
@@ -310,7 +310,7 @@ bool PaletteWidget::setFilterText(const QString& text)
     const QString t = text.toLower();
     const bool paletteNameMatches = name().startsWith(t, Qt::CaseInsensitive);
     auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    const auto origin = authoringPaletteOrigin(m_palette->type());
+    const auto origin = authoringWidgetPaletteOrigin(m_palette->type());
     m_filteredCells.clear();
     for (const PaletteCellPtr& cell : cells()) {
         if (!cell || !cell->element || !policy->mayCreateElement(*cell->element, origin)) {
@@ -480,7 +480,7 @@ void PaletteWidget::applyElementAtIndex(int index, Qt::KeyboardModifiers modifie
     }
 
     auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    const auto origin = authoringPaletteOrigin(m_palette->type());
+    const auto origin = authoringWidgetPaletteOrigin(m_palette->type());
     if (!policy->mayCreateElement(*cell->element, origin)) {
         return;
     }
@@ -759,7 +759,7 @@ void PaletteWidget::mouseMoveEvent(QMouseEvent* ev)
         PaletteCellPtr cell = cellAt(m_currentIdx);
         if (cell && cell->element) {
             auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-            const auto origin = authoringPaletteOrigin(m_palette->type());
+            const auto origin = authoringWidgetPaletteOrigin(m_palette->type());
             if (!cell->element || !policy->mayCreateElement(*cell->element, origin)) {
                 return;
             }
