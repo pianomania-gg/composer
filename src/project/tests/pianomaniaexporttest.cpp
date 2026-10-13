@@ -445,6 +445,42 @@ void verifyVisualAnchorsPrecedeOrnaments(const QJsonObject& file, const QJsonArr
     }
 }
 
+// Every variant names canonical score ticks as segment sources and its own MIDI
+// ticks as unfolded starts. Segments play back to back from tick zero, and each
+// written occurrence lies inside the canonical range of the segment it names.
+void verifyCanonicalTraversal(const QJsonObject& traversal, const QJsonObject& file,
+                              const std::map<QString, QJsonObject>& canonicalById)
+{
+    std::map<std::pair<QString, int>, QJsonObject> segments;
+    int expectedOrdinal = 0;
+    int expectedUnfoldedStart = 0;
+    for (const QJsonValue& value : traversal.value("segments").toArray()) {
+        const QJsonObject segment = value.toObject();
+        const int start = segment.value("source_start_tick").toInt();
+        const int end = segment.value("source_end_tick").toInt();
+        EXPECT_EQ(segment.value("traversal_ordinal").toInt(), ++expectedOrdinal);
+        EXPECT_EQ(segment.value("unfolded_start_tick").toInt(), expectedUnfoldedStart);
+        EXPECT_LT(start, end);
+        expectedUnfoldedStart += end - start;
+        segments.emplace(std::make_pair(segment.value("repeat_segment_id").toString(), expectedOrdinal), segment);
+    }
+    for (const QJsonValue& value : file.value("visual_occurrences").toArray()) {
+        const QJsonObject occurrence = value.toObject();
+        const auto segment = segments.find(std::make_pair(occurrence.value("repeat_segment_id").toString(),
+                                                          occurrence.value("traversal_ordinal").toInt()));
+        ASSERT_NE(segment, segments.end());
+        const auto event = canonicalById.find(occurrence.value("score_event_id").toString());
+        ASSERT_NE(event, canonicalById.end());
+        const int scoreTick = event->second.value("score_tick").toInt();
+        EXPECT_GE(scoreTick, segment->second.value("source_start_tick").toInt())
+            << occurrence.value("occurrence_id").toString().toStdString();
+        EXPECT_LT(scoreTick, segment->second.value("source_end_tick").toInt())
+            << occurrence.value("occurrence_id").toString().toStdString();
+        EXPECT_EQ(occurrence.value("ending_id").toString().toStdString(),
+                  segment->second.value("ending_id").toString().toStdString());
+    }
+}
+
 std::vector<std::pair<bool, bool> > notePlaybackState(mu::engraving::Score* score)
 {
     std::vector<std::pair<bool, bool> > result;
@@ -1232,6 +1268,7 @@ TEST_P(Project_PianomaniaExportTest, ManifestV3FixtureMatrix)
             }
         }
         verifyOccurrenceLinkage(file, canonicalIds, ornamentDefinitionIds, expectedAliasIds);
+        verifyCanonicalTraversal(traversal, file, canonicalById);
 
         if (std::string(expectation.name) == "gameplay_turn_anchor_return"
             || std::string(expectation.name) == "gameplay_tremblement_anchor_return") {
@@ -1458,6 +1495,99 @@ INSTANTIATE_TEST_SUITE_P(
         return info.param.name;
     }
     );
+
+// Test value: Detects a repeat-off traversal measured on the final-ending copy
+// instead of the canonical score; consumers then reject every song with first
+// and second endings in Practice and in Game Mode with repeats off.
+TEST(Project_PianomaniaCoordinatedExportTest, SeveralEndingsBaseTraversalUsesCanonicalScoreTicks)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/engraving/tests/playback/playbackmodel_data/repeat_with_2_voltas/repeat_with_2_voltas.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const muse::RetVal<mu::project::pianomania::PianomaniaExportResult> result
+        = mu::project::pianomania::exportPianomaniaBundle(
+            score.get(), muse::io::path_t(fixturePath), muse::io::path_t(directory.filePath("song")),
+            muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    const QJsonObject root = QJsonDocument::fromJson(QByteArray::fromStdString(result.val.manifestJson)).object();
+
+    std::map<QString, int> canonicalTicks;
+    for (const QJsonValue& value : root.value("canonical_events").toArray()) {
+        const QJsonObject event = value.toObject();
+        canonicalTicks.emplace(event.value("score_event_id").toString(), event.value("score_tick").toInt());
+    }
+    std::map<QString, QJsonArray> segmentsByTraversal;
+    for (const QJsonValue& value : root.value("traversals").toArray()) {
+        const QJsonObject traversal = value.toObject();
+        segmentsByTraversal.emplace(traversal.value("traversal_id").toString(), traversal.value("segments").toArray());
+    }
+
+    // Measure 2 is the first ending, so the base plays measure 1 and then measures 3-6.
+    struct ExpectedSegment {
+        const char* id;
+        int start;
+        int end;
+        int unfoldedStart;
+    };
+    const std::vector<ExpectedSegment> expectedBase {
+        { "segment:0-1920:pass:1", 0, 1920, 0 },
+        { "segment:3840-11520:pass:1", 3840, 11520, 1920 },
+    };
+    const QJsonArray baseSegments = segmentsByTraversal["base"];
+    ASSERT_EQ(baseSegments.size(), static_cast<int>(expectedBase.size()));
+    for (size_t index = 0; index < expectedBase.size(); ++index) {
+        const QJsonObject segment = baseSegments.at(static_cast<int>(index)).toObject();
+        EXPECT_EQ(segment.value("repeat_segment_id").toString().toStdString(), expectedBase[index].id);
+        EXPECT_EQ(segment.value("source_start_tick").toInt(), expectedBase[index].start);
+        EXPECT_EQ(segment.value("source_end_tick").toInt(), expectedBase[index].end);
+        EXPECT_EQ(segment.value("unfolded_start_tick").toInt(), expectedBase[index].unfoldedStart);
+        EXPECT_EQ(segment.value("traversal_ordinal").toInt(), static_cast<int>(index) + 1);
+        EXPECT_TRUE(segment.value("ending_id").isNull());
+    }
+
+    // Every written attack sounds where its segment places the canonical note.
+    for (const QJsonValue& fileValue : root.value("files").toArray()) {
+        const QJsonObject file = fileValue.toObject();
+        const QString kind = file.value("kind").toString();
+        std::map<std::pair<QString, int>, QJsonObject> segments;
+        for (const QJsonValue& value : segmentsByTraversal[kind]) {
+            const QJsonObject segment = value.toObject();
+            segments.emplace(std::make_pair(segment.value("repeat_segment_id").toString(),
+                                            segment.value("traversal_ordinal").toInt()), segment);
+        }
+        std::map<QString, QJsonObject> occurrences;
+        for (const QJsonValue& value : file.value("visual_occurrences").toArray()) {
+            occurrences.emplace(value.toObject().value("occurrence_id").toString(), value.toObject());
+        }
+        int checked = 0;
+        for (const QJsonValue& value : file.value("audible_events").toArray()) {
+            const QJsonObject audible = value.toObject();
+            if (audible.value("event_type").toString() != "written") {
+                continue;
+            }
+            for (const QJsonValue& occurrenceId : audible.value("occurrence_ids").toArray()) {
+                const auto occurrence = occurrences.find(occurrenceId.toString());
+                ASSERT_NE(occurrence, occurrences.end());
+                const auto segment = segments.find(std::make_pair(
+                                                       occurrence->second.value("repeat_segment_id").toString(),
+                                                       occurrence->second.value("traversal_ordinal").toInt()));
+                ASSERT_NE(segment, segments.end());
+                const auto scoreTick = canonicalTicks.find(occurrence->second.value("score_event_id").toString());
+                ASSERT_NE(scoreTick, canonicalTicks.end());
+                EXPECT_EQ(audible.value("note_on_locator").toObject().value("absolute_tick").toInt(),
+                          segment->second.value("unfolded_start_tick").toInt() + scoreTick->second
+                          - segment->second.value("source_start_tick").toInt())
+                    << occurrenceId.toString().toStdString();
+                ++checked;
+            }
+        }
+        EXPECT_EQ(checked, kind == "base" ? 20 : 28) << kind.toStdString();
+    }
+}
 
 namespace {
 struct TremoloExportCase {
