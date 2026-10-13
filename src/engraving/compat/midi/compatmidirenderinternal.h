@@ -24,6 +24,7 @@
 #define __RENDERMIDI_H__
 
 #include <memory>
+#include <optional>
 
 #include "../../dom/measure.h"
 #include "../../dom/mscore.h"
@@ -182,6 +183,21 @@ public:
     static const int ARTICULATION_CONV_FACTOR { 100000 };
     static bool graceNotesMerged(Chord* chord);
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
+    static const Note* resolveTremoloOwnerNote(const Note* emitter, const NoteEvent& event);
+    static std::optional<int> canonicalTremoloWrittenAttackTick(const Note* owner);
+    // The caller supplies IDs and playback state from a resolved current-score
+    // note, its chord, and its tremolo. Stale clone/cache bindings do not resolve.
+    static std::optional<NoteEvent::TremoloWrittenOwner> resolveTremoloWrittenOwner(
+        const NoteEvent& event, const EID& noteId, const EID& chordId, const EID& tremoloId,
+        bool notePlayable, bool tremoloPlayable)
+    {
+        const auto& owner = event.tremoloWrittenOwner();
+        if (!owner.isValid() || owner.noteId != noteId || owner.chordId != chordId || owner.tremoloId != tremoloId
+            || owner.notePlayable != notePlayable || owner.tremoloPlayable != tremoloPlayable) {
+            return std::nullopt;
+        }
+        return owner;
+    }
     // Whether the grace notes before `chord` are crushed before the beat so the written note
     // stays on it. Only a single unslashed grace written as an eighth or longer is a long
     // appoggiatura that plays on the beat; a slashed grace, a group of two or more graces, or

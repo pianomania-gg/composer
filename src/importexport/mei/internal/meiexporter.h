@@ -63,6 +63,7 @@ class Staff;
 class TextBase;
 class TextLineBase;
 class TremoloSingleChord;
+class TremoloTwoChord;
 class Trill;
 class Tuplet;
 class VBox;
@@ -155,6 +156,9 @@ private:
   bool writeBeam(const engraving::Beam *beam,
                  const engraving::ChordRest *chordRest, bool &closing);
   bool writeBTrem(const engraving::TremoloSingleChord *tremolo);
+  bool writeFTrem(const engraving::TremoloTwoChord *tremolo);
+  bool appendTremoloGeometry(const engraving::EngravingItem *tremolo,
+                             const engraving::Chord *anchor, bool buzz);
   bool writeClef(const engraving::Clef *clef, const engraving::Measure *measure,
                  const engraving::Segment *seg, int staffN);
   bool isHeaderClefChange(const engraving::Clef *clef,
@@ -339,6 +343,7 @@ private:
   std::unordered_map<const engraving::Note *, int> m_idxForTieStart;
   /** Map each Note* to the xml:id used when exporting */
   std::unordered_map<const engraving::Note *, std::string> m_noteXmlIdCache;
+  std::unordered_map<const engraving::Chord *, pugi::xml_node> m_tremoloChordNodes;
   /** Stable identities and indices emitted into the coordinated Pianomania MEI. */
   std::vector<PianomaniaNoteRecord> m_pianomaniaNoteRecords;
   bool m_requirePrecomputedPianomaniaIndices = false;

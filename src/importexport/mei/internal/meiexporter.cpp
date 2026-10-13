@@ -43,6 +43,8 @@
 #include "engraving/dom/bracket.h"
 #include "engraving/dom/breath.h"
 #include "engraving/dom/chord.h"
+#include "engraving/dom/tremolotwochord.h"
+#include "engraving/dom/tremolosinglechord.h"
 #include "engraving/compat/midi/compatmidirenderinternal.h"
 #include "engraving/dom/chordrest.h"
 #include "engraving/dom/clef.h"
@@ -874,6 +876,7 @@ bool MeiExporter::write(std::string &meiData) {
   noteIndexMap = {};
   m_exportedXmlIds.clear();
   m_noteXmlIdCache.clear();
+  m_tremoloChordNodes.clear();
   m_pianomaniaNoteRecords.clear();
 
   m_uids = UIDRegister::instance();
@@ -1484,7 +1487,9 @@ bool MeiExporter::writeScore() {
         if (mBase->isMeasure()) {
           const Measure *measure = static_cast<const Measure *>(mBase);
           this->writeEnding(measure);
-          this->writeMeasure(measure, measureN, isFirst, wasPreviousIrregular);
+          if (!this->writeMeasure(measure, measureN, isFirst, wasPreviousIrregular)) {
+            return false;
+          }
           this->writeEndingEnd(measure);
         }
         lineBreak = mBase->lineBreak();
@@ -2487,6 +2492,18 @@ bool MeiExporter::collectNoteEvents(const Measure *measure) {
               m_durEvents.push_back({tickKey, t, note, indexGroupChord});
               continue;
             }
+            const bool repeatedTremolo = chord->tremoloTwoChord()
+                || (chord->tremoloSingleChord() && !chord->tremoloSingleChord()->isBuzzRoll());
+            if (repeatedTremolo) {
+              const auto attackTick = CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(note);
+              if (!attackTick.has_value()) {
+                LOGE() << "TREM_WRITTEN_ATTACK_MISSING: note=" << note->eid()
+                       << ", chord=" << chord->eid() << ", measure=" << measure->eid();
+                return false;
+              }
+              m_durEvents.push_back({*attackTick - measure->tick().ticks(), t, note, indexGroupChord});
+              continue;
+            }
             const NoteEventList &events = note->playEvents();
             const int writtenAttackIndex =
                 CompatMidiRendererInternal::canonicalWrittenNoteEventIndex(events);
@@ -2712,7 +2729,9 @@ bool MeiExporter::writeMeasure(const Measure *measure, int &measureN,
     if (!shouldExportStaff(staff)) {
       continue;
     }
-    this->writeStaff(staff, measure);
+    if (!this->writeStaff(staff, measure)) {
+      return false;
+    }
   }
 
   for (EngravingItem *item : measure->el()) {
@@ -2880,7 +2899,9 @@ bool MeiExporter::writeStaff(const Staff *staff, const Measure *measure) {
   track_idx_t startTrack = staff2track(staff->idx());
   track_idx_t endTrack = startTrack + VOICES;
   for (track_idx_t track = startTrack; track < endTrack; ++track) {
-    writeLayer(track, staff, measure);
+    if (!writeLayer(track, staff, measure)) {
+      return false;
+    }
   }
 
   m_currentNode = m_currentNode.parent();
@@ -2931,7 +2952,9 @@ bool MeiExporter::writeLayer(track_idx_t track, const Staff *staff,
       this->writeClef(dynamic_cast<const Clef *>(item), measure, seg,
                       static_cast<int>(staff->idx() + 1));
     } else if (item->isChord()) {
-      this->writeChord(dynamic_cast<const Chord *>(item), staff);
+      if (!this->writeChord(dynamic_cast<const Chord *>(item), staff)) {
+        return false;
+      }
     } else if (item->isRest()) {
       this->writeRest(dynamic_cast<const Rest *>(item), staff);
     } else if (item->isBarLine()) {
@@ -3193,7 +3216,149 @@ bool MeiExporter::writeBTrem(const TremoloSingleChord *tremolo) {
   libmei::BTrem meiBTrem;
   std::string xmlId = this->getXmlIdFor(tremolo, 'b');
   meiBTrem.Write(m_currentNode, xmlId);
+  const Chord *anchor = tremolo->chord();
+  if (!anchor) {
+    LOGE() << "TREM_PARTNER_ANCHOR_MISSING: single=" << tremolo->eid();
+    return false;
+  }
+  m_currentNode.append_attribute("pm:tremolo-kind") = "single";
+  m_currentNode.append_attribute("pm:tremolo-strokes") = tremolo->isBuzzRoll() ? 0 : tremolo->lines();
+  m_currentNode.append_attribute("pm:tremolo-play") = tremolo->playTremolo() ? "true" : "false";
+  m_currentNode.append_attribute("pm:tremolo-span-ticks") = anchor->actualTicks().ticks();
+  m_currentNode.append_attribute("pm:tremolo-ppq") = Constants::DIVISION;
+  m_currentNode.append_attribute("pm:tremolo-measured") = tremolo->isBuzzRoll() ? "false" : "true";
+  return appendTremoloGeometry(tremolo, anchor, tremolo->isBuzzRoll());
+}
 
+bool MeiExporter::appendTremoloGeometry(const EngravingItem *tremolo, const Chord *anchor, bool buzz) {
+  const bool visible = tremolo->visible() && !tremolo->ldata()->isSkipDraw();
+  m_currentNode.append_attribute("pm:tremolo-visible") = visible ? "true" : "false";
+  if (!configuration()->meiExportLayout() || !visible) {
+    return true;
+  }
+  const System *system = anchor->measure() ? anchor->measure()->system() : nullptr;
+  const Page *page = system ? system->page() : nullptr;
+  if (!page) {
+    LOGE() << "TREM_GEOMETRY_UNRESOLVED: tremolo=" << tremolo->eid();
+    return false;
+  }
+  const PointF origin = tremolo->pagePos();
+  if (!std::isfinite(origin.x()) || !std::isfinite(origin.y())) {
+    return false;
+  }
+  bool geometryValid = true;
+  const auto point = [this, &origin, &geometryValid](const PointF &local) {
+    if (!std::isfinite(local.x()) || !std::isfinite(local.y())) {
+      geometryValid = false;
+      return std::string();
+    }
+    return formatDecimalStr((origin.x() + local.x()) / DPI, 6) + ","
+           + formatDecimalStr(toBottomLeftInches(origin.y() + local.y()), 6);
+  };
+  m_currentNode.append_attribute("pm:tremolo-geometry-version") = 1;
+  m_currentNode.append_attribute("pm:tremolo-geometry-units") = "in";
+  if (buzz) {
+    m_currentNode.append_attribute("pm:tremolo-glyph") = "buzzRoll";
+    m_currentNode.append_attribute("pm:tremolo-font") = m_score->engravingFont()->family().c_str();
+    m_currentNode.append_attribute("pm:xy") = point(PointF()).c_str();
+    if (const auto center = getCenteredInchesFor(tremolo); center.has_value()) {
+      m_currentNode.append_attribute("pm:tremolo-glyph-center") =
+          (formatDecimalStr(center->first, 6) + "," + formatDecimalStr(center->second, 6)).c_str();
+    }
+    return geometryValid;
+  }
+  std::string polygons;
+  if (const auto *single = dynamic_cast<const TremoloSingleChord *>(tremolo)) {
+    const auto &path = single->path();
+    for (size_t i = 0; i < path.elementCount(); ++i) {
+      const auto element = path.elementAt(i);
+      if (!element.isMoveTo() && !element.isLineTo()) {
+        LOGE() << "TREM_GEOMETRY_UNSUPPORTED: non-polygon stroke";
+        return false;
+      }
+      if (!polygons.empty()) {
+        polygons += element.isMoveTo() ? '|' : ';';
+      }
+      polygons += point(PointF(element.x, element.y));
+    }
+  } else {
+    const TremoloTwoChord *two = static_cast<const TremoloTwoChord *>(tremolo);
+    const auto &segments = two->beamSegments();
+    if (segments.empty()) {
+      LOGE() << "TREM_GEOMETRY_UNRESOLVED: no two-chord beam segments";
+      return false;
+    }
+    const LineF first = segments.front()->line;
+    if (muse::RealIsNull(first.x2() - first.x1())) {
+      return false;
+    }
+    double slope = std::abs(first.y2() - first.y1()) / (first.x2() - first.x1());
+    if (segments.size() > 1 && slope > M_PI / 6.0) {
+      slope = M_PI / 6.0;
+    }
+    const double halfWidth = (two->ldata()->beamWidth / 2.0) / sin(M_PI_2 - atan(slope));
+    if (!std::isfinite(halfWidth) || halfWidth <= 0.0) {
+      return false;
+    }
+    for (const BeamSegment *segment : segments) {
+      if (!polygons.empty()) {
+        polygons += '|';
+      }
+      polygons += point(PointF(segment->line.x1(), segment->line.y1() - halfWidth)) + ";"
+                  + point(PointF(segment->line.x2(), segment->line.y2() - halfWidth)) + ";"
+                  + point(PointF(segment->line.x2(), segment->line.y2() + halfWidth)) + ";"
+                  + point(PointF(segment->line.x1(), segment->line.y1() + halfWidth));
+    }
+  }
+  if (!geometryValid || polygons.empty()) {
+    return false;
+  }
+  m_currentNode.append_attribute("pm:tremolo-polygons") = polygons.c_str();
+  return true;
+}
+
+bool MeiExporter::writeFTrem(const TremoloTwoChord *tremolo) {
+  const Chord *first = tremolo ? tremolo->chord1() : nullptr;
+  const Chord *second = tremolo ? tremolo->chord2() : nullptr;
+  if (!first || !second || first->score() != second->score() || first->track() != second->track()
+      || first->endTick() != second->tick()) {
+    LOGE() << "TREM_PARTNER_ANCHOR_MISSING";
+    return false;
+  }
+  const auto a = m_tremoloChordNodes.find(first);
+  const auto b = m_tremoloChordNodes.find(second);
+  if (a == m_tremoloChordNodes.end() || b == m_tremoloChordNodes.end()
+      || a->second.parent() != b->second.parent() || a->second.next_sibling() != b->second) {
+    LOGE() << "TREM_WRAPPER_NESTING_UNSUPPORTED: tremolo=" << tremolo->eid();
+    return false;
+  }
+  const pugi::xml_node previous = m_currentNode;
+  m_currentNode = a->second.parent().insert_child_before("fTrem", a->second);
+  libmei::FTrem meiFTrem;
+  meiFTrem.SetUnitdur(Convert::unitdurToMEI(tremolo));
+  meiFTrem.SetDur(Convert::durToMEI(tremolo->durationType().type()));
+  meiFTrem.Write(m_currentNode, this->getXmlIdFor(tremolo, 'f'));
+  const std::string start = "#" + std::string(a->second.attribute("xml:id").value());
+  const std::string end = "#" + std::string(b->second.attribute("xml:id").value());
+  if (start == "#" || end == "#") {
+    return false;
+  }
+  m_currentNode.append_attribute("pm:tremolo-startid") = start.c_str();
+  m_currentNode.append_attribute("pm:tremolo-endid") = end.c_str();
+  m_currentNode.append_attribute("pm:tremolo-kind") = "two";
+  m_currentNode.append_attribute("pm:tremolo-strokes") = tremolo->lines();
+  m_currentNode.append_attribute("pm:tremolo-play") = tremolo->playTremolo() ? "true" : "false";
+  m_currentNode.append_attribute("pm:tremolo-measured") = "true";
+  m_currentNode.append_attribute("pm:tremolo-ppq") = Constants::DIVISION;
+  m_currentNode.append_attribute("pm:tremolo-span-ticks") = (first->actualTicks() + second->actualTicks()).ticks();
+  if (!appendTremoloGeometry(tremolo, first, false)) {
+    return false;
+  }
+  m_currentNode.append_move(a->second);
+  m_currentNode.append_move(b->second);
+  m_tremoloChordNodes.erase(first);
+  m_tremoloChordNodes.erase(second);
+  m_currentNode = previous;
   return true;
 }
 
@@ -3298,7 +3463,9 @@ bool MeiExporter::writeChord(const Chord *chord, const Staff *staff) {
 
   bool isBTrem = (chord->tremoloChordType() == TremoloChordType::TremoloSingle);
   if (isBTrem) {
-    this->writeBTrem(chord->tremoloSingleChord());
+    if (!this->writeBTrem(chord->tremoloSingleChord())) {
+      return false;
+    }
   }
 
   bool isChord = (notesToExport.size() > 1);
@@ -3349,8 +3516,18 @@ bool MeiExporter::writeChord(const Chord *chord, const Staff *staff) {
     this->fillControlEventMap(xmlId, chord);
   }
 
+  pugi::xml_node writtenNode = isChord ? m_currentNode : pugi::xml_node();
   for (const Note *note : notesToExport) {
-    this->writeNote(note, chord, staff, isChord);
+    if (!this->writeNote(note, chord, staff, isChord)) {
+      return false;
+    }
+  }
+  if (!isChord) {
+    writtenNode = m_currentNode.last_child();
+  }
+  if (chord->tremoloTwoChord()) {
+    writtenNode.append_attribute("pm:tremolo-actual-ticks") = chord->actualTicks().ticks();
+    m_tremoloChordNodes[chord] = writtenNode;
   }
 
   if (isChord) {
@@ -3363,6 +3540,11 @@ bool MeiExporter::writeChord(const Chord *chord, const Staff *staff) {
     // This is the end of the <bTrem> - non critical assert
     assert(isCurrentNode(libmei::BTrem()));
     m_currentNode = m_currentNode.parent();
+  }
+
+  if (chord->tremoloChordType() == TremoloChordType::TremoloSecondChord
+      && !writeFTrem(chord->tremoloTwoChord())) {
+    return false;
   }
 
   this->writeBeamAndTupletEnd(closingBeam, closingTuplet, closingBeamInTuplet);
