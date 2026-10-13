@@ -22,6 +22,7 @@
 #include "staffsettingsmodel.h"
 
 #include "engraving/types/types.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 using namespace mu::instrumentsscene;
 using namespace mu::notation;
@@ -32,8 +33,24 @@ StaffSettingsModel::StaffSettingsModel(QObject* parent)
 {
 }
 
+StaffSettingsModel::~StaffSettingsModel()
+{
+    async_disconnectAll();
+}
+
 void StaffSettingsModel::load(const QString& staffId)
 {
+    if (!m_policyConnectionsInitialized) {
+        auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+        policy->changed().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
+        context()->currentNotationChanged().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
+        context()->currentMasterNotationChanged().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
+        m_policyConnectionsInitialized = true;
+    }
+
+    m_staffId = staffId;
+    emit canCreateLinkedStaffChanged();
+
     if (!notationParts()) {
         return;
     }
@@ -43,7 +60,6 @@ void StaffSettingsModel::load(const QString& staffId)
         return;
     }
 
-    m_staffId = staffId;
     m_config = notationParts()->staffConfig(m_staffId);
 
     m_voicesVisibility.clear();
@@ -153,6 +169,7 @@ void StaffSettingsModel::setStaffType(int type)
     }
 
     emit staffTypeChanged();
+    emit canCreateLinkedStaffChanged();
 }
 
 void StaffSettingsModel::setVoiceVisible(int voiceIndex, bool visible)
@@ -282,19 +299,44 @@ void StaffSettingsModel::setShowIfEntireSystemEmpty(bool value)
     emit showIfEntireSystemEmptyChanged();
 }
 
+bool StaffSettingsModel::canCreateLinkedStaff() const
+{
+    const auto parts = notationParts();
+    const auto masterParts = masterNotationParts();
+    if (!parts || !parts->staff(m_staffId) || !masterParts) {
+        return false;
+    }
+
+    const Staff* sourceStaff = masterParts->staff(m_staffId);
+    if (!sourceStaff) {
+        return false;
+    }
+
+    const Part* sourcePart = sourceStaff->part();
+    const Instrument* sourceInstrument = sourcePart ? sourcePart->instrument() : nullptr;
+    if (!sourceInstrument) {
+        return false;
+    }
+
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    const StaffGroup sourceStaffGroup = sourceStaff->staffType()->group();
+    if (policy->enabled() && (sourceStaffGroup == StaffGroup::TAB || sourceStaffGroup == StaffGroup::PERCUSSION)) {
+        return false;
+    }
+
+    return policy->mayCreateInstrument(sourceInstrument->id().toStdString());
+}
+
 void StaffSettingsModel::createLinkedStaff()
 {
-    if (!masterNotationParts()) {
+    if (!canCreateLinkedStaff()) {
         return;
     }
 
     const Staff* sourceStaff = masterNotationParts()->staff(m_staffId);
-    if (!sourceStaff) {
-        return;
-    }
-
+    const Part* sourcePart = sourceStaff->part();
     Staff* linkedStaff = sourceStaff->clone();
-    if (!masterNotationParts()->appendLinkedStaff(linkedStaff, sourceStaff->id(), sourceStaff->part()->id())) {
+    if (!masterNotationParts()->appendLinkedStaff(linkedStaff, sourceStaff->id(), sourcePart->id())) {
         linkedStaff->unlink();
         delete linkedStaff;
     }

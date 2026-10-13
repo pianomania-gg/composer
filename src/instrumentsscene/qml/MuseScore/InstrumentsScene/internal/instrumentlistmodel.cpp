@@ -21,6 +21,8 @@
  */
 #include "instrumentlistmodel.h"
 
+#include "notation/iauthoringcapabilitypolicy.h"
+
 #include "translation.h"
 
 #include "log.h"
@@ -37,6 +39,12 @@ static const QString INSTRUMENT_TEMPLATE_KEY("instrumentTemplate");
 InstrumentListModel::InstrumentListModel(QObject* parent)
     : QAbstractListModel(parent), muse::Contextable(muse::iocCtxForQmlObject(this)), m_selection(new ItemMultiSelectionModel(this))
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    policy->changed().onNotify(this, [this]() {
+        loadGroups();
+        loadInstruments();
+    });
+
     connect(m_selection, &ItemMultiSelectionModel::selectionChanged, this,
             [this](const QItemSelection& selected, const QItemSelection& deselected) {
         QModelIndexList changedIndexes;
@@ -186,6 +194,8 @@ void InstrumentListModel::init(const QString& genreId, const QString& groupId)
 void InstrumentListModel::loadGenres()
 {
     TRACEFUNC;
+
+    m_genres.clear();
 
     static InstrumentGenre allInstrumentsGenre;
     allInstrumentsGenre.id = ALL_INSTRUMENTS_GENRE_ID;
@@ -499,6 +509,11 @@ void InstrumentListModel::updateStateBySearch()
 
 bool InstrumentListModel::isInstrumentAccepted(const InstrumentTemplate& instrument, bool compareWithCurrentGroup) const
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    if (!policy->mayCreateInstrument(instrument.id.toStdString())) {
+        return false;
+    }
+
     if (isSearching()) {
         return instrument.trackName.toQString().contains(m_searchText, Qt::CaseInsensitive);
     }

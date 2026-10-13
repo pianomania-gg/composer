@@ -25,12 +25,13 @@
 #include <QObject>
 #include <qqmlintegration.h>
 
+#include "async/asyncable.h"
 #include "modularity/ioc.h"
 #include "context/iglobalcontext.h"
 #include "notation/notationtypes.h"
 
 namespace mu::instrumentsscene {
-class StaffSettingsModel : public QObject, public muse::Contextable
+class StaffSettingsModel : public QObject, public muse::async::Asyncable, public muse::Contextable
 {
     Q_OBJECT
 
@@ -45,6 +46,7 @@ class StaffSettingsModel : public QObject, public muse::Contextable
     Q_PROPERTY(QVariantList allStaffTypes READ allStaffTypes NOTIFY allStaffTypesChanged)
 
     Q_PROPERTY(bool isMainScore READ isMainScore NOTIFY isMainScoreChanged)
+    Q_PROPERTY(bool canCreateLinkedStaff READ canCreateLinkedStaff NOTIFY canCreateLinkedStaffChanged)
 
     QML_ELEMENT
 
@@ -52,6 +54,7 @@ class StaffSettingsModel : public QObject, public muse::Contextable
 
 public:
     explicit StaffSettingsModel(QObject* parent = nullptr);
+    ~StaffSettingsModel() override;
 
     int staffType() const;
     bool isSmallStaff() const;
@@ -63,6 +66,7 @@ public:
     QVariantList allStaffTypes() const;
 
     bool isMainScore() const;
+    bool canCreateLinkedStaff() const;
 
     Q_INVOKABLE void load(const QString& staffId);
 
@@ -87,6 +91,7 @@ signals:
     void allStaffTypesChanged();
 
     void isMainScoreChanged(bool isMainScore);
+    void canCreateLinkedStaffChanged();
 
 private:
     notation::INotationPtr currentNotation() const;
@@ -97,5 +102,6 @@ private:
     muse::ID m_staffId;
     QList<bool> m_voicesVisibility;
     notation::StaffConfig m_config;
+    bool m_policyConnectionsInitialized = false;
 };
 }

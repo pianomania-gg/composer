@@ -92,6 +92,7 @@ private:
     void onNotationChanged();
 
     void toggleDock(const QString& name);
+    bool mayTogglePercussionPanel() const;
 
     void scheduleUpdateDrumsetPanelVisibility();
     void doUpdateDrumsetPanelVisibility();

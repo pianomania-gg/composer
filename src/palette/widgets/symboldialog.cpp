@@ -21,6 +21,7 @@
  */
 
 #include "symboldialog.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include "engraving/style/style.h"
 #include "engraving/types/symnames.h"
@@ -60,7 +61,11 @@ void SymbolDialog::createSymbols()
     // init the font if not done yet
     engravingFonts()->fontByName(f->name());
     m_symbolsWidget->clear();
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
     for (SymId symId : Smufl::smuflRanges().at(range)) {
+        if (!policy->mayCreateSymbol(symId)) {
+            continue;
+        }
         String symName = SymNames::translatedUserNameForSymId(symId);
         if (search->text().isEmpty()
             || symName.toQString().contains(search->text(), Qt::CaseInsensitive)) {
@@ -69,6 +74,7 @@ void SymbolDialog::createSymbols()
             m_symbolsWidget->appendElement(s, symName);
         }
     }
+    m_symbolsWidget->setFilterText(QString());
 }
 
 //---------------------------------------------------------
@@ -97,6 +103,8 @@ SymbolDialog::SymbolDialog(const QString& s, QWidget* parent)
     QLayout* layout = new QVBoxLayout();
     frame->setLayout(layout);
     createSymbolPalette();
+    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
+    policy->changed().onNotify(m_symbolsWidget, [this]() { createSymbols(); });
 
     QScrollArea* symbolsArea = new PaletteScrollArea(m_symbolsWidget);
     symbolsArea->setFocusProxy(m_symbolsWidget);

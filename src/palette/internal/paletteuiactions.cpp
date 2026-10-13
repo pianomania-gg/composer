@@ -81,6 +81,9 @@ PaletteUiActions::PaletteUiActions(std::shared_ptr<PaletteActionsController> con
 
 void PaletteUiActions::init()
 {
+    m_controller->actionsReceiveAvailableChanged().onReceive(this, [this](const ActionCodeList& codes) {
+        m_actionEnabledChanged.send(codes);
+    });
     m_controller->isMasterPaletteOpened().ch.onReceive(this, [this](bool) {
         m_actionCheckedChanged.send({ MASTERPALETTE_CODE });
     });

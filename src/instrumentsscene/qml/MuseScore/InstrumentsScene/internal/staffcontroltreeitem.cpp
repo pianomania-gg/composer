@@ -20,6 +20,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "staffcontroltreeitem.h"
+#include "notation/iauthoringcapabilitypolicy.h"
+#include "engraving/dom/instrument.h"
 
 #include "engraving/dom/factory.h"
 
@@ -42,6 +44,11 @@ void StaffControlTreeItem::appendNewItem()
 {
     const Part* part = masterNotation()->parts()->part(m_partId);
     if (!part) {
+        return;
+    }
+
+    auto policy = muse::modularity::ioc(muse::iocCtxForQmlObject(this)())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
+    if (!part->instrument() || !policy->mayCreateInstrument(part->instrument()->id().toStdString())) {
         return;
     }
 

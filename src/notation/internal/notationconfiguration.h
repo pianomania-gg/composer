@@ -44,6 +44,10 @@ public:
 
     void init();
 
+    bool pianoAuthoringPolicyEnabled() const;
+    void setPianoAuthoringPolicyEnabled(bool enabled);
+    muse::async::Notification pianoAuthoringPolicyChanged() const;
+
     QColor notationColor() const override;
 
     QColor backgroundColor() const override;
@@ -244,6 +248,7 @@ public:
     muse::async::Channel<std::string> styleFileImportPathChanged() const override;
 
 private:
+    muse::async::Notification m_pianoAuthoringPolicyChanged;
     muse::async::Notification m_backgroundChanged;
     muse::async::Notification m_foregroundChanged;
     muse::async::Notification m_scoreInversionChanged;

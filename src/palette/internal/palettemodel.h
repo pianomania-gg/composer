@@ -206,13 +206,16 @@ class FilterPaletteTreeModel : public QSortFilterProxyModel
 
     PaletteCellFilter * cellFilter;
 
+protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override;
+
+private:
     bool filterAcceptsColumn(int /* sourceColumn */, const QModelIndex& /* sourceParent */) const override
     {
         return true;
     }
 
-private slots:
+protected slots:
     void invalidateFilter()
     {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)

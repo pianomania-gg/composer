@@ -246,9 +246,12 @@ StyledPopupView {
             }
         }
 
-        SeparatorLine {}
+        SeparatorLine {
+            visible: settingsModel.canCreateLinkedStaff
+        }
 
         Column {
+            visible: settingsModel.canCreateLinkedStaff
             width: parent.width
             spacing: 8
 

@@ -21,11 +21,14 @@
  */
 #include "noteinputbarcustomisemodel.h"
 
+#include <algorithm>
+
 #include "noteinputbarcustomiseitem.h"
 
 #include "translation.h"
 
 #include "internal/notationuiactions.h"
+#include "notation/iauthoringcapabilitypolicy.h"
 
 #include "log.h"
 
@@ -40,6 +43,10 @@ static const QString NOTE_INPUT_TOOLBAR_NAME("noteInput");
 NoteInputBarCustomiseModel::NoteInputBarCustomiseModel(QObject* parent)
     : SelectableItemListModel(parent), muse::Contextable(muse::iocCtxForQmlObject(this))
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    policy->changed().onNotify(this, [this]() {
+        load();
+    });
 }
 
 void NoteInputBarCustomiseModel::load()
@@ -49,8 +56,12 @@ void NoteInputBarCustomiseModel::load()
     QList<Item*> items;
 
     ToolConfig toolConfig = uiConfiguration()->toolConfig(NOTE_INPUT_TOOLBAR_NAME, NotationUiActions::defaultNoteInputBarConfig());
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
 
     for (const ToolConfig::Item& item : toolConfig.items) {
+        if (!item.action.empty() && !policy->mayCreateAction(item.action)) {
+            continue;
+        }
         const UiAction& action = actionsRegister()->action(item.action);
         items << makeItem(action, item.show);
     }
@@ -251,6 +262,17 @@ void NoteInputBarCustomiseModel::saveActions()
         citem.action = customiseItem->id().toStdString();
         citem.show = customiseItem->checked();
         config.items.append(citem);
+    }
+
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    const ToolConfig stored = uiConfiguration()->toolConfig(NOTE_INPUT_TOOLBAR_NAME,
+                                                             NotationUiActions::defaultNoteInputBarConfig());
+    int originalIndex = 0;
+    for (const ToolConfig::Item& storedItem : stored.items) {
+        if (!storedItem.action.empty() && !policy->mayCreateAction(storedItem.action)) {
+            config.items.insert(std::min(originalIndex, static_cast<int>(config.items.size())), storedItem);
+        }
+        ++originalIndex;
     }
 
     uiConfiguration()->setToolConfig(NOTE_INPUT_TOOLBAR_NAME, config);

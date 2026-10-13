@@ -21,6 +21,9 @@
  */
 #include "noteinputbarmodel.h"
 
+#include "notation/iauthoringcapabilitypolicy.h"
+
+#include <functional>
 #include <map>
 #include <cmath>
 
@@ -515,6 +518,11 @@ void NoteInputBarModel::init()
 {
     subscribeOnChanges();
 
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    policy->changed().onNotify(this, [this]() {
+        load();
+    });
+
     uiConfiguration()->toolConfigChanged(TOOLBAR_NAME).onNotify(this, [this]() {
         load();
     });
@@ -536,6 +544,7 @@ void NoteInputBarModel::load()
     MenuItemList items;
 
     ToolConfig noteInputConfig = uiConfiguration()->toolConfig(TOOLBAR_NAME, NotationUiActions::defaultNoteInputBarConfig());
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
 
     int section = 0;
     for (const ToolConfig::Item& citem : noteInputConfig.items) {
@@ -545,6 +554,9 @@ void NoteInputBarModel::load()
 
         if (citem.action.empty()) {
             section++;
+            continue;
+        }
+        if (!policy->mayCreateAction(citem.action)) {
             continue;
         }
         if (HELD_NOTE_PULSE_ACTIONS.find(QString::fromStdString(citem.action)) != HELD_NOTE_PULSE_ACTIONS.cend()
@@ -1125,6 +1137,32 @@ MenuItemList NoteInputBarModel::makeAddItems()
         makeMenu(TranslatableString("notation", "Chords and fretboard diagrams"), makeChordAndFretboardDiagramsItems()),
     };
 
+    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
+    std::function<void(MenuItemList&)> filterDenied = [&policy, &filterDenied](MenuItemList& source) {
+        for (auto it = source.begin(); it != source.end();) {
+            MenuItem* item = *it;
+            if (!item) {
+                it = source.erase(it);
+                continue;
+            }
+            MenuItemList subitems = item->subitems();
+            const bool wasMenu = !subitems.empty();
+            if (!subitems.empty()) {
+                filterDenied(subitems);
+                item->setSubitems(subitems);
+            }
+
+            const ActionCode& code = item->action().code;
+            const bool denied = !code.empty() && !policy->mayCreateAction(code);
+            const bool emptyMenu = code.empty() && wasMenu && subitems.empty();
+            if (denied || emptyMenu) {
+                it = source.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    filterDenied(items);
     return items;
 }
 

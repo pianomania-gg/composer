@@ -21,6 +21,13 @@
  */
 #include "applicationuiactions.h"
 
+#include "notation/iauthoringcapabilitypolicy.h"
+#include "notation/inotation.h"
+#include "notation/inotationselection.h"
+
+#include "context/iglobalcontext.h"
+#include "engraving/dom/staff.h"
+
 #include "ui/view/iconcodes.h"
 #include "context/uicontext.h"
 #include "context/shortcutcontext.h"
@@ -287,6 +294,26 @@ ApplicationUiActions::ApplicationUiActions(std::shared_ptr<ApplicationActionCont
 
 void ApplicationUiActions::init()
 {
+    auto policy = muse::modularity::ioc(iocContext())->resolve<notation::IAuthoringCapabilityPolicy>("appshell");
+    policy->changed().onNotify(this, [this]() {
+        m_actionEnabledChanged.send({ TOGGLE_PERCUSSION_PANEL_ACTION_CODE });
+    });
+
+    auto globalContext = muse::modularity::ioc(iocContext())->resolve<context::IGlobalContext>("appshell");
+    auto listenSelection = [this, globalContext]() {
+        const notation::INotationPtr notation = globalContext->currentNotation();
+        if (!notation) {
+            m_actionEnabledChanged.send({ TOGGLE_PERCUSSION_PANEL_ACTION_CODE });
+            return;
+        }
+        notation->interaction()->selectionChanged().onNotify(this, [this]() {
+            m_actionEnabledChanged.send({ TOGGLE_PERCUSSION_PANEL_ACTION_CODE });
+        }, muse::async::Asyncable::Mode::SetReplace);
+        m_actionEnabledChanged.send({ TOGGLE_PERCUSSION_PANEL_ACTION_CODE });
+    };
+    globalContext->currentNotationChanged().onNotify(this, listenSelection);
+    listenSelection();
+
     mainWindow()->isFullScreenChanged().onNotify(this, [this]() {
         m_actionCheckedChanged.send({ FULL_SCREEN_CODE });
     });
@@ -339,7 +366,21 @@ const muse::ui::UiActionList& ApplicationUiActions::actionsList() const
 bool ApplicationUiActions::actionEnabled(const UiAction& act) const
 {
     if (act.code == TOGGLE_PERCUSSION_PANEL_ACTION_CODE) {
-        return notationSceneConfiguration()->useNewPercussionPanel();
+        auto policy = muse::modularity::ioc(iocContext())->resolve<notation::IAuthoringCapabilityPolicy>("appshell");
+        if (!notationSceneConfiguration()->useNewPercussionPanel()) {
+            return false;
+        }
+        if (policy->mayCreateAction(act.code)) {
+            return true;
+        }
+
+        auto globalContext = muse::modularity::ioc(iocContext())->resolve<context::IGlobalContext>("appshell");
+        const notation::INotationPtr notation = globalContext->currentNotation();
+        const notation::INotationSelectionPtr selection = notation ? notation->interaction()->selection() : nullptr;
+        const engraving::EngravingItem* item = selection ? selection->element() : nullptr;
+        const engraving::Score* score = notation && notation->elements() ? notation->elements()->msScore() : nullptr;
+        return item && item->staff() && item->staff()->isDrumStaff(item->tick())
+               && policy->mayEditExisting(item, score);
     }
 
     return m_controller->canReceiveAction(act.code);
