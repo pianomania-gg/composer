@@ -1860,3 +1860,49 @@ TEST(Project_PianomaniaCoordinatedExportTest, SpanningRollMidiAttacksFollowMeiMe
     EXPECT_EQ(members, 19u);
     EXPECT_EQ(attackByOwner.size(), members);
 }
+
+// Test value: Detects a tremolo with playback turned off dropping its written notes from MIDI or
+// failing MEI export, and any generated pulse that Unity rejects for a disabled tremolo.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloWithPlaybackOffPlaysEachWrittenNoteOnce)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/project/tests/data/pianomania-tremolo-playback-off.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    QTemporaryDir directory;
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixture), muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), 9u);
+    ASSERT_FALSE(result.val.files.empty());
+    const auto& audible = result.val.files.front().audibleEvents;
+    ASSERT_EQ(audible.size(), 9u);
+    std::map<std::string, int> writtenTickByOwner;
+    for (const auto& owner : result.val.canonicalEvents) {
+        writtenTickByOwner.emplace(owner.scoreEventId, owner.scoreTick);
+    }
+    std::map<std::string, int> attacksByOwner;
+    for (const auto& event : audible) {
+        ASSERT_EQ(event.origins.size(), 1u);
+        const auto& origin = event.origins.front();
+        EXPECT_FALSE(origin.nonVisualOrnament);
+        EXPECT_NE(event.noteOffVelocity, 127);
+        ASSERT_EQ(writtenTickByOwner.count(origin.scoreEventId), 1u);
+        EXPECT_EQ(event.startTick, writtenTickByOwner.at(origin.scoreEventId));
+        EXPECT_GT(event.endTick, event.startTick);
+        ++attacksByOwner[origin.scoreEventId];
+    }
+    EXPECT_EQ(attacksByOwner.size(), writtenTickByOwner.size());
+    for (const auto& [owner, attacks] : attacksByOwner) {
+        EXPECT_EQ(attacks, 1) << owner;
+    }
+    const QJsonObject manifest = QJsonDocument::fromJson(QByteArray::fromStdString(result.val.manifestJson)).object();
+    EXPECT_TRUE(manifest.value("ornament_definitions").toArray().isEmpty());
+    const QString mei = QString::fromUtf8(readFile(directory.filePath("song.mei")));
+    EXPECT_EQ(mei.count(QStringLiteral("<fTrem")), 1);
+    EXPECT_EQ(mei.count(QStringLiteral("<bTrem")), 2);
+    EXPECT_EQ(mei.count(QStringLiteral("pm:tremolo-play=\"false\"")), 3);
+    EXPECT_EQ(mei.count(QStringLiteral("pm:tremolo-play=\"true\"")), 0);
+}

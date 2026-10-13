@@ -351,12 +351,13 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
     }
 
     bool tremolo = false;
+    const bool tremoloPlays = chord->tremoloType() != TremoloType::INVALID_TREMOLO && CompatMidiRendererInternal::tremoloPlays(chord);
 
     if (const Arpeggio* roll = CompatMidiRendererInternal::rollingArpeggio(chord)) {
         CompatMidiRender::renderArpeggio(chord, roll, ell, ontime);
         arpeggio = true;
     } else {
-        if (chord->tremoloType() != TremoloType::INVALID_TREMOLO) {
+        if (tremoloPlays) {
             CompatMidiRender::renderTremolo(chord, ell, ontime, tremoloLength);
             tremolo = true;
         }
@@ -376,7 +377,8 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
         }
         // If we are here then we still need to render the note.
         // Render its body if necessary and apply gateTime.
-        if (el->empty() && chord->tremoloChordType() != TremoloChordType::TremoloSecondChord) {
+        // A playing two-chord tremolo sounds the second chord's notes from the first chord's events.
+        if (el->empty() && !(tremoloPlays && chord->tremoloChordType() == TremoloChordType::TremoloSecondChord)) {
             el->push_back(NoteEvent(0, ontime, std::max(1, 1000 - trailtime - graceLeadIn),
                                     !note->ghost() ? NoteEvent::DEFAULT_VELOCITY_MULTIPLIER : NoteEvent::GHOST_VELOCITY_MULTIPLIER));
 

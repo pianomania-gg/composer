@@ -2499,8 +2499,9 @@ bool MeiExporter::collectNoteEvents(const Measure *measure) {
               m_durEvents.push_back({tickKey, t, note, indexGroupChord});
               continue;
             }
-            const bool repeatedTremolo = chord->tremoloTwoChord()
-                || (chord->tremoloSingleChord() && !chord->tremoloSingleChord()->isBuzzRoll());
+            const bool repeatedTremolo = CompatMidiRendererInternal::tremoloPlays(chord)
+                && (chord->tremoloTwoChord()
+                    || (chord->tremoloSingleChord() && !chord->tremoloSingleChord()->isBuzzRoll()));
             if (repeatedTremolo) {
               const auto attackTick = CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(note);
               if (!attackTick.has_value()) {

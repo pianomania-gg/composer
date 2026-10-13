@@ -1975,6 +1975,13 @@ const Arpeggio* CompatMidiRendererInternal::rollingArpeggio(const Chord* chord)
     return nullptr;
 }
 
+bool CompatMidiRendererInternal::tremoloPlays(const Chord* chord)
+{
+    const TremoloSingleChord* single = chord ? chord->tremoloSingleChord() : nullptr;
+    const TremoloTwoChord* two = chord ? chord->tremoloTwoChord() : nullptr;
+    return (single && single->playTremolo()) || (two && two->playTremolo());
+}
+
 std::optional<int> CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(const Note* owner)
 {
     const Chord* ownerChord = owner ? owner->chord() : nullptr;
