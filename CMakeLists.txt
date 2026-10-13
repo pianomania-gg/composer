@@ -108,6 +108,7 @@ include(${MUSE_FRAMEWORK_SRC_PATH}/cmake/MuseDeclareOptions.cmake)
 # Modules (alphabetical order please)
 option(MUE_BUILD_APPSHELL_MODULE "Build appshell module" ON)
 option(MUE_BUILD_APPSHELL_QML "Build appshell QML" ${MUE_BUILD_APPSHELL_MODULE})
+option(MUE_BUILD_APPSHELL_TESTS "Build appshell tests" ${MUE_BUILD_APPSHELL_MODULE})
 
 option(MUE_BUILD_BRAILLE_MODULE "Build braille module" ON)
 option(MUE_BUILD_BRAILLE_QML "Build braille QML" ${MUE_BUILD_BRAILLE_MODULE})

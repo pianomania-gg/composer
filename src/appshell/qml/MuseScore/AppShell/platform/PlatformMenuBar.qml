@@ -66,7 +66,8 @@ Item {
 
         setUpMenu(menu, menuInfo)
 
-        menuInfo.subitemsChanged.connect(function(subitems, menuId) {
+        // With the menu as receiver, the handler goes away when the menu is destroyed
+        menuInfo.subitemsChanged.connect(menu, function(subitems, menuId) {
             if (menu.id === menuId) {
                 menu.subitems = subitems
                 menu.load()
@@ -108,6 +109,19 @@ Item {
             property string id: ""
             property var subitems: []
 
+            // Submenus made by load(). clear() deletes only the items that show them,
+            // so the submenus are destroyed here before the menu is rebuilt.
+            property var submenus: []
+            function releaseSubmenus() {
+                for (let menu of submenus) {
+                    removeMenu(menu)
+                    menu.releaseSubmenus()
+                    menu.clear()
+                    menu.destroy()
+                }
+                submenus = []
+            }
+
             function shownSubitems() {
                 let shown = []
                 for (var i in subitems) {
@@ -123,11 +137,14 @@ Item {
             }
 
             function load() {
+                releaseSubmenus()
                 clear()
 
+                let made = []
                 for (let item of shownSubitems()) {
                     if (isSubmenu(item)) {
                         let menu = root.makeMenu(item)
+                        made.push(menu)
                         addMenu(menu)
                         menu.load()
                     } else {
@@ -135,6 +152,7 @@ Item {
                         addItem(menuItem)
                     }
                 }
+                submenus = made
             }
 
             function update() {
