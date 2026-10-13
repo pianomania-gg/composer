@@ -37,6 +37,8 @@ target_sources(pmwasm PRIVATE
     # building the (editor-coupled) project module for wasm.
     ${CMAKE_CURRENT_LIST_DIR}/../project/internal/pianomaniaexport.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../project/internal/pianomaniaexport.h
+    ${CMAKE_CURRENT_LIST_DIR}/../project/internal/notationcompatibility.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../project/internal/notationcompatibility.h
     )
 
 target_link_libraries(pmwasm PRIVATE
