@@ -25,6 +25,9 @@
 #include "internal/projectcreator.h"
 #include "internal/projectautosaver.h"
 #include "internal/projectactionscontroller.h"
+#include "internal/notationcompatibility.h"
+#include <QtQml/qqml.h>
+#include <QtQml/QQmlEngine>
 #include "internal/engravingpluginapihelper.h"
 #include "internal/projectuiactions.h"
 #include "internal/projectconfiguration.h"
@@ -108,6 +111,7 @@ void ProjectModule::resolveImports()
         ir->registerQmlUri(Uri("musescore://project/export"), "MuseScore.Project", "ExportDialog");
         ir->registerQmlUri(Uri("musescore://project/properties"), "MuseScore.Project", "ProjectPropertiesDialog");
         ir->registerQmlUri(Uri("musescore://project/audiogenerationsettings"), "MuseScore.Project", "AudioGenerationSettingsDialog");
+        ir->registerQmlUri(Uri("musescore://project/notation-compatibility"), "MuseScore.Project", "NotationCompatibilitySummary");
     }
 
     auto er = ioc()->resolve<muse::extensions::IExtensionsExecPointsRegister>(moduleName());
@@ -130,6 +134,13 @@ void ProjectModule::onInit(const IApplication::RunMode& mode)
     }
 
     m_configuration->init();
+    qmlRegisterSingletonType<notationcompatibility::SummaryModel>(
+        "MuseScore.Project", 1, 0, "NotationCompatibility",
+        [](QQmlEngine*, QJSEngine*) -> QObject* {
+            auto* model = notationcompatibility::SummaryModel::instance();
+            QQmlEngine::setObjectOwnership(model, QQmlEngine::CppOwnership);
+            return model;
+        });
     m_actionsController->init();
     m_recentFilesController->init();
     m_projectAutoSaver->init();

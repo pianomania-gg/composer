@@ -21,6 +21,7 @@
  */
 #include "pianomaniaexport.h"
 #include "pianomaniacompatibility.generated.h"
+#include "notationcompatibility.h"
 
 #include <algorithm>
 #include <cctype>
@@ -35,6 +36,7 @@
 #include <utility>
 
 #include <QFile>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -407,7 +409,8 @@ bool containsMuseScoreMeiIdentity(const std::string& value)
            || std::regex_search(value, pianomaniaReferencePattern);
 }
 
-bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResult& result)
+bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResult& result,
+                                    QHash<QString, QString>* sourceToCanonical)
 {
     static const std::regex declarationPattern(R"REGEX(xml:id="(mscore-[A-Za-z0-9._-]+)")REGEX");
     static const std::regex publicDeclarationPattern(R"REGEX(xml:id="(pm-score-[0-9]{6})")REGEX");
@@ -461,6 +464,11 @@ bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResul
         }
     }
 
+    if (sourceToCanonical) {
+        for (const auto& [sourceId, canonicalId] : replacements) {
+            sourceToCanonical->insert(QString::fromStdString(sourceId.substr(7)), QString::fromStdString(canonicalId));
+        }
+    }
     meiData = replaceIdentityTokens(meiData, replacements);
     if (containsMuseScoreMeiIdentity(meiData)) {
         LOGE() << "Coordinated Pianomania MEI retains an internal MuseScore identity";
@@ -1317,6 +1325,8 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         return rv;
     }
 
+    const auto compatibilitySource = mu::project::notationcompatibility::inventoryScore(score, sourcePath.toQString());
+
     rv.val.source = QFileInfo(sourcePath.toQString()).fileName().toStdString();
     rv.val.basePath = basePath;
     rv.val.meiPath = meiPath;
@@ -1413,7 +1423,8 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         return rv;
     }
 
-    if (!canonicalizePublicIdentityGraph(meiData, rv.val)) {
+    QHash<QString, QString> sourceToCanonical;
+    if (!canonicalizePublicIdentityGraph(meiData, rv.val, &sourceToCanonical)) {
         rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
                                 std::string("Failed to finalize coordinated Pianomania public identities"));
         return rv;
@@ -1454,6 +1465,52 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
                                 std::string("Coordinated Pianomania manifest retains an internal identity"));
         return rv;
     }
+    // Only the existing coordinated manifest-model checks can establish native
+    // tremolo ownership. Runtime consumers still require their own verified bridge.
+    const auto compatibilityReport = mu::project::notationcompatibility::analyzeMei(
+        QByteArray::fromStdString(meiData), compatibilitySource, sourceToCanonical, true);
+    if (!mu::project::notationcompatibility::admits(compatibilityReport)) {
+        rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
+            mu::project::notationcompatibility::fatalSummary(compatibilityReport).toStdString());
+        return rv;
+    }
+    // Compatibility metadata carries source IDs; canonical identity validation above
+    // remains scoped to the unchanged exporter graph and MIDI provenance.
+    QJsonObject manifestWithCompatibility = QJsonDocument::fromJson(QByteArray::fromStdString(rv.val.manifestJson)).object();
+    // Manifest v3 already permits integrity fields. Bind provenance to the exact
+    // final canonical MEI and emitted MIDI, without changing musical identities.
+    QJsonObject scoreRecord = manifestWithCompatibility["score"].toObject();
+    QJsonObject meiRecord = scoreRecord["mei"].toObject();
+    QByteArray canonicalMeiBytes = QByteArray::fromStdString(meiData);
+    meiRecord["sha256"] = QString::fromLatin1(QCryptographicHash::hash(canonicalMeiBytes, QCryptographicHash::Sha256).toHex());
+    meiRecord["size_bytes"] = static_cast<qint64>(canonicalMeiBytes.size());
+    scoreRecord["mei"] = meiRecord;
+    manifestWithCompatibility["score"] = scoreRecord;
+    QJsonArray fileRecords = manifestWithCompatibility["files"].toArray();
+    for (const MidiExportedFile& emitted : rv.val.files) {
+        QFile midiFile(emitted.path.toQString());
+        if (!midiFile.open(QIODevice::ReadOnly)) {
+            rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
+                                    std::string("Failed to read final MIDI for manifest integrity"));
+            return rv;
+        }
+        QByteArray bytes = midiFile.readAll();
+        if (midiFile.error() != QFileDevice::NoError) {
+            rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
+                                    std::string("Failed to read complete MIDI for manifest integrity"));
+            return rv;
+        }
+        for (qsizetype index = 0; index < fileRecords.size(); ++index) {
+            QJsonObject row = fileRecords[index].toObject();
+            if (row["kind"].toString() != QString::fromStdString(midiKindName(emitted.kind))) continue;
+            row["sha256"] = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+            row["size_bytes"] = static_cast<qint64>(bytes.size());
+            fileRecords[index] = row;
+        }
+    }
+    manifestWithCompatibility["files"] = fileRecords;
+    manifestWithCompatibility["notation_compatibility"] = compatibilityReport;
+    rv.val.manifestJson = QJsonDocument(manifestWithCompatibility).toJson(QJsonDocument::Compact).toStdString();
     rv.ret = muse::make_ret(muse::Ret::Code::Ok);
     return rv;
 }
