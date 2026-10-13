@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <museScore version="4.60">
   <Score>
-    <eid>4294967296000</eid>
+    <eid>AAAAAg+_AAAAAg+</eid>
     <Division>480</Division>
     <Style>
       <pageWidth>8.26997</pageWidth>
@@ -54,7 +54,7 @@
     <metaTag name="workTitle">Untitled score</metaTag>
     <Part id="1">
       <Staff>
-        <eid>4299262263296</eid>
+        <eid>AAAAAk+_AAAAAk+</eid>
         <StaffType group="pitched">
           <name>stdNormal</name>
         </StaffType>
@@ -62,7 +62,7 @@
         <barLineSpan>1</barLineSpan>
       </Staff>
       <Staff>
-        <eid>4303557230592</eid>
+        <eid>AAAAAo+_AAAAAo+</eid>
         <StaffType group="pitched">
           <name>stdNormal</name>
         </StaffType>
@@ -127,83 +127,83 @@
     <Staff id="1">
       <VBox>
         <height>10</height>
-        <eid>4307852197888</eid>
+        <eid>AAAAAs+_AAAAAs+</eid>
         <Text>
-          <eid>4312147165184</eid>
+          <eid>AAAAAw+_AAAAAw+</eid>
           <style>title</style>
           <text>Untitled score</text>
         </Text>
         <Text>
-          <eid>4316442132480</eid>
+          <eid>AAAAA0+_AAAAA0+</eid>
           <style>composer</style>
           <text>Composer / arranger</text>
         </Text>
       </VBox>
       <Measure>
-        <eid>4320737099776</eid>
+        <eid>AAAAA4+_AAAAA4+</eid>
         <voice>
           <Clef>
             <concertClefType>G</concertClefType>
             <transposingClefType>G</transposingClefType>
             <isHeader>1</isHeader>
-            <eid>4325032067072</eid>
+            <eid>AAAAA8+_AAAAA8+</eid>
           </Clef>
           <TimeSig>
-            <eid>4329327034368</eid>
+            <eid>AAAAAA/_AAAAAA/</eid>
             <sigN>4</sigN>
             <sigD>4</sigD>
           </TimeSig>
           <Chord>
-            <eid>4333622001664</eid>
+            <eid>AAAAAE/_AAAAAE/</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4337916968960</eid>
+              <eid>AAAAAI/_AAAAAI/</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4342211936256</eid>
+              <eid>AAAAAM/_AAAAAM/</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4346506903552</eid>
+              <eid>AAAAAQ/_AAAAAQ/</eid>
               <span>2</span>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4350801870848</eid>
+            <eid>AAAAAU/_AAAAAU/</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4355096838144</eid>
+              <eid>AAAAAY/_AAAAAY/</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4359391805440</eid>
+            <eid>AAAAAc/_AAAAAc/</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4363686772736</eid>
+              <eid>AAAAAg/_AAAAAg/</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4367981740032</eid>
+              <eid>AAAAAk/_AAAAAk/</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4372276707328</eid>
+            <eid>AAAAAo/_AAAAAo/</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4376571674624</eid>
+              <eid>AAAAAs/_AAAAAs/</eid>
               <pitch>79</pitch>
               <tpc>15</tpc>
             </Note>
@@ -211,10 +211,10 @@
         </voice>
         <voice>
           <Chord>
-            <eid>4380866641920</eid>
+            <eid>AAAAAw/_AAAAAw/</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4385161609216</eid>
+              <eid>AAAAA0/_AAAAA0/</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
@@ -222,52 +222,52 @@
         </voice>
       </Measure>
       <Measure>
-        <eid>4389456576512</eid>
+        <eid>AAAAA4/_AAAAA4/</eid>
         <voice>
           <Chord>
-            <eid>4393751543808</eid>
+            <eid>AAAAA8/_AAAAA8/</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4398046511104</eid>
+              <eid>AAAAAAAB_AAAAAAAB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4402341478400</eid>
+              <eid>AAAAAEAB_AAAAAEAB</eid>
               <pitch>83</pitch>
               <tpc>19</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4406636445696</eid>
+              <eid>AAAAAIAB_AAAAAIAB</eid>
             </Arpeggio>
           </Chord>
           <Rest>
-            <eid>4410931412992</eid>
+            <eid>AAAAAMAB_AAAAAMAB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Chord>
-            <eid>4415226380288</eid>
+            <eid>AAAAAQAB_AAAAAQAB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4419521347584</eid>
+              <eid>AAAAAUAB_AAAAAUAB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
           </Chord>
           <Rest>
-            <eid>4423816314880</eid>
+            <eid>AAAAAYAB_AAAAAYAB</eid>
             <durationType>quarter</durationType>
           </Rest>
         </voice>
         <voice>
           <Chord>
-            <eid>4428111282176</eid>
+            <eid>AAAAAcAB_AAAAAcAB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4432406249472</eid>
+              <eid>AAAAAgAB_AAAAAgAB</eid>
               <pitch>64</pitch>
               <tpc>18</tpc>
             </Note>
@@ -275,53 +275,53 @@
         </voice>
       </Measure>
       <Measure>
-        <eid>4436701216768</eid>
+        <eid>AAAAAkAB_AAAAAkAB</eid>
         <voice>
           <Chord>
-            <eid>4440996184064</eid>
+            <eid>AAAAAoAB_AAAAAoAB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4445291151360</eid>
+              <eid>AAAAAsAB_AAAAAsAB</eid>
               <pitch>74</pitch>
               <tpc>16</tpc>
             </Note>
             <Note>
-              <eid>4449586118656</eid>
+              <eid>AAAAAwAB_AAAAAwAB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4453881085952</eid>
+              <eid>AAAAA0AB_AAAAA0AB</eid>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4458176053248</eid>
+            <eid>AAAAA4AB_AAAAA4AB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4462471020544</eid>
+              <eid>AAAAA8AB_AAAAA8AB</eid>
               <pitch>74</pitch>
               <tpc>16</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4466765987840</eid>
+            <eid>AAAAAABB_AAAAAABB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4471060955136</eid>
+              <eid>AAAAAEBB_AAAAAEBB</eid>
               <pitch>81</pitch>
               <tpc>17</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4475355922432</eid>
+            <eid>AAAAAIBB_AAAAAIBB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4479650889728</eid>
+              <eid>AAAAAMBB_AAAAAMBB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
@@ -329,74 +329,74 @@
         </voice>
         <voice>
           <Chord>
-            <eid>4483945857024</eid>
+            <eid>AAAAAQBB_AAAAAQBB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4488240824320</eid>
+              <eid>AAAAAUBB_AAAAAUBB</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4492535791616</eid>
+              <eid>AAAAAYBB_AAAAAYBB</eid>
             </Arpeggio>
           </Chord>
         </voice>
       </Measure>
       <Measure>
-        <eid>4496830758912</eid>
+        <eid>AAAAAcBB_AAAAAcBB</eid>
         <voice>
           <Chord>
-            <eid>4501125726208</eid>
+            <eid>AAAAAgBB_AAAAAgBB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4505420693504</eid>
+              <eid>AAAAAkBB_AAAAAkBB</eid>
               <pitch>77</pitch>
               <tpc>13</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4509715660800</eid>
+              <eid>AAAAAoBB_AAAAAoBB</eid>
               <span>2</span>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4514010628096</eid>
+            <eid>AAAAAsBB_AAAAAsBB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4518305595392</eid>
+              <eid>AAAAAwBB_AAAAAwBB</eid>
               <pitch>71</pitch>
               <tpc>19</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4522600562688</eid>
+            <eid>AAAAA0BB_AAAAA0BB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4526895529984</eid>
+              <eid>AAAAA4BB_AAAAA4BB</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
             </Note>
             <Note>
-              <eid>4531190497280</eid>
+              <eid>AAAAA8BB_AAAAA8BB</eid>
               <pitch>77</pitch>
               <tpc>13</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4535485464576</eid>
+            <eid>AAAAAACB_AAAAAACB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4539780431872</eid>
+              <eid>AAAAAECB_AAAAAECB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4544075399168</eid>
+              <eid>AAAAAICB_AAAAAICB</eid>
               <pitch>79</pitch>
               <tpc>15</tpc>
             </Note>
@@ -404,10 +404,10 @@
         </voice>
         <voice>
           <Chord>
-            <eid>4548370366464</eid>
+            <eid>AAAAAMCB_AAAAAMCB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4552665333760</eid>
+              <eid>AAAAAQCB_AAAAAQCB</eid>
               <pitch>67</pitch>
               <tpc>15</tpc>
             </Note>
@@ -415,76 +415,76 @@
         </voice>
       </Measure>
       <Measure>
-        <eid>4556960301056</eid>
+        <eid>AAAAAUCB_AAAAAUCB</eid>
         <voice>
           <Chord>
-            <eid>4561255268352</eid>
+            <eid>AAAAAYCB_AAAAAYCB</eid>
             <durationType>half</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4565550235648</eid>
+              <eid>AAAAAcCB_AAAAAcCB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4569845202944</eid>
+              <eid>AAAAAgCB_AAAAAgCB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4574140170240</eid>
+              <eid>AAAAAkCB_AAAAAkCB</eid>
               <pitch>79</pitch>
               <tpc>15</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4578435137536</eid>
+              <eid>AAAAAoCB_AAAAAoCB</eid>
               <span>2</span>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4582730104832</eid>
+            <eid>AAAAAsCB_AAAAAsCB</eid>
             <durationType>half</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4587025072128</eid>
+              <eid>AAAAAwCB_AAAAAwCB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4591320039424</eid>
+              <eid>AAAAA0CB_AAAAA0CB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4595615006720</eid>
+              <eid>AAAAA4CB_AAAAA4CB</eid>
               <pitch>79</pitch>
               <tpc>15</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4599909974016</eid>
+              <eid>AAAAA8CB_AAAAA8CB</eid>
               <span>6</span>
             </Arpeggio>
           </Chord>
         </voice>
         <voice>
           <Chord>
-            <eid>4604204941312</eid>
+            <eid>AAAAAADB_AAAAAADB</eid>
             <durationType>half</durationType>
             <StemDirection>down</StemDirection>
             <Note>
-              <eid>4608499908608</eid>
+              <eid>AAAAAEDB_AAAAAEDB</eid>
               <pitch>64</pitch>
               <tpc>18</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4612794875904</eid>
+            <eid>AAAAAIDB_AAAAAIDB</eid>
             <durationType>half</durationType>
             <StemDirection>down</StemDirection>
             <Note>
-              <eid>4617089843200</eid>
+              <eid>AAAAAMDB_AAAAAMDB</eid>
               <pitch>64</pitch>
               <tpc>18</tpc>
             </Note>
@@ -492,88 +492,88 @@
         </voice>
       </Measure>
       <Measure>
-        <eid>4621384810496</eid>
+        <eid>AAAAAQDB_AAAAAQDB</eid>
         <voice>
           <Chord>
-            <eid>4625679777792</eid>
+            <eid>AAAAAUDB_AAAAAUDB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4629974745088</eid>
+              <eid>AAAAAYDB_AAAAAYDB</eid>
               <pitch>76</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4634269712384</eid>
+              <eid>AAAAAcDB_AAAAAcDB</eid>
               <pitch>79</pitch>
               <tpc>15</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4638564679680</eid>
+              <eid>AAAAAgDB_AAAAAgDB</eid>
             </Arpeggio>
           </Chord>
           <BarLine>
             <subtype>end</subtype>
-            <eid>4642859646976</eid>
+            <eid>AAAAAkDB_AAAAAkDB</eid>
           </BarLine>
         </voice>
         <voice>
           <Chord>
-            <eid>4647154614272</eid>
+            <eid>AAAAAoDB_AAAAAoDB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4651449581568</eid>
+              <eid>AAAAAsDB_AAAAAsDB</eid>
               <pitch>67</pitch>
               <tpc>15</tpc>
             </Note>
             <Note>
-              <eid>4655744548864</eid>
+              <eid>AAAAAwDB_AAAAAwDB</eid>
               <pitch>71</pitch>
               <tpc>19</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4660039516160</eid>
+              <eid>AAAAA0DB_AAAAA0DB</eid>
             </Arpeggio>
           </Chord>
         </voice>
         <voice>
           <Chord>
-            <eid>4664334483456</eid>
+            <eid>AAAAA4DB_AAAAA4DB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4668629450752</eid>
+              <eid>AAAAA8DB_AAAAA8DB</eid>
               <pitch>60</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4672924418048</eid>
+              <eid>AAAAAAEB_AAAAAAEB</eid>
               <pitch>64</pitch>
               <tpc>18</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4677219385344</eid>
+              <eid>AAAAAEEB_AAAAAEEB</eid>
             </Arpeggio>
           </Chord>
         </voice>
         <voice>
           <Chord>
-            <eid>4681514352640</eid>
+            <eid>AAAAAIEB_AAAAAIEB</eid>
             <durationType>whole</durationType>
             <Note>
-              <eid>4685809319936</eid>
+              <eid>AAAAAMEB_AAAAAMEB</eid>
               <pitch>84</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4690104287232</eid>
+              <eid>AAAAAQEB_AAAAAQEB</eid>
               <pitch>88</pitch>
               <tpc>18</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4694399254528</eid>
+              <eid>AAAAAUEB_AAAAAUEB</eid>
             </Arpeggio>
           </Chord>
         </voice>
@@ -581,83 +581,83 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>4698694221940</eid>
+            <eid>0BAAAYEB_0BAAAYEB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4702989189140</eid>
+              <eid>UAAAAcEB_UAAAAcEB</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
             <Note>
-              <eid>4707284156436</eid>
+              <eid>UAAAAgEB_UAAAAgEB</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
             </Note>
             <Note>
-              <eid>4711579123732</eid>
+              <eid>UAAAAkEB_UAAAAkEB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Arpeggio>
-              <eid>4715874091023</eid>
+              <eid>PAAAAoEB_PAAAAoEB</eid>
               <subtype>0</subtype>
               <span>5</span>
             </Arpeggio>
           </Chord>
           <Rest>
-            <eid>4720169058330</eid>
+            <eid>aAAAAsEB_aAAAAsEB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>4724464025626</eid>
+            <eid>aAAAAwEB_aAAAAwEB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4728758992922</eid>
+            <eid>aAAAA0EB_aAAAA0EB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4733053960218</eid>
+            <eid>aAAAA4EB_aAAAA4EB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
         <voice>
           <Chord>
-            <eid>4737348927604</eid>
+            <eid>0BAAA8EB_0BAAA8EB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4741643894804</eid>
+              <eid>UAAAAAFB_UAAAAAFB</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
               <visible>0</visible>
             </Note>
             <Note>
-              <eid>4745938862100</eid>
+              <eid>UAAAAEFB_UAAAAEFB</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
               <visible>0</visible>
             </Note>
             <Note>
-              <eid>4750233829396</eid>
+              <eid>UAAAAIFB_UAAAAIFB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
               <visible>0</visible>
             </Note>
           </Chord>
           <Rest>
-            <eid>4754528796698</eid>
+            <eid>aAAAAMFB_aAAAAMFB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>4758823763994</eid>
+            <eid>aAAAAQFB_aAAAAQFB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4763118731290</eid>
+            <eid>aAAAAUFB_aAAAAUFB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4767413698586</eid>
+            <eid>aAAAAYFB_aAAAAYFB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
@@ -665,84 +665,84 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>4771708665972</eid>
+            <eid>0BAAAcFB_0BAAAcFB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4776003633172</eid>
+              <eid>UAAAAgFB_UAAAAgFB</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
             <Note>
-              <eid>4780298600468</eid>
+              <eid>UAAAAkFB_UAAAAkFB</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
               <visible>0</visible>
             </Note>
             <Note>
-              <eid>4784593567764</eid>
+              <eid>UAAAAoFB_UAAAAoFB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Arpeggio>
-              <eid>4788888535055</eid>
+              <eid>PAAAAsFB_PAAAAsFB</eid>
               <subtype>0</subtype>
               <span>5</span>
             </Arpeggio>
           </Chord>
           <Rest>
-            <eid>4793183502362</eid>
+            <eid>aAAAAwFB_aAAAAwFB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>4797478469658</eid>
+            <eid>aAAAA0FB_aAAAA0FB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4801773436954</eid>
+            <eid>aAAAA4FB_aAAAA4FB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4806068404250</eid>
+            <eid>aAAAA8FB_aAAAA8FB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
         <voice>
           <Chord>
-            <eid>4810363371636</eid>
+            <eid>0BAAAAGB_0BAAAAGB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4814658338836</eid>
+              <eid>UAAAAEGB_UAAAAEGB</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
               <visible>0</visible>
             </Note>
             <Note>
-              <eid>4818953306132</eid>
+              <eid>UAAAAIGB_UAAAAIGB</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
               <visible>0</visible>
             </Note>
             <Note>
-              <eid>4823248273428</eid>
+              <eid>UAAAAMGB_UAAAAMGB</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
               <visible>0</visible>
             </Note>
           </Chord>
           <Rest>
-            <eid>4827543240730</eid>
+            <eid>aAAAAQGB_aAAAAQGB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>4831838208026</eid>
+            <eid>aAAAAUGB_aAAAAUGB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4836133175322</eid>
+            <eid>aAAAAYGB_aAAAAYGB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4840428142618</eid>
+            <eid>aAAAAcGB_aAAAAcGB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
@@ -755,15 +755,15 @@
             <concertClefType>F</concertClefType>
             <transposingClefType>F</transposingClefType>
             <isHeader>1</isHeader>
-            <eid>4844723109888</eid>
+            <eid>AAAAAgGB_AAAAAgGB</eid>
           </Clef>
           <TimeSig>
-            <eid>4849018077184</eid>
+            <eid>AAAAAkGB_AAAAAkGB</eid>
             <sigN>4</sigN>
             <sigD>4</sigD>
           </TimeSig>
           <Rest>
-            <eid>4853313044480</eid>
+            <eid>AAAAAoGB_AAAAAoGB</eid>
             <durationType>measure</durationType>
             <duration>1/1</duration>
           </Rest>
@@ -772,7 +772,7 @@
       <Measure>
         <voice>
           <Rest>
-            <eid>4857608011776</eid>
+            <eid>AAAAAsGB_AAAAAsGB</eid>
             <durationType>measure</durationType>
             <duration>1/1</duration>
           </Rest>
@@ -781,7 +781,7 @@
       <Measure>
         <voice>
           <Rest>
-            <eid>4861902979072</eid>
+            <eid>AAAAAwGB_AAAAAwGB</eid>
             <durationType>measure</durationType>
             <duration>1/1</duration>
           </Rest>
@@ -790,7 +790,7 @@
       <Measure>
         <voice>
           <Rest>
-            <eid>4866197946368</eid>
+            <eid>AAAAA0GB_AAAAA0GB</eid>
             <durationType>measure</durationType>
             <duration>1/1</duration>
           </Rest>
@@ -799,46 +799,46 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>4870492913664</eid>
+            <eid>AAAAA4GB_AAAAA4GB</eid>
             <durationType>half</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4874787880960</eid>
+              <eid>AAAAA8GB_AAAAA8GB</eid>
               <pitch>48</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4879082848256</eid>
+              <eid>AAAAAAHB_AAAAAAHB</eid>
               <pitch>52</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4883377815552</eid>
+              <eid>AAAAAEHB_AAAAAEHB</eid>
               <pitch>55</pitch>
               <tpc>15</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4887672782848</eid>
+              <eid>AAAAAIHB_AAAAAIHB</eid>
               <span>2</span>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4891967750144</eid>
+            <eid>AAAAAMHB_AAAAAMHB</eid>
             <durationType>half</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4896262717440</eid>
+              <eid>AAAAAQHB_AAAAAQHB</eid>
               <pitch>48</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4900557684736</eid>
+              <eid>AAAAAUHB_AAAAAUHB</eid>
               <pitch>52</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4904852652032</eid>
+              <eid>AAAAAYHB_AAAAAYHB</eid>
               <pitch>55</pitch>
               <tpc>15</tpc>
             </Note>
@@ -846,21 +846,21 @@
         </voice>
         <voice>
           <Chord>
-            <eid>4909147619328</eid>
+            <eid>AAAAAcHB_AAAAAcHB</eid>
             <durationType>half</durationType>
             <StemDirection>down</StemDirection>
             <Note>
-              <eid>4913442586624</eid>
+              <eid>AAAAAgHB_AAAAAgHB</eid>
               <pitch>40</pitch>
               <tpc>18</tpc>
             </Note>
           </Chord>
           <Chord>
-            <eid>4917737553920</eid>
+            <eid>AAAAAkHB_AAAAAkHB</eid>
             <durationType>half</durationType>
             <StemDirection>down</StemDirection>
             <Note>
-              <eid>4922032521216</eid>
+              <eid>AAAAAoHB_AAAAAoHB</eid>
               <pitch>40</pitch>
               <tpc>18</tpc>
             </Note>
@@ -870,55 +870,55 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>4926327488512</eid>
+            <eid>AAAAAsHB_AAAAAsHB</eid>
             <durationType>quarter</durationType>
             <StemDirection>up</StemDirection>
             <Note>
-              <eid>4930622455808</eid>
+              <eid>AAAAAwHB_AAAAAwHB</eid>
               <pitch>53</pitch>
               <tpc>13</tpc>
             </Note>
             <Note>
-              <eid>4934917423104</eid>
+              <eid>AAAAA0HB_AAAAA0HB</eid>
               <pitch>57</pitch>
               <tpc>17</tpc>
             </Note>
             <Arpeggio>
               <subtype>0</subtype>
-              <eid>4939212390400</eid>
+              <eid>AAAAA4HB_AAAAA4HB</eid>
               <span>2</span>
             </Arpeggio>
           </Chord>
           <Rest>
-            <eid>4943507357696</eid>
+            <eid>AAAAA8HB_AAAAA8HB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4947802324992</eid>
+            <eid>AAAAAAIB_AAAAAAIB</eid>
             <durationType>half</durationType>
           </Rest>
           <BarLine>
             <subtype>end</subtype>
-            <eid>4952097292288</eid>
+            <eid>AAAAAEIB_AAAAAEIB</eid>
           </BarLine>
         </voice>
         <voice>
           <Chord>
-            <eid>4956392259584</eid>
+            <eid>AAAAAIIB_AAAAAIIB</eid>
             <durationType>quarter</durationType>
             <StemDirection>down</StemDirection>
             <Note>
-              <eid>4960687226880</eid>
+              <eid>AAAAAMIB_AAAAAMIB</eid>
               <pitch>47</pitch>
               <tpc>19</tpc>
             </Note>
           </Chord>
           <Rest>
-            <eid>4964982194176</eid>
+            <eid>AAAAAQIB_AAAAAQIB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4969277161472</eid>
+            <eid>AAAAAUIB_AAAAAUIB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
@@ -926,38 +926,38 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>4973572128884</eid>
+            <eid>0BAAAYIB_0BAAAYIB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4977867096084</eid>
+              <eid>UAAAAcIB_UAAAAcIB</eid>
               <pitch>48</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>4982162063380</eid>
+              <eid>UAAAAgIB_UAAAAgIB</eid>
               <pitch>52</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>4986457030676</eid>
+              <eid>UAAAAkIB_UAAAAkIB</eid>
               <pitch>55</pitch>
               <tpc>15</tpc>
             </Note>
           </Chord>
           <Rest>
-            <eid>4990751997978</eid>
+            <eid>aAAAAoIB_aAAAAoIB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>4995046965274</eid>
+            <eid>aAAAAsIB_aAAAAsIB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4999341932570</eid>
+            <eid>aAAAAwIB_aAAAAwIB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>5003636899866</eid>
+            <eid>aAAAA0IB_aAAAA0IB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
@@ -965,38 +965,38 @@
       <Measure>
         <voice>
           <Chord>
-            <eid>5007931867252</eid>
+            <eid>0BAAA4IB_0BAAA4IB</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>5012226834452</eid>
+              <eid>UAAAA8IB_UAAAA8IB</eid>
               <pitch>48</pitch>
               <tpc>14</tpc>
             </Note>
             <Note>
-              <eid>5016521801748</eid>
+              <eid>UAAAAAJB_UAAAAAJB</eid>
               <pitch>52</pitch>
               <tpc>18</tpc>
             </Note>
             <Note>
-              <eid>5020816769044</eid>
+              <eid>UAAAAEJB_UAAAAEJB</eid>
               <pitch>55</pitch>
               <tpc>15</tpc>
             </Note>
           </Chord>
           <Rest>
-            <eid>5025111736346</eid>
+            <eid>aAAAAIJB_aAAAAIJB</eid>
             <durationType>16th</durationType>
           </Rest>
           <Rest>
-            <eid>5029406703642</eid>
+            <eid>aAAAAMJB_aAAAAMJB</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>5033701670938</eid>
+            <eid>aAAAAQJB_aAAAAQJB</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>5037996638234</eid>
+            <eid>aAAAAUJB_aAAAAUJB</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
