@@ -86,7 +86,8 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.pianomania_auto_layout_keeps_line_text_inside_its_measure:"
     "Mei_Tests.pianomania_cross_staff_rest_clears_destination_chord:"
     "Mei_Tests.pianomania_staff_centered_dynamic_keeps_cross_staff_beam_margin:"
-    "Mei_Tests.mei_export_snapped_expression_carries_text_origin"
+    "Mei_Tests.mei_export_snapped_expression_carries_text_origin:"
+    "Mei_Tests.mei_pianomania_rolled_grace_chord_exports_its_own_notes"
 )
 
 add_test(
@@ -100,5 +101,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*42 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*43 tests"
 )
