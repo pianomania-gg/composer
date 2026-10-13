@@ -40,9 +40,14 @@
 #include <QTemporaryDir>
 
 #include "engraving/dom/masterscore.h"
+#include "engraving/dom/measure.h"
 #include "engraving/dom/chord.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/tremolotwochord.h"
+#include "engraving/compat/midi/compatmidirenderinternal.h"
+#include "engraving/compat/midi/compatmidirender.h"
+#include "importexport/mei/pmmeiexport.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/staff.h"
 #include "engraving/pm/pmlayout.h"
@@ -1453,3 +1458,337 @@ INSTANTIATE_TEST_SUITE_P(
         return info.param.name;
     }
     );
+
+namespace {
+struct TremoloExportCase {
+    const char* name;
+    const char* fixture;
+    int written;
+    int audible;
+    int step;
+    bool twoChord;
+};
+}
+
+class Project_PianomaniaTremoloExportTest : public ::testing::TestWithParam<TremoloExportCase> {};
+
+// Test value: Detects missing playable tremolo owners and generated-attack identity/timing drift at the coordinated MEI/MIDI/manifest boundary.
+TEST_P(Project_PianomaniaTremoloExportTest, PreservesEveryWrittenOwnerAndScheduledAttack)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const TremoloExportCase& test = GetParam();
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + muse::String::fromUtf8("/src/project/tests/data/") + muse::String::fromUtf8(test.fixture);
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    std::map<std::string, bool> originalFlags;
+    score->scanElements([&originalFlags](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote()) {
+            const auto* note = mu::engraving::toNote(item);
+            originalFlags.emplace(note->eid().toStdString(), note->play());
+        }
+    });
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixture), muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), static_cast<size_t>(test.written));
+    ASSERT_FALSE(result.val.files.empty());
+    const auto& midi = result.val.files.front();
+    ASSERT_EQ(midi.audibleEvents.size(), static_cast<size_t>(test.audible));
+    std::map<std::string, int> ordinaryByOwner;
+    std::map<std::string, int> generatedByOwner;
+    std::set<std::string> declaredOwners;
+    for (const auto& event : result.val.canonicalEvents) {
+        declaredOwners.insert(event.scoreEventId);
+    }
+    for (const auto& event : midi.audibleEvents) {
+        ASSERT_EQ(event.origins.size(), 1u);
+        const auto& origin = event.origins.front();
+        EXPECT_EQ(declaredOwners.count(origin.scoreEventId), 1u);
+        EXPECT_EQ(origin.nonVisualOrnament, event.noteOffVelocity == 127);
+        if (event.noteOffVelocity == 127) {
+            ++generatedByOwner[origin.scoreEventId];
+        } else {
+            ++ordinaryByOwner[origin.scoreEventId];
+        }
+        EXPECT_EQ(event.startTick % test.step, 0) << test.name;
+        EXPECT_GT(event.endTick, event.startTick);
+    }
+    for (const auto& owner : result.val.canonicalEvents) {
+        EXPECT_EQ(ordinaryByOwner[owner.scoreEventId], 1) << owner.scoreEventId;
+    }
+    EXPECT_EQ(static_cast<int>(ordinaryByOwner.size()), test.written);
+    const QJsonObject manifest = QJsonDocument::fromJson(QByteArray::fromStdString(result.val.manifestJson)).object();
+    EXPECT_EQ(manifest.value("canonical_events").toArray().size(), test.written);
+    EXPECT_EQ(manifest.value("ornament_definitions").toArray().size(), test.audible - test.written);
+    QFile meiFile(directory.filePath("song.mei"));
+    ASSERT_TRUE(meiFile.open(QIODevice::ReadOnly));
+    const QString mei = QString::fromUtf8(meiFile.readAll());
+    EXPECT_TRUE(mei.contains(test.twoChord ? "<fTrem" : "<bTrem"));
+    EXPECT_TRUE(mei.contains("pm:tremolo-geometry-version=\"1\""));
+    EXPECT_TRUE(mei.contains(test.step == 480 ? "pm:tremolo-glyph=\"buzzRoll\"" : "pm:tremolo-polygons="));
+    if (test.twoChord && test.written == 6) {
+        std::map<int, std::string> sharedOwners;
+        for (const auto& owner : result.val.canonicalEvents) {
+            if (owner.heardMidiKey == 72) {
+                sharedOwners.emplace(owner.idx, owner.scoreEventId);
+            }
+        }
+        ASSERT_EQ(sharedOwners.size(), 2u);
+        ASSERT_EQ(sharedOwners.count(0), 1u);
+        ASSERT_EQ(sharedOwners.count(1), 1u);
+        for (const auto& event : midi.audibleEvents) {
+            if (event.heardMidiKey != 72 || event.noteOffVelocity == 127) {
+                continue;
+            }
+            EXPECT_EQ(event.origins.front().scoreEventId, sharedOwners.at(event.startTick == 0 ? 0 : 1));
+            EXPECT_TRUE(event.startTick == 0 || event.startTick == test.step);
+        }
+    }
+    std::map<std::string, bool> finalFlags;
+    score->scanElements([&finalFlags](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote()) {
+            const auto* note = mu::engraving::toNote(item);
+            finalFlags.emplace(note->eid().toStdString(), note->play());
+        }
+    });
+    EXPECT_EQ(finalFlags, originalFlags);
+}
+
+INSTANTIATE_TEST_SUITE_P(AllMeasuredStrokesAndDeclaredBuzz, Project_PianomaniaTremoloExportTest,
+    ::testing::Values(
+        TremoloExportCase{ "SingleR8", "pianomania-tremolo-single-r8.mscx", 3, 6, 240, false },
+        TremoloExportCase{ "SingleR16", "pianomania-tremolo-single-r16.mscx", 3, 12, 120, false },
+        TremoloExportCase{ "SingleR32", "pianomania-tremolo-single-r32.mscx", 3, 24, 60, false },
+        TremoloExportCase{ "SingleR64", "pianomania-tremolo-single-r64.mscx", 3, 48, 30, false },
+        TremoloExportCase{ "SingleBuzz", "pianomania-tremolo-single-buzzroll.mscx", 3, 3, 480, false },
+        TremoloExportCase{ "TwoC8", "pianomania-tremolo-two-c8.mscx", 6, 24, 240, true },
+        TremoloExportCase{ "TwoC16", "pianomania-tremolo-two-c16.mscx", 6, 48, 120, true },
+        TremoloExportCase{ "TwoC32", "pianomania-tremolo-two-c32.mscx", 6, 96, 60, true },
+        TremoloExportCase{ "TwoC64", "pianomania-tremolo-two-c64.mscx", 6, 192, 30, true },
+        TremoloExportCase{ "UnequalA2B3", "pianomania-tremolo-two-unequal-A2-B3.mscx", 5, 40, 120, true },
+        TremoloExportCase{ "UnequalA3B2", "pianomania-tremolo-two-unequal-A3-B2.mscx", 5, 40, 120, true },
+        TremoloExportCase{ "DisabledPartnerFlags", "pianomania-tremolo-two-disabled-B-C5.mscx", 6, 48, 120, true }),
+    [](const ::testing::TestParamInfo<TremoloExportCase>& info) { return info.param.name; });
+
+// Test value: Detects successful public or coordinated export of an unresolved playable tremolo partner before partial MEI can be accepted.
+TEST(Project_PianomaniaCoordinatedExportTest, MissingTremoloPartnerRejectsPublicAndCoordinatedExport)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/project/tests/data/pianomania-tremolo-two-c16.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    mu::engraving::TremoloTwoChord* tremolo = nullptr;
+    score->scanElements([&tremolo](mu::engraving::EngravingItem* item) {
+        if (!tremolo && item && item->isNote()) {
+            const auto* chord = mu::engraving::toNote(item)->chord();
+            if (chord) tremolo = chord->tremoloTwoChord();
+        }
+    });
+    ASSERT_NE(tremolo, nullptr);
+    auto* originalPartner = tremolo->chord2();
+    ASSERT_NE(originalPartner, nullptr);
+    tremolo->setChord2(nullptr);
+    std::string mei;
+    EXPECT_FALSE(mu::iex::mei::pmWriteMeiToString(score.get(), false, mei));
+    EXPECT_TRUE(mei.empty());
+    QTemporaryDir directory;
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixture), muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    EXPECT_FALSE(result.ret);
+    EXPECT_FALSE(QFileInfo::exists(directory.filePath("song.mei")));
+    tremolo->setChord2(originalPartner);
+}
+
+// Test value: Detects stale copied timing after source duration edits or orphan note cloning at the public tremolo-owner resolution boundary.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloOwnerRejectsStaleTimingAndOrphanClone)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/project/tests/data/pianomania-tremolo-single-r64.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    std::string mei;
+    ASSERT_TRUE(mu::iex::mei::pmWriteMeiToString(score.get(), false, mei));
+    mu::engraving::Note* emitter = nullptr;
+    score->scanElements([&emitter](mu::engraving::EngravingItem* item) {
+        if (!emitter && item && item->isNote()) {
+            auto* candidate = mu::engraving::toNote(item);
+            if (!candidate->playEvents().empty() && candidate->playEvents().front().tremoloWrittenOwner().captured) {
+                emitter = candidate;
+            }
+        }
+    });
+    ASSERT_NE(emitter, nullptr);
+    const mu::engraving::NoteEvent captured = emitter->playEvents().front();
+    EXPECT_EQ(mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(emitter, captured), emitter);
+    EXPECT_EQ(captured.tremoloWrittenOwner().timing.start.ticks(), 0);
+    EXPECT_EQ(captured.tremoloWrittenOwner().timing.end.ticks(), 30);
+    std::unique_ptr<mu::engraving::Note> orphan(emitter->clone());
+    EXPECT_EQ(mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(orphan.get(), captured), nullptr);
+    auto* chord = emitter->chord();
+    const auto originalSpan = chord->ticks();
+    chord->setTicks(originalSpan / 2);
+    EXPECT_EQ(mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(emitter, captured), nullptr);
+    chord->setTicks(originalSpan);
+    emitter->setPlay(false);
+    EXPECT_EQ(mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(emitter, captured), nullptr);
+    emitter->setPlay(true);
+    mu::engraving::CompatMidiRender::createPlayEvents(score.get());
+    ASSERT_FALSE(emitter->playEvents().empty());
+    EXPECT_EQ(mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(emitter, emitter->playEvents().front()), emitter);
+}
+
+// Test value: Detects loss of the existing duration gate or collapsed rational attack boundaries in transient timing consumed by MIDI export.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloRationalBoundariesRespectDurationGateAndRejectCollapse)
+{
+    using namespace mu::engraving;
+    uint64_t sequence = 1;
+    NoteEvent event(0, 0, 62);
+    event.setTremoloWrittenOwner(EID::newUniqueTestMode(sequence), EID::newUniqueTestMode(sequence),
+                                 EID::newUniqueTestMode(sequence), true, true);
+    NoteEvent::TremoloTiming timing;
+    timing.start = Fraction::fromTicks(0);
+    timing.end = Fraction::fromTicks(30);
+    event.setTremoloTiming(timing);
+    event.setLen(37);
+    event.applyTremoloDurationGate(62, 60);
+    EXPECT_TRUE(event.tremoloWrittenOwner().isValid());
+    EXPECT_EQ(event.tremoloWrittenOwner().timing.end.ticks(), 18);
+    for (int ordinal = 0; ordinal < 3; ++ordinal) {
+        NoteEvent nondivisible(0, 0, 333);
+        nondivisible.setTremoloWrittenOwner(EID::newUniqueTestMode(sequence), EID::newUniqueTestMode(sequence),
+                                            EID::newUniqueTestMode(sequence), true, true);
+        timing.start = Fraction::fromTicks(100) * Fraction(ordinal, 3);
+        timing.end = Fraction::fromTicks(100) * Fraction(ordinal + 1, 3);
+        nondivisible.setTremoloTiming(timing);
+        const int starts[] = { 0, 33, 67 };
+        const int ends[] = { 33, 67, 100 };
+        EXPECT_EQ(nondivisible.tremoloWrittenOwner().timing.start.ticks(), starts[ordinal]);
+        EXPECT_EQ(nondivisible.tremoloWrittenOwner().timing.end.ticks(), ends[ordinal]);
+    }
+    const Fraction nestedSpan = Fraction::fromTicks(480) * Fraction(2, 3) * Fraction(2, 7);
+    const int nestedBoundaries[] = { 0, 23, 46, 69, 91 };
+    for (int ordinal = 0; ordinal < 4; ++ordinal) {
+        timing.start = nestedSpan * Fraction(ordinal, 4);
+        timing.end = nestedSpan * Fraction(ordinal + 1, 4);
+        event.setTremoloTiming(timing);
+        EXPECT_EQ(event.tremoloWrittenOwner().timing.start.ticks(), nestedBoundaries[ordinal]);
+        EXPECT_EQ(event.tremoloWrittenOwner().timing.end.ticks(), nestedBoundaries[ordinal + 1]);
+    }
+    timing.start = Fraction();
+    timing.end = Fraction::fromTicks(1) / 3;
+    event.setTremoloTiming(timing);
+    EXPECT_FALSE(event.tremoloWrittenOwner().isValid());
+}
+
+// Test value: Detects partner-held release conversion using the emitter's held state instead of the explicit written owner in coordinated MIDI.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloPartnerHeldReleaseIsHalfOpenWithoutChangingOrdinaryIndices)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/project/tests/data/pianomania-tremolo-two-c16.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    mu::engraving::TremoloTwoChord* tremolo = nullptr;
+    score->scanElements([&tremolo](mu::engraving::EngravingItem* item) {
+        if (!tremolo && item && item->isNote()) {
+            const auto* chord = mu::engraving::toNote(item)->chord();
+            if (chord) tremolo = chord->tremoloTwoChord();
+        }
+    });
+    ASSERT_NE(tremolo, nullptr);
+    ASSERT_NE(tremolo->chord2(), nullptr);
+    ASSERT_FALSE(tremolo->chord2()->notes().empty());
+    auto* heldOwner = tremolo->chord2()->notes().front();
+    heldOwner->setPianomaniaHeldNote(true);
+    QTemporaryDir directory;
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixture), muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_FALSE(result.val.files.empty());
+    int heldOrdinary = 0;
+    for (const auto& event : result.val.files.front().audibleEvents) {
+        if (event.heardMidiKey == heldOwner->ppitch() && event.startTick == 120) {
+            EXPECT_EQ(event.endTick, 240);
+            EXPECT_NE(event.noteOffVelocity, 127);
+            ++heldOrdinary;
+        }
+    }
+    EXPECT_EQ(heldOrdinary, 1);
+}
+
+// Test value: Detects lost tuplet nesting or invalid explicit partner timing at the public MEI export boundary for an existing measured tremolo score.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloTupletFixtureRetainsOwnersAndExactBoundaries)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/importexport/midi/tests/midiexport_data/testMultiNoteTremoloTuplet.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    std::string mei;
+    ASSERT_TRUE(mu::iex::mei::pmWriteMeiToString(score.get(), false, mei));
+    EXPECT_NE(mei.find("<tuplet"), std::string::npos);
+    EXPECT_NE(mei.find("<fTrem"), std::string::npos);
+    int capturedCount = 0;
+    score->scanElements([&capturedCount](mu::engraving::EngravingItem* item) {
+        if (!item || !item->isNote()) {
+            return;
+        }
+        const auto* emitter = mu::engraving::toNote(item);
+        for (const auto& event : emitter->playEvents()) {
+            if (!event.tremoloWrittenOwner().captured) {
+                continue;
+            }
+            ++capturedCount;
+            const auto* owner = mu::engraving::CompatMidiRendererInternal::resolveTremoloOwnerNote(emitter, event);
+            EXPECT_NE(owner, nullptr);
+            EXPECT_GT(event.tremoloWrittenOwner().timing.end.ticks(), event.tremoloWrittenOwner().timing.start.ticks());
+            if (owner) {
+                EXPECT_TRUE(mu::engraving::CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(owner).has_value());
+            }
+        }
+    });
+    EXPECT_GT(capturedCount, 0);
+}
+
+// Test value: Detects repeated tremolo attacks losing explicit ordinary/generated owner parity when canonical source timing gains traversal offsets.
+TEST(Project_PianomaniaCoordinatedExportTest, TremoloRepeatsPreserveOwnerParityAndOffsetOnce)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixture = muse::String::fromUtf8(project_test_DATA_ROOT)
+        + u"/src/project/tests/data/pianomania-tremolo-two-c16.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixture, true));
+    ASSERT_NE(score, nullptr);
+    auto* measure = score->firstMeasure();
+    ASSERT_NE(measure, nullptr);
+    measure->setRepeatStart(true);
+    measure->setRepeatEnd(true);
+    measure->setRepeatCount(2);
+    score->setPlaylistDirty();
+    QTemporaryDir directory;
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixture), muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.files.size(), 2u);
+    EXPECT_EQ(result.val.canonicalEvents.size(), 6u);
+    EXPECT_EQ(result.val.files[0].audibleEvents.size(), 48u);
+    EXPECT_EQ(result.val.files[1].audibleEvents.size(), 96u);
+    int ordinary = 0;
+    for (const auto& event : result.val.files[1].audibleEvents) {
+        EXPECT_EQ(event.startTick % 120, 0);
+        EXPECT_TRUE(event.startTick < 3840);
+        if (event.noteOffVelocity != 127) {
+            ++ordinary;
+            EXPECT_TRUE(event.startTick == 0 || event.startTick == 120 || event.startTick == 1920 || event.startTick == 2040);
+        }
+    }
+    EXPECT_EQ(ordinary, 12);
+}

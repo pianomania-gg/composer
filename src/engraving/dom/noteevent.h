@@ -27,6 +27,9 @@
 #include <algorithm>
 
 #include "global/allocator.h"
+#include "../infrastructure/eid.h"
+#include "../types/fraction.h"
+#include <limits>
 
 namespace mu::engraving {
 //---------------------------------------------------------
@@ -36,6 +39,41 @@ namespace mu::engraving {
 class NoteEvent
 {
 public:
+    struct TremoloTiming {
+        Fraction emitterTick;
+        Fraction emitterNominalSpan;
+        Fraction emitterActualSpan;
+        Fraction partnerActualSpan;
+        Fraction ownerTick;
+        Fraction ownerActualSpan;
+        Fraction start;
+        Fraction end; // Absolute source time; half-open before MIDI release conversion.
+        int strokes = 0;
+        int hooks = 0;
+        int eventLength = 0;
+        int eventOntime = 0;
+        int eventOffset = 0;
+        bool ownerHeld = false;
+        bool captured = false;
+        bool valid = false;
+    };
+
+    struct TremoloWrittenOwner {
+        EID noteId = EID::invalid();
+        EID chordId = EID::invalid();
+        EID tremoloId = EID::invalid();
+        bool captured = false;
+        bool notePlayable = false;
+        bool tremoloPlayable = false;
+        TremoloTiming timing;
+
+        bool isValid() const
+        {
+            return captured && noteId.isValid() && chordId.isValid() && tremoloId.isValid()
+                   && timing.captured && timing.valid;
+        }
+    };
+
     constexpr static int NOTE_LENGTH = 1000;
     constexpr static double GHOST_VELOCITY_MULTIPLIER = 0.6;
     constexpr static double DEFAULT_VELOCITY_MULTIPLIER = 1.0;
@@ -60,6 +98,48 @@ public:
     void setOffset(int v) { m_offset = v; }
     void setSlide(bool slide) { m_slide = slide; }
 
+    // Derived metadata is not serialized. Resolve these EIDs in the current score
+    // before using copied or cached events; no source-score pointers are retained.
+    const TremoloWrittenOwner& tremoloWrittenOwner() const { return m_tremoloWrittenOwner; }
+    void setTremoloWrittenOwner(const EID& noteId, const EID& chordId, const EID& tremoloId,
+                               bool notePlayable, bool tremoloPlayable)
+    {
+        m_tremoloWrittenOwner = {};
+        m_tremoloWrittenOwner.noteId = noteId;
+        m_tremoloWrittenOwner.chordId = chordId;
+        m_tremoloWrittenOwner.tremoloId = tremoloId;
+        m_tremoloWrittenOwner.captured = true;
+        m_tremoloWrittenOwner.notePlayable = notePlayable;
+        m_tremoloWrittenOwner.tremoloPlayable = tremoloPlayable;
+    }
+
+    void setTremoloTiming(TremoloTiming timing)
+    {
+        const Fraction maximum = Fraction::fromTicks(std::numeric_limits<int>::max());
+        timing.captured = true;
+        timing.eventLength = m_len;
+        timing.eventOntime = m_ontime;
+        timing.eventOffset = m_offset;
+        timing.valid = timing.start.isValid() && timing.end.isValid()
+                       && timing.start >= Fraction() && timing.end <= maximum && timing.end > timing.start
+                       && timing.end.ticks() > timing.start.ticks() && m_len > 0;
+        m_tremoloWrittenOwner.timing = timing;
+    }
+
+    void applyTremoloDurationGate(int previousLength, int gateTime)
+    {
+        auto timing = m_tremoloWrittenOwner.timing;
+        if (!timing.valid || previousLength <= 0 || timing.eventLength <= 0 || gateTime <= 0
+            || m_ontime != timing.eventOntime || m_offset != timing.eventOffset) {
+            timing.valid = false;
+            m_tremoloWrittenOwner.timing = timing;
+            return;
+        }
+        timing.end = timing.start + (timing.end - timing.start)
+                     * Fraction(previousLength, timing.eventLength) * Fraction(gateTime, 100);
+        setTremoloTiming(timing);
+    }
+
     bool operator==(const NoteEvent&) const;
 
 private:
@@ -70,6 +150,7 @@ private:
     bool m_play = true; // when 'false', note event is used only for length calculation
     int m_offset = 0;
     bool m_slide = false; // event is slide or glissando
+    TremoloWrittenOwner m_tremoloWrittenOwner;
 };
 
 //---------------------------------------------------------

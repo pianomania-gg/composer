@@ -390,7 +390,20 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
 
         const int noteGateTime = note->pianomaniaHeldNote() ? 100 : gateTime;
         for (NoteEvent& e : *el) {
-            e.setLen(e.len() * noteGateTime / 100);
+            if (e.tremoloWrittenOwner().captured) {
+                const Note* owner = CompatMidiRendererInternal::resolveTremoloOwnerNote(note, e);
+                const int ownerGateTime = owner && owner->pianomaniaHeldNote() ? 100 : gateTime;
+                const int previousLength = e.len();
+                const int64_t gatedLength = static_cast<int64_t>(previousLength) * ownerGateTime / 100;
+                if (!owner || gatedLength <= 0 || gatedLength > std::numeric_limits<int>::max()) {
+                    e.applyTremoloDurationGate(previousLength, 0);
+                } else {
+                    e.setLen(static_cast<int>(gatedLength));
+                    e.applyTremoloDurationGate(previousLength, ownerGateTime);
+                }
+            } else {
+                e.setLen(e.len() * noteGateTime / 100);
+            }
         }
 
         std::sort(el->begin(), el->end(), [](const NoteEvent& left, const NoteEvent& right) {
@@ -470,6 +483,51 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
 
     TremoloAdapter tremolo = TremoloAdapter(chord->tremoloSingleChord(), chord->tremoloTwoChord());
 
+    auto captureWrittenOwner = [&chord, &tremolo](NoteEvent& event, const Note* note,
+                                                int group, int count, const Fraction& span) {
+        const Chord* ownerChord = note ? note->chord() : nullptr;
+        const EngravingItem* tremoloItem = tremolo.singleChord
+                                          ? static_cast<const EngravingItem*>(tremolo.singleChord)
+                                          : static_cast<const EngravingItem*>(tremolo.twoChord);
+        const bool ownerIsEndpoint = tremolo.singleChord ? ownerChord == chord
+                                     : tremolo.twoChord && chord == tremolo.twoChord->chord1()
+                                     && (ownerChord == tremolo.twoChord->chord1() || ownerChord == tremolo.twoChord->chord2());
+        const bool ownerIsBound = ownerChord && tremoloItem && ownerIsEndpoint
+                                  && ownerChord->score() == chord->score() && tremoloItem->score() == chord->score()
+                                  && std::find(ownerChord->notes().begin(), ownerChord->notes().end(), note)
+                                     != ownerChord->notes().end();
+        const bool tremoloPlayable = tremolo.singleChord ? tremolo.singleChord->playTremolo()
+                                     : tremolo.twoChord && tremolo.twoChord->playTremolo();
+        if (ownerIsBound) {
+            // Imported legacy scores need stable native identities before event ownership is captured.
+            if (!note->eid().isValid()) note->assignNewEID();
+            if (!ownerChord->eid().isValid()) ownerChord->assignNewEID();
+            if (!tremoloItem->eid().isValid()) tremoloItem->assignNewEID();
+        }
+        event.setTremoloWrittenOwner(ownerIsBound ? note->eid() : EID::invalid(),
+                                    ownerIsBound ? ownerChord->eid() : EID::invalid(),
+                                    tremoloItem ? tremoloItem->eid() : EID::invalid(),
+                                    ownerIsBound && note->play(), tremoloPlayable);
+        NoteEvent::TremoloTiming timing;
+        timing.emitterTick = chord->tick();
+        timing.emitterNominalSpan = chord->ticks();
+        timing.emitterActualSpan = chord->actualTicks();
+        timing.partnerActualSpan = tremolo.twoChord && tremolo.twoChord->chord2()
+                                   ? tremolo.twoChord->chord2()->actualTicks() : Fraction();
+        timing.ownerTick = ownerIsBound ? ownerChord->tick() : Fraction();
+        timing.ownerActualSpan = ownerIsBound ? ownerChord->actualTicks() : Fraction();
+        timing.strokes = tremolo.lines();
+        timing.hooks = chord->durationType().hooks();
+        timing.ownerHeld = ownerIsBound && note->pianomaniaHeldNote();
+        const bool contiguousPair = !tremolo.twoChord || (tremolo.twoChord->chord2()
+                                    && chord->endTick() == tremolo.twoChord->chord2()->tick());
+        if (count > 0 && group >= 0 && group < count && span > Fraction() && contiguousPair) {
+            timing.start = chord->tick() + span * Fraction(group, count);
+            timing.end = chord->tick() + span * Fraction(group + 1, count);
+        }
+        event.setTremoloTiming(timing);
+    };
+
     Segment* seg = chord->segment();
     //TremoloDispatcher* tremolo = chord->tremoloDispatcher();
     int notes = int(chord->notes().size());
@@ -520,10 +578,19 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
         if (c2->isChord()) {
             int notes2 = int(c2->notes().size());
             int tnotes = std::max(notes, notes2);
-            int tticks = chord->ticks().ticks() * 2;           // use twice the size
+            const int64_t totalTicks = static_cast<int64_t>(chord->ticks().ticks()) * 2;
+            if (totalTicks <= 0 || totalTicks > std::numeric_limits<int>::max()) {
+                LOGE() << "TREM_ATTACK_TIMING_INVALID: pair duration outside tick range";
+                return;
+            }
+            int tticks = static_cast<int>(totalTicks); // use twice the size
             int n = tticks / t;
             n /= 2;
             int l = 2000 * t / tticks;
+            if (n <= 0 || l <= 0) {
+                LOGE() << "TREM_ATTACK_TIMING_INVALID: collapsed pair schedule";
+                return;
+            }
             for (int k = 0; k < tnotes; ++k) {
                 NoteEventList* events;
                 if (k < notes) {
@@ -541,12 +608,18 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
                     int dpitch = p2 - p1;
                     for (int i = 0; i < n; ++i) {
                         events->push_back(NoteEvent(0, l * i * 2, l));
+                        captureWrittenOwner(events->back(), chord->notes()[k], i * 2, n * 2,
+                                            chord->actualTicks() + c2->actualTicks());
                         events->push_back(NoteEvent(dpitch, l * i * 2 + l, l));
+                        captureWrittenOwner(events->back(), c2->notes()[k], i * 2 + 1, n * 2,
+                                            chord->actualTicks() + c2->actualTicks());
                     }
                 } else if (k < notes) {
                     // only first chord has note
                     for (int i = 0; i < n; ++i) {
                         events->push_back(NoteEvent(0, l * i * 2, l));
+                        captureWrittenOwner(events->back(), chord->notes()[k], i * 2, n * 2,
+                                            chord->actualTicks() + c2->actualTicks());
                     }
                 } else {
                     // only second chord has note
@@ -556,6 +629,8 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
                     int dpitch = p2 - p1;
                     for (int i = 0; i < n; ++i) {
                         events->push_back(NoteEvent(dpitch, l * i * 2 + l, l));
+                        captureWrittenOwner(events->back(), c2->notes()[k], i * 2 + 1, n * 2,
+                                            chord->actualTicks() + c2->actualTicks());
                     }
                 }
             }
@@ -577,6 +652,10 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
 
         constexpr int fullEventTime = 1000;
         int tremoloTime = fullEventTime * tremoloPartOfChord;
+        if (tremoloEventsSize <= 0 || tremoloTime <= 0 || tremoloTime / tremoloEventsSize <= 0) {
+            LOGE() << "TREM_ATTACK_TIMING_INVALID: collapsed single schedule";
+            return;
+        }
         int tremoloEventStep = tremoloTime / tremoloEventsSize;
         ontime += tremoloTime;
 
@@ -585,6 +664,8 @@ void CompatMidiRender::renderTremolo(Chord* chord, std::vector<NoteEventList>& e
             events->clear();
             for (int i = 0; i < tremoloEventsSize; i++) {
                 events->push_back(NoteEvent(0, tremoloEventStep * i, tremoloEventStep));
+                captureWrittenOwner(events->back(), chord->notes()[k], i, tremoloEventsSize,
+                                    chord->actualTicks() * Fraction(tremoloTime, fullEventTime));
             }
         }
     }

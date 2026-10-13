@@ -65,6 +65,8 @@
 #include "dom/stafftextbase.h"
 #include "dom/swing.h"
 #include "dom/tie.h"
+#include "dom/tremolosinglechord.h"
+#include "dom/tremolotwochord.h"
 #include "dom/trill.h"
 #include "dom/utils.h"
 #include "dom/vibrato.h"
@@ -1214,8 +1216,16 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
     // apply the grace shift twice and can merge the grace attack into a previous
     // same-pitch note.
     const bool anchorGraceToParentBeat = isGrace && (noteParams.graceOffsetOn != 0 || noteParams.graceOffsetOff != 0);
-    int tick1 = (anchorGraceToParentBeat && chord ? chord->tick().ticks() : sourceChord->tick().ticks())
-                + noteParams.tickOffset;
+    const int sourceTick = anchorGraceToParentBeat && chord ? chord->tick().ticks() : sourceChord->tick().ticks();
+    const int64_t tick1Wide = static_cast<int64_t>(sourceTick) + noteParams.tickOffset;
+    const bool hasCapturedTremolo = std::any_of(note->playEvents().cbegin(), note->playEvents().cend(), [](const NoteEvent& event) {
+        return event.tremoloWrittenOwner().captured;
+    });
+    if (hasCapturedTremolo && (tick1Wide < 0 || tick1Wide > std::numeric_limits<int>::max())) {
+        LOGE() << "TREM_ATTACK_TIMING_INVALID: traversal offset outside MIDI tick range";
+        return;
+    }
+    int tick1 = static_cast<int>(tick1Wide);
     const GuitarBend* bendFor = note->bendFor();
     const GuitarBend* bendBack = note->bendBack();
 
@@ -1226,6 +1236,31 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
         normalizeGameplayOrnamentEvents(nel, note, gameplayOrnament, gameplayOrnamentSymId);
     }
     size_t nels = nel.size();
+    std::unordered_map<const Note*, int> tremoloFirstTickByOwner;
+    for (const NoteEvent& event : nel) {
+        if (!event.tremoloWrittenOwner().captured) {
+            continue;
+        }
+        const Note* owner = CompatMidiRendererInternal::resolveTremoloOwnerNote(note, event);
+        if (!owner) {
+            LOGE() << "TREM_ATTACK_OWNER_UNRESOLVED: emitter=" << note->eid();
+            return;
+        }
+        const auto& timing = event.tremoloWrittenOwner().timing;
+        if (timing.eventLength != event.len() || timing.eventOntime != event.ontime()
+            || timing.eventOffset != event.offset()) {
+            LOGE() << "TREM_ATTACK_TIMING_STALE: owner=" << owner->eid();
+            return;
+        }
+        if (owner->play() && tremoloFirstTickByOwner.find(owner) == tremoloFirstTickByOwner.end()) {
+            const auto firstAttack = CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(owner);
+            if (!firstAttack.has_value()) {
+                LOGE() << "TREM_WRITTEN_ATTACK_MISSING: owner=" << owner->eid();
+                return;
+            }
+            tremoloFirstTickByOwner.emplace(owner, *firstAttack);
+        }
+    }
     const bool applyStaccatoDurationRepair = !isInvisibleScoreNote
                                              && !isGrace
                                              && !hasOrnament
@@ -1239,6 +1274,11 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
     }
     for (size_t i = 0; i < nels; ++i) {
         const NoteEvent& e = nel[i];     // we make an explicit const ref, not a const copy.  no need to copy as we won't change the original object.
+        const Note* tremoloOwner = e.tremoloWrittenOwner().captured
+                                  ? CompatMidiRendererInternal::resolveTremoloOwnerNote(note, e) : nullptr;
+        if (tremoloOwner && !tremoloOwner->play()) {
+            continue;
+        }
 
         // skip if note has a tie into it and only one NoteEvent
         // its length was already added to previous note
@@ -1269,9 +1309,27 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
             continue;
         }
 
-        int p = std::clamp(note->ppitch() + e.pitch() + note->harmonicPitchOffset(), 0, 127);
-        int on = tick1 + (ticks * e.ontime()) / 1000;
-        int off = on + (ticks * e.len()) / 1000 - (note->pianomaniaHeldNote() ? 0 : 1);
+        int p = tremoloOwner
+                ? std::clamp(tremoloOwner->ppitch() + tremoloOwner->harmonicPitchOffset(), 0, 127)
+                : std::clamp(note->ppitch() + e.pitch() + note->harmonicPitchOffset(), 0, 127);
+        int on;
+        int off;
+        if (tremoloOwner) {
+            const auto& timing = e.tremoloWrittenOwner().timing;
+            const int64_t exactOn = static_cast<int64_t>(timing.start.ticks()) + noteParams.tickOffset;
+            const int64_t exactEnd = static_cast<int64_t>(timing.end.ticks()) + noteParams.tickOffset;
+            const int releaseTrim = tremoloOwner->pianomaniaHeldNote() ? 0 : 1;
+            if (exactOn < 0 || exactEnd > std::numeric_limits<int>::max()
+                || exactEnd - exactOn <= releaseTrim) {
+                LOGE() << "TREM_ATTACK_TIMING_INVALID: owner=" << tremoloOwner->eid();
+                return;
+            }
+            on = static_cast<int>(exactOn);
+            off = static_cast<int>(exactEnd) - releaseTrim;
+        } else {
+            on = tick1 + (ticks * e.ontime()) / 1000;
+            off = on + (ticks * e.len()) / 1000 - (note->pianomaniaHeldNote() ? 0 : 1);
+        }
         if (applyStaccatoDurationRepair && e.play() && e.pitch() == 0 && e.offset() == 0 && e.ontime() == 0) {
             int durationTicks = repairedStaccatoDurationTicks(ticks, off - on);
             if (durationTicks != off - on) {
@@ -1313,7 +1371,11 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
             playParams.offTime = std::max(0, off - noteParams.graceOffsetOff);
             // Pianomania reserves note-off velocity 127 for generated nonvisual playback
             // notes only. Written grace notes are score notes and must keep normal note-off velocity.
-            if (!isGrace && isInvisibleScoreNote) {
+            if (tremoloOwner) {
+                if (!tremoloOwner->visible() || on - noteParams.tickOffset != tremoloFirstTickByOwner.at(tremoloOwner)) {
+                    playParams.noteOffVelocity = ORNAMENT_NOTE_OFF_VELOCITY;
+                }
+            } else if (!isGrace && isInvisibleScoreNote) {
                 playParams.noteOffVelocity = ORNAMENT_NOTE_OFF_VELOCITY;
             } else if (applyGeneratedPlaybackNoteOff && mainEventIndex >= 0 && static_cast<int>(i) != mainEventIndex) {
                 playParams.noteOffVelocity = ORNAMENT_NOTE_OFF_VELOCITY;
@@ -1331,9 +1393,9 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
                 playParams.offset = ticks * e.offset() / 1000;
             }
 
-            playParams.staffIdx = static_cast<int>(staff->idx());
+            playParams.staffIdx = tremoloOwner ? static_cast<int>(tremoloOwner->staffIdx()) : static_cast<int>(staff->idx());
             playParams.callAllSoundOff = noteParams.callAllSoundOff;
-            playNote(events, note, playParams, pitchWheelRenderer);
+            playNote(events, tremoloOwner ? tremoloOwner : note, playParams, pitchWheelRenderer);
 
             if (instr->singleNoteDynamics()) {
                 renderSnd(events, chord, noteChannel, noteParams.tickOffset, context);
@@ -1834,6 +1896,99 @@ void CompatMidiRendererInternal::doCollectMeasureEvents(EventsHolder& events, Me
             prevChords[voice] = chord;
         }
     }
+}
+
+const Note* CompatMidiRendererInternal::resolveTremoloOwnerNote(const Note* emitter, const NoteEvent& event)
+{
+    const Chord* chord = emitter ? emitter->chord() : nullptr;
+    if (!chord || !event.tremoloWrittenOwner().isValid()
+        || std::find(chord->notes().cbegin(), chord->notes().cend(), emitter) == chord->notes().cend()) {
+        return nullptr;
+    }
+    const TremoloSingleChord* single = chord->tremoloSingleChord();
+    const TremoloTwoChord* two = chord->tremoloTwoChord();
+    const EngravingItem* tremolo = single ? static_cast<const EngravingItem*>(single)
+                                       : static_cast<const EngravingItem*>(two);
+    if (!tremolo || tremolo->score() != chord->score() || (two && two->chord1() != chord)) {
+        return nullptr;
+    }
+    const bool enabled = single ? single->playTremolo() : two->playTremolo();
+    if (two) {
+        if (!two->chord2() || two->chord2()->score() != chord->score()) {
+            return nullptr;
+        }
+    }
+    const Chord* endpoints[] = { single ? chord : two->chord1(), single ? nullptr : two->chord2() };
+    const Note* resolved = nullptr;
+    for (const Chord* endpoint : endpoints) {
+        if (!endpoint) {
+            continue;
+        }
+        for (const Note* candidate : endpoint->notes()) {
+            if (!resolveTremoloWrittenOwner(event, candidate->eid(), endpoint->eid(), tremolo->eid(),
+                                           candidate->play(), enabled).has_value()) {
+                continue;
+            }
+            const auto& timing = event.tremoloWrittenOwner().timing;
+            const Fraction partnerSpan = two ? two->chord2()->actualTicks() : Fraction();
+            const int strokes = single ? single->lines() : two->lines();
+            if (timing.emitterTick != chord->tick() || timing.emitterNominalSpan != chord->ticks()
+                || timing.emitterActualSpan != chord->actualTicks() || timing.partnerActualSpan != partnerSpan
+                || timing.ownerTick != endpoint->tick() || timing.ownerActualSpan != endpoint->actualTicks()
+                || timing.strokes != strokes || timing.hooks != chord->durationType().hooks()
+                || timing.ownerHeld != candidate->pianomaniaHeldNote()) {
+                return nullptr;
+            }
+            if (resolved) {
+                return nullptr;
+            }
+            resolved = candidate;
+        }
+    }
+    return resolved;
+}
+
+std::optional<int> CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(const Note* owner)
+{
+    const Chord* ownerChord = owner ? owner->chord() : nullptr;
+    if (!ownerChord) {
+        return std::nullopt;
+    }
+    const TremoloSingleChord* single = ownerChord->tremoloSingleChord();
+    const TremoloTwoChord* two = ownerChord->tremoloTwoChord();
+    if ((!single && !two) || (single && !single->playTremolo()) || (two && !two->playTremolo())) {
+        return std::nullopt;
+    }
+    const Chord* emitterChord = single ? ownerChord : two->chord1();
+    if (!emitterChord || emitterChord->score() != ownerChord->score()) {
+        return std::nullopt;
+    }
+    std::optional<int> first;
+    for (const Note* emitter : emitterChord->notes()) {
+        for (const NoteEvent& event : emitter->playEvents()) {
+            if (!event.tremoloWrittenOwner().captured) {
+                continue;
+            }
+            const Note* resolved = resolveTremoloOwnerNote(emitter, event);
+            if (!resolved) {
+                return std::nullopt;
+            }
+            if (resolved != owner || !event.play() || !owner->play()) {
+                continue;
+            }
+            const auto& timing = event.tremoloWrittenOwner().timing;
+            if (timing.eventLength != event.len() || timing.eventOntime != event.ontime()
+                || timing.eventOffset != event.offset()
+                || timing.end.ticks() - timing.start.ticks() <= (owner->pianomaniaHeldNote() ? 0 : 1)) {
+                return std::nullopt;
+            }
+            const int tick = timing.start.ticks();
+            if (!first.has_value() || tick < *first) {
+                first = tick;
+            }
+        }
+    }
+    return first;
 }
 
 int CompatMidiRendererInternal::canonicalWrittenNoteEventIndex(const NoteEventList& events)
