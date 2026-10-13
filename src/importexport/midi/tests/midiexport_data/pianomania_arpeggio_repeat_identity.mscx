@@ -107,19 +107,19 @@
     <Staff id="1">
       <VBox>
         <height>10</height>
-        <eid>4294967296123</eid>
+        <eid>7BAAAg+_7BAAAg+</eid>
         <Text>
-          <eid>4299262263301</eid>
+          <eid>FAAAAk+_FAAAAk+</eid>
           <style>title</style>
           <text>Untitled Score</text>
         </Text>
         <Text>
-          <eid>4303557230597</eid>
+          <eid>FAAAAo+_FAAAAo+</eid>
           <style>subtitle</style>
           <text>Subtitle</text>
         </Text>
         <Text>
-          <eid>4307852197893</eid>
+          <eid>FAAAAs+_FAAAAs+</eid>
           <style>composer</style>
           <text>Composer / arranger</text>
         </Text>
@@ -127,52 +127,52 @@
       <Measure>
         <voice>
           <TimeSig>
-            <eid>4312147165209</eid>
+            <eid>ZAAAAw+_ZAAAAw+</eid>
             <sigN>4</sigN>
             <sigD>4</sigD>
           </TimeSig>
           <Chord>
-            <eid>4316442132596</eid>
+            <eid>0BAAA0+_0BAAA0+</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4320737099796</eid>
+              <eid>UAAAA4+_UAAAA4+</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
             <Note>
-              <eid>4325032067092</eid>
+              <eid>UAAAA8+_UAAAA8+</eid>
               <pitch>69</pitch>
               <tpc>17</tpc>
             </Note>
             <Note>
-              <eid>4329327034388</eid>
+              <eid>UAAAAA/_UAAAAA/</eid>
               <pitch>72</pitch>
               <tpc>14</tpc>
             </Note>
             <Arpeggio>
-              <eid>4333622001679</eid>
+              <eid>PAAAAE/_PAAAAE/</eid>
               <subtype>0</subtype>
             </Arpeggio>
           </Chord>
           <Chord>
-            <eid>4337916968986</eid>
+            <eid>aAAAAI/_aAAAAI/</eid>
             <durationType>16th</durationType>
             <Note>
-              <eid>4344255451137</eid>
+              <eid>BAZz5N/_BAZz5N/</eid>
               <pitch>65</pitch>
               <tpc>13</tpc>
             </Note>
           </Chord>
           <Rest>
-            <eid>4346506903578</eid>
+            <eid>aAAAAQ/_aAAAAQ/</eid>
             <durationType>eighth</durationType>
           </Rest>
           <Rest>
-            <eid>4350801870874</eid>
+            <eid>aAAAAU/_aAAAAU/</eid>
             <durationType>quarter</durationType>
           </Rest>
           <Rest>
-            <eid>4355096838170</eid>
+            <eid>aAAAAY/_aAAAAY/</eid>
             <durationType>half</durationType>
           </Rest>
         </voice>
@@ -184,12 +184,12 @@
       <Measure>
         <voice>
           <TimeSig>
-            <eid>4359391805465</eid>
+            <eid>ZAAAAc/_ZAAAAc/</eid>
             <sigN>4</sigN>
             <sigD>4</sigD>
           </TimeSig>
           <Rest>
-            <eid>4363686772762</eid>
+            <eid>aAAAAg/_aAAAAg/</eid>
             <durationType>measure</durationType>
             <duration>4/4</duration>
           </Rest>
