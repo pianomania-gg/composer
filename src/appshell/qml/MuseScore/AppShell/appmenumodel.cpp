@@ -170,7 +170,6 @@ void AppMenuModel::load()
     }
     auto* subscription = new AuthoringMenuSubscription(this);
     subscription->setObjectName(QStringLiteral("_authoringCreationMenus"));
-    policy->changed().onNotify(subscription, refreshCreation);
     auto observeSelection = [this, subscription, refreshCreation]() {
         subscription->selectionReceiver = std::make_shared<muse::async::Asyncable>();
         if (const auto notation = globalContext()->currentNotation()) {

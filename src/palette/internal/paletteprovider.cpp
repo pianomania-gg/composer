@@ -21,7 +21,6 @@
  */
 
 #include "paletteprovider.h"
-#include <utility>
 #include "notation/iauthoringcapabilitypolicy.h"
 
 #include <QFileDialog>
@@ -643,15 +642,10 @@ bool authoringPaletteIndexAllowed(const QAbstractItemModel* model, const QModelI
 }
 
 template<class Base>
-class AuthoringPaletteProxy final : public Base, public muse::async::Asyncable
+class AuthoringPaletteProxy final : public Base
 {
 public:
-    template<class... Args>
-    explicit AuthoringPaletteProxy(Args&&... args) : Base(std::forward<Args>(args)...)
-    {
-        auto policy = muse::modularity::globalIoc()->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-        policy->changed().onNotify(this, [this]() { this->invalidateFilter(); });
-    }
+    using Base::Base;
 protected:
     bool filterAcceptsRow(int row, const QModelIndex& parent) const override
     {
@@ -663,11 +657,6 @@ protected:
 
 void PaletteProvider::init()
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    policy->changed().onNotify(this, [this]() {
-        m_mainPalette = nullptr;
-        emit mainPaletteChanged();
-    });
     m_userPaletteModel = new PaletteTreeModel(std::make_shared<PaletteTree>(), iocContext(), this);
     connect(m_userPaletteModel, &PaletteTreeModel::treeChanged, this, &PaletteProvider::notifyAboutUserPaletteChanged);
 

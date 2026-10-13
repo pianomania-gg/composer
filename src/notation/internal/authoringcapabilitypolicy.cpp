@@ -2,7 +2,6 @@
 #include "authoringpolicycore.h"
 
 #include <algorithm>
-#include <utility>
 #include <QDir>
 #include "engraving/dom/actionicon.h"
 #include "engraving/dom/articulation.h"
@@ -17,8 +16,7 @@
 using namespace mu::notation;
 using namespace mu::engraving;
 
-AuthoringCapabilityPolicy::AuthoringCapabilityPolicy(std::function<bool()> enabled, std::function<void(bool)> setEnabled, muse::async::Notification changed)
-    : m_enabled(std::move(enabled)), m_setEnabled(std::move(setEnabled)), m_changed(std::move(changed))
+AuthoringCapabilityPolicy::AuthoringCapabilityPolicy()
 {
     for (const auto& row : authoring::capabilityRows) {
         if (row.decision != authoring::Decision::Hidden) {
@@ -36,21 +34,6 @@ AuthoringCapabilityPolicy::AuthoringCapabilityPolicy(std::function<bool()> enabl
     }
 }
 
-bool AuthoringCapabilityPolicy::enabled() const
-{
-    return m_enabled();
-}
-
-void AuthoringCapabilityPolicy::setEnabled(bool enabled)
-{
-    m_setEnabled(enabled);
-}
-
-muse::async::Notification AuthoringCapabilityPolicy::changed() const
-{
-    return m_changed;
-}
-
 bool AuthoringCapabilityPolicy::isRestrictedAction(std::string_view code) const
 {
     return m_hiddenActions.count(std::string(code)) != 0;
@@ -58,19 +41,16 @@ bool AuthoringCapabilityPolicy::isRestrictedAction(std::string_view code) const
 
 bool AuthoringCapabilityPolicy::mayCreateAction(std::string_view code) const
 {
-    return !enabled() || !isRestrictedAction(code);
+    return !isRestrictedAction(code);
 }
 
 bool AuthoringCapabilityPolicy::mayCreateInstrument(std::string_view templateId) const
 {
-    return !enabled() || m_hiddenInstruments.count(std::string(templateId)) == 0;
+    return m_hiddenInstruments.count(std::string(templateId)) == 0;
 }
 
 bool AuthoringCapabilityPolicy::mayCreateTemplate(const muse::io::path_t& path) const
 {
-    if (!enabled()) {
-        return true;
-    }
     const QString root = QDir::cleanPath((globalConfiguration()->appDataPath() + "/templates").toQString()) + "/";
     const QString candidate = QDir::cleanPath(path.toQString());
     // User templates remain pending, including user files with bundled names.
@@ -82,12 +62,12 @@ bool AuthoringCapabilityPolicy::mayCreateTemplate(const muse::io::path_t& path) 
 
 bool AuthoringCapabilityPolicy::mayCreateSymbol(SymId symbol) const
 {
-    return !enabled() || m_hiddenSymbols.count(symbol) == 0;
+    return m_hiddenSymbols.count(symbol) == 0;
 }
 
 bool AuthoringCapabilityPolicy::mayCreateSymbolRange(std::string_view description) const
 {
-    return !enabled() || std::find(authoring::hiddenRangeDescriptions.begin(), authoring::hiddenRangeDescriptions.end(), description)
+    return std::find(authoring::hiddenRangeDescriptions.begin(), authoring::hiddenRangeDescriptions.end(), description)
         == authoring::hiddenRangeDescriptions.end();
 }
 
@@ -98,9 +78,6 @@ bool AuthoringCapabilityPolicy::mayEditExisting(const EngravingItem* item, const
 
 bool AuthoringCapabilityPolicy::mayCreateElement(const EngravingItem& item, std::string_view origin) const
 {
-    if (!enabled()) {
-        return true;
-    }
     // These are dedicated presentation routes. Generic retained routes remain available.
     if (origin == "guitar" || origin == "accordion" || origin == "handbells"
         || origin == "harp" || origin == "bagpipe-embellishment" || origin == "fretboard-diagram") {

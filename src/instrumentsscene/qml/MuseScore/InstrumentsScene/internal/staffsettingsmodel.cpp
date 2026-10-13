@@ -41,8 +41,6 @@ StaffSettingsModel::~StaffSettingsModel()
 void StaffSettingsModel::load(const QString& staffId)
 {
     if (!m_policyConnectionsInitialized) {
-        auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
-        policy->changed().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
         context()->currentNotationChanged().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
         context()->currentMasterNotationChanged().onNotify(this, [this]() { emit canCreateLinkedStaffChanged(); });
         m_policyConnectionsInitialized = true;
@@ -320,7 +318,7 @@ bool StaffSettingsModel::canCreateLinkedStaff() const
 
     auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
     const StaffGroup sourceStaffGroup = sourceStaff->staffType()->group();
-    if (policy->enabled() && (sourceStaffGroup == StaffGroup::TAB || sourceStaffGroup == StaffGroup::PERCUSSION)) {
+    if (sourceStaffGroup == StaffGroup::TAB || sourceStaffGroup == StaffGroup::PERCUSSION) {
         return false;
     }
 

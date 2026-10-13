@@ -294,11 +294,6 @@ ApplicationUiActions::ApplicationUiActions(std::shared_ptr<ApplicationActionCont
 
 void ApplicationUiActions::init()
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<notation::IAuthoringCapabilityPolicy>("appshell");
-    policy->changed().onNotify(this, [this]() {
-        m_actionEnabledChanged.send({ TOGGLE_PERCUSSION_PANEL_ACTION_CODE });
-    });
-
     auto globalContext = muse::modularity::ioc(iocContext())->resolve<context::IGlobalContext>("appshell");
     auto listenSelection = [this, globalContext]() {
         const notation::INotationPtr notation = globalContext->currentNotation();

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -13,10 +12,7 @@ class AuthoringCapabilityPolicy final : public IAuthoringCapabilityPolicy
 {
     muse::GlobalInject<muse::IGlobalConfiguration> globalConfiguration;
 public:
-    AuthoringCapabilityPolicy(std::function<bool()> enabled, std::function<void(bool)> setEnabled, muse::async::Notification changed);
-    bool enabled() const override;
-    void setEnabled(bool enabled) override;
-    muse::async::Notification changed() const override;
+    AuthoringCapabilityPolicy();
     bool isRestrictedAction(std::string_view code) const override;
     bool mayCreateAction(std::string_view code) const override;
     bool mayCreateInstrument(std::string_view templateId) const override;
@@ -26,9 +22,6 @@ public:
     bool mayCreateSymbolRange(std::string_view description) const override;
     bool mayEditExisting(const engraving::EngravingItem* item, const engraving::Score* activeScore) const override;
 private:
-    std::function<bool()> m_enabled;
-    std::function<void(bool)> m_setEnabled;
-    muse::async::Notification m_changed;
     std::unordered_set<std::string> m_hiddenActions;
     std::unordered_set<std::string> m_hiddenInstruments;
     std::unordered_set<std::string> m_hiddenTemplates;

@@ -59,8 +59,6 @@ void LayoutPanelTreeModel::classBegin()
 
 void LayoutPanelTreeModel::init()
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
-    policy->changed().onNotify(this, [this]() { load(); });
     m_partsNotifyReceiver = std::make_shared<muse::async::Asyncable>();
 
     m_selectionModel = new ItemMultiSelectionModel(this);

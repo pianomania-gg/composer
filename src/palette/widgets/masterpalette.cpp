@@ -77,11 +77,6 @@ void MasterPalette::addPalette(PalettePtr palette)
     stack->addWidget(psa);
     treeWidget->addTopLevelItem(item);
     item->setHidden(widget->actualCellCount() == 0);
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    policy->changed().onNotify(widget, [widget, item]() {
-        widget->setFilterText(QString());
-        item->setHidden(widget->actualCellCount() == 0);
-    });
 }
 
 //---------------------------------------------------------
@@ -164,14 +159,6 @@ MasterPalette::MasterPalette(QWidget* parent)
         chld->setHidden(!policy->mayCreateSymbolRange(rangeName.toStdString()));
     }
 
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    auto* symbolsOwner = stack->widget(m_idxAllSymbols)->findChild<PaletteWidget*>();
-    policy->changed().onNotify(symbolsOwner, [this, policy]() {
-        for (int i = 1; i < m_symbolItem->childCount(); ++i) {
-            auto* item = m_symbolItem->child(i);
-            item->setHidden(!policy->mayCreateSymbolRange(item->text(0).toStdString()));
-        }
-    });
     connect(treeWidget, &QTreeWidget::currentItemChanged, this, &MasterPalette::currentChanged);
     connect(treeWidget, &QTreeWidget::itemClicked, this, &MasterPalette::clicked);
     retranslate(true);

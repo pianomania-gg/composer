@@ -32,7 +32,7 @@ inline const CapabilityRow* findCapability(std::string_view featureId)
         ? &capabilityRows[first] : nullptr;
 }
 
-inline PolicyResult decide(std::string_view featureId, bool enabled, Context context = {})
+inline PolicyResult decide(std::string_view featureId, Context context = {})
 {
     if (context.operation == Operation::PreserveImported) {
         return { Decision::Allowed, true, false };
@@ -44,7 +44,7 @@ inline PolicyResult decide(std::string_view featureId, bool enabled, Context con
         return { Decision::Allowed, false, false };
     }
     const CapabilityRow* row = findCapability(featureId);
-    return { enabled && row ? row->decision : Decision::Allowed, true, row != nullptr };
+    return { row ? row->decision : Decision::Allowed, true, row != nullptr };
 }
 
 inline bool allowed(PolicyResult result)

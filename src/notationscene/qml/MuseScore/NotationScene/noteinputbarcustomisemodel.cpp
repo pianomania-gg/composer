@@ -43,10 +43,6 @@ static const QString NOTE_INPUT_TOOLBAR_NAME("noteInput");
 NoteInputBarCustomiseModel::NoteInputBarCustomiseModel(QObject* parent)
     : SelectableItemListModel(parent), muse::Contextable(muse::iocCtxForQmlObject(this))
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
-    policy->changed().onNotify(this, [this]() {
-        load();
-    });
 }
 
 void NoteInputBarCustomiseModel::load()
