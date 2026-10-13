@@ -206,16 +206,30 @@ public:
         }
         return owner;
     }
-    // Whether the grace notes before `chord` are crushed before the beat so the written note
-    // stays on it. Only a single unslashed grace written as an eighth or longer is a long
-    // appoggiatura that plays on the beat; a slashed grace, a group of two or more graces, or
-    // a single grace written as a sixteenth or shorter plays before the beat.
+    // Whether the grace notes before `chord` are short graces that are crushed rather than
+    // given a written value. Only a single unslashed grace written as an eighth or longer is a
+    // long appoggiatura; a slashed grace, a group of two or more graces, or a single grace
+    // written as a sixteenth or shorter is short.
+    static bool graceNotesBeforeAreShort(const Chord* chord);
+    // Whether the short grace notes before `chord` are crushed before the beat so the written
+    // note stays on it. They take their time from whatever sounds before the written note.
+    // When the score has less time before the written note than the crush needs, which is the
+    // first chord of a score, they play on the beat instead: see onBeatShortGraceLeadTicks.
     static bool graceNotesBeforePlayBeforeBeat(const Chord* chord);
     // For each before-beat grace note before `chord`, in written order, the ticks before the
     // written note at which it is struck. The first value is the whole lead taken from the
     // previous written note. `previousTicks` is that note's length, or a non-positive value
-    // when it is unknown. Empty when the graces play on the beat.
+    // when it is unknown. Empty unless the graces play before the beat.
     static std::vector<int> beforeBeatGraceLeadTicks(const Chord* chord, int previousTicks);
+    // For short grace notes before `chord` that cannot play before the beat: how late the
+    // written note starts, in 1/1000 of the written note. The graces keep their crush, never
+    // more than half of the written note, and the first one is struck on the beat. Zero unless
+    // the graces are short and play on the beat.
+    static int onBeatShortGraceLeadIn(const Chord* chord);
+    // For the same graces, in written order, the ticks before the delayed written note at which
+    // each is struck. The first value is how many ticks after the beat the written note starts.
+    // Empty unless the graces are short and play on the beat.
+    static std::vector<int> onBeatShortGraceLeadTicks(const Chord* chord);
 
 private:
 

@@ -1414,6 +1414,12 @@ INSTANTIATE_TEST_SUITE_P(
             { { "base", 6, 4, 2 } }
         },
         ExportCase {
+            "short_grace_at_score_start",
+            "src/importexport/mei/tests/data/pianomania-arpeggio-grace.mscx",
+            false, false, 0, 9, 5, 0, 0, 0,
+            { { "base", 9, 9, 0 } }
+        },
+        ExportCase {
             "after_grace_cross_voice",
             "src/importexport/midi/tests/midiexport_data/pianomania_after_grace_cross_voice_order.mscx",
             false, false, 0, 8, 1, 0, 0, 0,

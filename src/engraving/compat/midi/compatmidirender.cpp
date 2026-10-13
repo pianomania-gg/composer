@@ -794,6 +794,9 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
         //  - Before-beat graces (slashed, grouped, or written as a sixteenth or shorter) are
         //    crushed into the previous note by collectGraceBeforeChordEvents; the written note
         //    stays on the beat.
+        //  - When the score has no room for that crush before the written note, as on the first
+        //    chord of a score, collectGraceBeforeChordEvents starts the same crush on the beat
+        //    and the written note follows it.
         //  - A single unslashed grace written as an eighth or longer is a long appoggiatura:
         //    it starts on the beat and takes its time from the written note.
         //
@@ -805,6 +808,10 @@ void CompatMidiRender::createGraceNotesPlayEvents(const Score* score, const Frac
 
         if (CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(chord) || graceBend) {
             ontime = 0;
+            graceDuration = 0;
+            weighta = 1.0;
+        } else if (const int shortGraceLeadIn = CompatMidiRendererInternal::onBeatShortGraceLeadIn(chord)) {
+            ontime = shortGraceLeadIn;
             graceDuration = 0;
             weighta = 1.0;
         } else {
