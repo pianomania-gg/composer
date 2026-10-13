@@ -1188,7 +1188,7 @@ static void collectNote(EventsHolder& events, const Note* note, const CollectNot
             }
         }
     }
-    bool hasArpeggio = chord->arpeggio() && chord->arpeggio()->playArpeggio();
+    bool hasArpeggio = CompatMidiRendererInternal::rollingArpeggio(chord) != nullptr;
     const Trill* trill = !isGrace ? findFirstTrill(chord) : nullptr;
     const Ornament* gameplayOrnament = trill ? trill->ornament() : nullptr;
     SymId gameplayOrnamentSymId = trill ? SymId::ornamentTrill : SymId::noSym;
@@ -1946,6 +1946,33 @@ const Note* CompatMidiRendererInternal::resolveTremoloOwnerNote(const Note* emit
         }
     }
     return resolved;
+}
+
+const Arpeggio* CompatMidiRendererInternal::rollingArpeggio(const Chord* chord)
+{
+    if (!chord || chord->isGrace()) {
+        return nullptr;
+    }
+    const auto rolls = [](const Arpeggio* arpeggio) {
+        return arpeggio->playArpeggio() && arpeggio->arpeggioType() != ArpeggioType::BRACKET ? arpeggio : nullptr;
+    };
+    if (const Arpeggio* own = chord->arpeggio()) {
+        return rolls(own);
+    }
+    const Segment* segment = chord->segment();
+    const Part* part = chord->part();
+    if (!segment || !part) {
+        return nullptr;
+    }
+    for (track_idx_t track = chord->track(); track > part->startTrack();) {
+        --track;
+        const EngravingItem* item = segment->element(track);
+        const Arpeggio* arpeggio = item && item->isChord() ? toChord(item)->arpeggio() : nullptr;
+        if (arpeggio && arpeggio->endTrack() >= chord->track()) {
+            return rolls(arpeggio);
+        }
+    }
+    return nullptr;
 }
 
 std::optional<int> CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(const Note* owner)
