@@ -1305,6 +1305,12 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         return rv;
     }
 
+    if (!mu::iex::mei::pmValidateTremoloPartnerLinks(score)) {
+        rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
+                                std::string("Failed to build coordinated Pianomania MEI identities"));
+        return rv;
+    }
+
     const std::string topologyError = validateVisibleScoreTopology(score);
     if (!topologyError.empty()) {
         rv.ret = muse::make_ret(muse::Ret::Code::UnknownError, topologyError);

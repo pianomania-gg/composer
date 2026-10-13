@@ -21,6 +21,7 @@
  */
 
 #include "meiexporter.h"
+#include "../pmmeiexport.h"
 
 #include <QString>
 #include <iomanip>
@@ -870,6 +871,9 @@ int MeiExporter::updateNoteIndex(int notePitch) {
  */
 
 bool MeiExporter::write(std::string &meiData) {
+  if (!pmValidateTremoloPartnerLinks(m_score)) {
+    return false;
+  }
   const bool useMuseScoreIds = configuration()->meiUseMuseScoreIds();
 
   // Reset the note indices
