@@ -21,10 +21,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
+#include <future>
+#include <memory>
 
 #include <gtest/gtest.h>
 
@@ -182,4 +186,85 @@ TEST(QueuePool_Tests, UnregisterWaitsForActiveMessageProcessing)
     EXPECT_TRUE(unregisterObserved);
     EXPECT_FALSE(completedBeforeRelease);
     EXPECT_TRUE(unregisterFinished);
+}
+
+namespace {
+// Runs body on its own thread and reports whether it returned before the deadline.
+// A body that never returns is detached, so it must own everything it touches.
+bool returnsWithin(std::chrono::seconds deadline, std::function<void()> body)
+{
+    auto finished = std::make_shared<std::promise<void> >();
+    std::future<void> done = finished->get_future();
+    std::thread worker([body = std::move(body), finished]() {
+        body();
+        finished->set_value();
+    });
+
+    if (done.wait_for(deadline) != std::future_status::ready) {
+        worker.detach();
+        return false;
+    }
+
+    worker.join();
+    return true;
+}
+
+struct HandlerPorts {
+    Queue trigger;
+    Queue other;
+    std::atomic<bool> handled = false;
+};
+}
+
+// A handler's first cross-thread Channel send or Async::call registers ports for the thread
+// that is processing it.
+TEST(QueuePool_Tests, HandlerRegistersPortForProcessingThread)
+{
+    auto ports = std::make_shared<HandlerPorts>();
+    const bool returned = returnsWithin(std::chrono::seconds(5), [ports]() {
+        QueuePool* pool = QueuePool::instance();
+        const std::thread::id self = std::this_thread::get_id();
+        HandlerPorts* p = ports.get();
+
+        p->trigger.port1()->onMessage([pool, self, p](const CallMsg&) {
+            pool->regPort(self, p->other.port1());
+            p->handled = true;
+        });
+
+        pool->regPort(self, p->trigger.port1());
+        p->trigger.port2()->send(CallMsg {});
+        pool->processMessages(self);
+
+        pool->unregPort(self, p->other.port1());
+        pool->unregPort(self, p->trigger.port1());
+    });
+
+    EXPECT_TRUE(returned) << "regPort for the processing thread did not return inside a message handler";
+    EXPECT_TRUE(ports->handled);
+}
+
+// A Channel destroyed inside a handler unregisters its ports for the thread that is processing it.
+TEST(QueuePool_Tests, HandlerUnregistersPortForProcessingThread)
+{
+    auto ports = std::make_shared<HandlerPorts>();
+    const bool returned = returnsWithin(std::chrono::seconds(5), [ports]() {
+        QueuePool* pool = QueuePool::instance();
+        const std::thread::id self = std::this_thread::get_id();
+        HandlerPorts* p = ports.get();
+
+        p->trigger.port1()->onMessage([pool, self, p](const CallMsg&) {
+            pool->unregPort(self, p->other.port1());
+            p->handled = true;
+        });
+
+        pool->regPort(self, p->trigger.port1());
+        pool->regPort(self, p->other.port1());
+        p->trigger.port2()->send(CallMsg {});
+        pool->processMessages(self);
+
+        pool->unregPort(self, p->trigger.port1());
+    });
+
+    EXPECT_TRUE(returned) << "unregPort for the processing thread did not return inside a message handler";
+    EXPECT_TRUE(ports->handled);
 }
