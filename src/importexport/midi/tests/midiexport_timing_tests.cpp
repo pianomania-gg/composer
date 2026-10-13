@@ -301,6 +301,7 @@ private slots:
     void writtenAfterGraceTurnPlaysAtTrillSpeed();
     void gracePairPlaysBeforeTheBeat();
     void shortWrittenGracePlaysBeforeTheBeat();
+    void shortGraceAtScoreStartPlaysOnTheBeat();
     void rolledChordDirectionsRemainOrdinaryWrittenAttacks();
     void bracketsAndPlaybackDisabledRollsAttackSimultaneously();
     void arpeggiatedDisabledNotesHaveNoAttacks();
@@ -1147,6 +1148,72 @@ void MidiExportTimingTests::shortWrittenGracePlaysBeforeTheBeat()
     QCOMPARE(e5Main.front().start, 1440);
     QCOMPARE(e5Main.front().end, 1679);
     QCOMPARE(d5.front().start, 1680);
+}
+
+// Test value: Detects a short grace on the first chord of a score being squeezed into zero
+// length at tick 0, which wrote its note-off before its note-on and failed the export.
+void MidiExportTimingTests::shortGraceAtScoreStartPlaysOnTheBeat()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_grace_before_beat_at_score_start.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+    for (const ExportedMidiNote& note : notes) {
+        QVERIFY(note.duration() > 0);
+    }
+
+    // Nothing sounds before the first chord, so the slashed G has no time to take before the
+    // beat. It keeps its 65 ms crush but starts on the beat, and the written C follows it
+    // 61 ticks later (the crush in whole thousandths of the written quarter at 120 bpm).
+    const std::vector<ExportedMidiNote> g4Grace = notesForPitchInRange(notes, 67, 0, 480);
+    const std::vector<ExportedMidiNote> c5 = notesForPitchInRange(notes, 72, 0, 480);
+    QCOMPARE(static_cast<int>(g4Grace.size()), 1);
+    QCOMPARE(static_cast<int>(c5.size()), 1);
+    QCOMPARE(g4Grace.front().start, 0);
+    QCOMPARE(g4Grace.front().end, 60);
+    QCOMPARE(g4Grace.front().offVelocity, 64);
+    QCOMPARE(c5.front().start, 61);
+    QCOMPARE(c5.front().end, 416);
+    QCOMPARE(c5.front().offVelocity, 64);
+
+    // The next slashed grace has the C to take its time from, so it plays before the beat as
+    // usual and the written D stays on the beat.
+    const std::vector<ExportedMidiNote> b4Grace = notesForPitchInRange(notes, 71, 0, 480);
+    const std::vector<ExportedMidiNote> d5 = notesForPitchInRange(notes, 74, 480, 960);
+    QCOMPARE(static_cast<int>(b4Grace.size()), 1);
+    QCOMPARE(static_cast<int>(d5.size()), 1);
+    QCOMPARE(b4Grace.front().start, 418);
+    QCOMPARE(b4Grace.front().end, 479);
+    QCOMPARE(d5.front().start, 480);
+
+    // A pair of graces at the start keeps its order and spacing: the first grace on the beat,
+    // each grace 65 ms, and the written G after both.
+    const std::vector<ExportedMidiNote> e3Grace = notesForPitchInRange(notes, 52, 0, 960);
+    const std::vector<ExportedMidiNote> f3Grace = notesForPitchInRange(notes, 53, 0, 960);
+    const std::vector<ExportedMidiNote> g3 = notesForPitchInRange(notes, 55, 0, 960);
+    QCOMPARE(static_cast<int>(e3Grace.size()), 1);
+    QCOMPARE(static_cast<int>(f3Grace.size()), 1);
+    QCOMPARE(static_cast<int>(g3.size()), 1);
+    QCOMPARE(e3Grace.front().start, 0);
+    QCOMPARE(e3Grace.front().end, 61);
+    QCOMPARE(f3Grace.front().start, 62);
+    QCOMPARE(f3Grace.front().end, 123);
+    QCOMPARE(g3.front().start, 124);
+    QCOMPARE(g3.front().end, 958);
+    QCOMPARE(e3Grace.front().offVelocity, 64);
+    QCOMPARE(f3Grace.front().offVelocity, 64);
+
+    // A grace whose stored play events give it no length of its own, as MusicXML import can
+    // write, is placed the same way. The octave leap widens its crush to 90 ms (86 ticks).
+    const std::vector<ExportedMidiNote> c3Grace = notesForPitchInRange(notes, 48, 0, 960);
+    const std::vector<ExportedMidiNote> c2 = notesForPitchInRange(notes, 36, 0, 960);
+    QCOMPARE(static_cast<int>(c3Grace.size()), 1);
+    QCOMPARE(static_cast<int>(c2.size()), 1);
+    QCOMPARE(c3Grace.front().start, 0);
+    QCOMPARE(c3Grace.front().end, 85);
+    QCOMPARE(c3Grace.front().offVelocity, 64);
+    QCOMPARE(c2.front().start, 86);
+    QCOMPARE(c2.front().end, 958);
 }
 
 void MidiExportTimingTests::appoggiaturaTakesHalfOfTheWrittenNote()
