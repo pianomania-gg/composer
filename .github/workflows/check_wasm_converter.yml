@@ -22,6 +22,12 @@ on:
       - 'SetupConfigure.cmake'
       - '.github/workflows/check_wasm_converter.yml'
   workflow_dispatch:
+    inputs:
+      production_artifact:
+        description: 'Build a production converter with assertions off'
+        required: false
+        type: boolean
+        default: false
 
 env:
   QT_VERSION: 6.8.3
@@ -120,7 +126,7 @@ jobs:
         # A check is only useful if its failures can be read. Without this an
         # abort prints "Aborted()" and an unnamed stack. The shipped artifact is
         # built without it.
-        PM_WASM_ASSERTIONS: 'ON'
+        PM_WASM_ASSERTIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.production_artifact && 'OFF' || 'ON' }}
       run: |
         echo "emcc:  $(emcc --version | head -1)"
         echo "EMSDK: ${EMSDK}"
