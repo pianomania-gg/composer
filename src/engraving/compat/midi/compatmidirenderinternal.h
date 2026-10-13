@@ -36,6 +36,7 @@
 #include "velocitymap.h"
 
 namespace mu::engraving {
+class Arpeggio;
 class EventsHolder;
 class MasterScore;
 class Staff;
@@ -185,6 +186,13 @@ public:
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
     static const Note* resolveTremoloOwnerNote(const Note* emitter, const NoteEvent& event);
     static std::optional<int> canonicalTremoloWrittenAttackTick(const Note* owner);
+    // Whether `chord` carries a one- or two-chord tremolo whose playback is on. With playback off
+    // the tremolo's chords play their written notes once, like chords without a tremolo.
+    static bool tremoloPlays(const Chord* chord);
+    // The rolled-chord sign that performs `chord`: its own sign, or else the nearest sign written
+    // on a chord above it in the same segment whose span reaches its voice or staff. Null when that
+    // sign is a bracket or has playback turned off, which play the chord on the beat.
+    static const Arpeggio* rollingArpeggio(const Chord* chord);
     // The caller supplies IDs and playback state from a resolved current-score
     // note, its chord, and its tremolo. Stale clone/cache bindings do not resolve.
     static std::optional<NoteEvent::TremoloWrittenOwner> resolveTremoloWrittenOwner(

@@ -52,5 +52,5 @@ target_include_directories(project_test PRIVATE ${PROJECT_SOURCE_DIR}/src/projec
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(project_test PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*64 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*66 tests"
 )

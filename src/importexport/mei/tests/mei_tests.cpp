@@ -54,6 +54,7 @@
 #include "engraving/dom/dynamic.h"
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
+#include "engraving/dom/glissando.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/keysig.h"
 #include "engraving/dom/line.h"
@@ -542,6 +543,66 @@ TEST_F(Mei_Tests, mei_pianomania_current_chordbracket_exports_owned_hooks_and_si
         const double halfWidth = bracket->style().styleMM(Sid::chordBracketLineWidth) * 0.5;
         const double relativeX = bracket->rightSide() ? bracket->absoluteFromSpatium(bracket->hookLength()) - halfWidth : halfWidth;
         EXPECT_NEAR(std::stod(spine[0]) - std::stod(origin[0]), relativeX / DPI, 0.000002);
+    }
+}
+
+// Test value: Detects a rolled grace chord resolving through its parent chord's segment, which
+// anchored the sign on the main chord and failed the whole export.
+TEST_F(Mei_Tests, mei_pianomania_rolled_grace_chord_exports_its_own_notes)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-arpeggio-grace.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    const std::vector<Arpeggio*> sources = sourceArpeggios(score.get());
+    ASSERT_EQ(sources.size(), 3u);
+    const size_t graceSigns = std::count_if(sources.cbegin(), sources.cend(), [](const Arpeggio* source) {
+        return source->chord()->isGrace();
+    });
+    ASSERT_EQ(graceSigns, 2u);
+
+    for (const bool layout : { true, false }) {
+        std::string text;
+        std::vector<PmMeiNoteRecord> records;
+        ASSERT_TRUE(pmWriteMeiToString(score.get(), layout, text, &records));
+        std::map<const Note*, PmMeiNoteRecord> recordsByNote;
+        for (const PmMeiNoteRecord& record : records) {
+            recordsByNote.emplace(record.note, record);
+        }
+        const double pageHeight = score->style().styleD(Sid::pageHeight);
+        const std::vector<std::string> tags = collectStartTags(text, "arpeg");
+        ASSERT_EQ(tags.size(), sources.size());
+        for (const Arpeggio* source : sources) {
+            const Chord* owner = source->chord();
+            ASSERT_GE(owner->notes().size(), 2u);
+            std::vector<std::string> members;
+            std::optional<RectF> anchorInk;
+            for (const Note* note : owner->notes()) {
+                ASSERT_TRUE(recordsByNote.count(note));
+                members.push_back("#" + recordsByNote.at(note).scoreEventId);
+                const RectF ink = note->symBbox(note->ldata()->cachedNoteheadSym.value()).translated(note->pagePos());
+                anchorInk = anchorInk.has_value() ? anchorInk->united(ink) : ink;
+            }
+            const std::string startid = "#" + recordsByNote.at(owner->notes().front()).chordId;
+            const auto tag = std::find_if(tags.cbegin(), tags.cend(), [&startid](const std::string& candidate) {
+                return xmlAttributeValue(candidate, "startid") == startid;
+            });
+            ASSERT_NE(tag, tags.cend()) << startid;
+            EXPECT_EQ(splitArpeggioValues(xmlAttributeValue(*tag, "pm:arpeggio-members").value_or(""), ' '), members);
+            EXPECT_FALSE(xmlAttributeValue(*tag, "plist").has_value());
+            EXPECT_EQ(xmlAttributeValue(*tag, "order"), source->arpeggioType() == ArpeggioType::DOWN ? "down" : "up");
+            if (!layout) {
+                continue;
+            }
+            const std::vector<std::string> centers = splitArpeggioValues(
+                xmlAttributeValue(*tag, "pm:arpeggio-member-centers").value_or(""), ';');
+            EXPECT_EQ(centers.size(), members.size());
+            const std::vector<std::string> anchor = splitArpeggioValues(
+                xmlAttributeValue(*tag, "pm:arpeggio-anchor-center").value_or(""), ',');
+            ASSERT_EQ(anchor.size(), 2u);
+            EXPECT_NEAR(std::stod(anchor[0]), anchorInk->center().x() / DPI, 0.000002);
+            EXPECT_NEAR(std::stod(anchor[1]), pageHeight - anchorInk->center().y() / DPI, 0.000002);
+        }
     }
 }
 
@@ -3505,6 +3566,60 @@ TEST_F(Mei_Tests, mei_pianomania_arpeggio_centers_follow_rendered_exported_heads
             }
         }
     }
+}
+
+}
+
+namespace mu::iex::mei {
+
+// Test value: Detects a glissando segment that MuseScore lays out without drawing (no forward
+// extent) failing the whole export, or taking the glissando's drawn segments with it.
+TEST_F(Mei_Tests, mei_export_glissando_skips_only_segments_musescore_does_not_draw)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-gliss-system-break.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    Glissando* gliss = nullptr;
+    score->scanElements([&gliss](EngravingItem* item) {
+        if (!gliss && item->isGlissandoSegment()) {
+            gliss = static_cast<GlissandoSegment*>(item)->glissando();
+        }
+    });
+    ASSERT_NE(gliss, nullptr);
+    ASSERT_EQ(gliss->spannerSegments().size(), 2u);
+    auto* first = static_cast<GlissandoSegment*>(gliss->frontSegment());
+    auto* second = static_cast<GlissandoSegment*>(gliss->backSegment());
+    ASSERT_GT(first->pos2().x(), 0.0);
+    ASSERT_GT(second->pos2().x(), 0.0);
+
+    std::string tag;
+    const auto exportSegments = [&score, &tag]() {
+        std::string text;
+        EXPECT_TRUE(pmWriteMeiToString(score.get(), true, text));
+        const std::vector<std::string> tags = collectStartTags(text, "gliss");
+        EXPECT_EQ(tags.size(), 1u);
+        tag = tags.empty() ? std::string() : tags.front();
+        return collectStartTags(text, "pm:gliss-segment");
+    };
+    const std::vector<std::string> drawn = exportSegments();
+    ASSERT_EQ(drawn.size(), 2u);
+
+    // TDraw returns early for a glissando segment whose end is not to the right of its start.
+    second->setPos2(PointF(0.0, second->pos2().y()));
+    std::vector<std::string> exported = exportSegments();
+    ASSERT_EQ(exported.size(), 1u);
+    EXPECT_EQ(xmlAttributeValue(exported.front(), "start"), xmlAttributeValue(drawn.front(), "start"));
+    EXPECT_EQ(xmlAttributeValue(exported.front(), "end"), xmlAttributeValue(drawn.front(), "end"));
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-start-center").has_value());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-end-center").has_value());
+
+    first->setPos2(PointF(-first->spatium(), first->pos2().y()));
+    exported = exportSegments();
+    EXPECT_TRUE(exported.empty());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-start-center").has_value());
+    EXPECT_TRUE(xmlAttributeValue(tag, "pm:gliss-end-center").has_value());
+    EXPECT_EQ(xmlAttributeValue(tag, "pm:gliss-play"), "true");
 }
 
 }

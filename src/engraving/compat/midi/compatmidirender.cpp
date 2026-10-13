@@ -351,13 +351,13 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
     }
 
     bool tremolo = false;
+    const bool tremoloPlays = chord->tremoloType() != TremoloType::INVALID_TREMOLO && CompatMidiRendererInternal::tremoloPlays(chord);
 
-    if (chord->arpeggio() && chord->arpeggio()->playArpeggio()
-        && chord->arpeggio()->arpeggioType() != ArpeggioType::BRACKET) {
-        CompatMidiRender::renderArpeggio(chord, ell, ontime);
+    if (const Arpeggio* roll = CompatMidiRendererInternal::rollingArpeggio(chord)) {
+        CompatMidiRender::renderArpeggio(chord, roll, ell, ontime);
         arpeggio = true;
     } else {
-        if (chord->tremoloType() != TremoloType::INVALID_TREMOLO) {
+        if (tremoloPlays) {
             CompatMidiRender::renderTremolo(chord, ell, ontime, tremoloLength);
             tremolo = true;
         }
@@ -377,7 +377,8 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
         }
         // If we are here then we still need to render the note.
         // Render its body if necessary and apply gateTime.
-        if (el->empty() && chord->tremoloChordType() != TremoloChordType::TremoloSecondChord) {
+        // A playing two-chord tremolo sounds the second chord's notes from the first chord's events.
+        if (el->empty() && !(tremoloPlays && chord->tremoloChordType() == TremoloChordType::TremoloSecondChord)) {
             el->push_back(NoteEvent(0, ontime, std::max(1, 1000 - trailtime - graceLeadIn),
                                     !note->ghost() ? NoteEvent::DEFAULT_VELOCITY_MULTIPLIER : NoteEvent::GHOST_VELOCITY_MULTIPLIER));
 
@@ -422,38 +423,49 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
 
 //---------------------------------------------------------
 //   renderArpeggio
+//    One roll covers every note under the sign, across voices and staves, from the lowest
+//    sounding pitch to the highest (or the reverse). Each covered chord renders its own notes
+//    at their step of that roll; unisons share a step.
 //---------------------------------------------------------
 
-void CompatMidiRender::renderArpeggio(Chord* chord, std::vector<NoteEventList>& ell, int ontime)
+void CompatMidiRender::renderArpeggio(Chord* chord, const Arpeggio* arpeggio, std::vector<NoteEventList>& ell, int ontime)
 {
-    int notes = int(chord->notes().size());
+    const Segment* segment = arpeggio->chord()->segment();
+    std::vector<int> pitches;
+    int shortestTicks = chord->actualTicks().ticks();
+    for (track_idx_t track = arpeggio->track(); track <= arpeggio->endTrack(); ++track) {
+        const EngravingItem* item = segment->element(track);
+        if (!item || !item->isChord()) {
+            continue;
+        }
+        const Chord* covered = toChord(item);
+        shortestTicks = std::min(shortestTicks, covered->actualTicks().ticks());
+        for (const mu::engraving::Note* note : covered->notes()) {
+            pitches.push_back(note->ppitch());
+        }
+    }
+    std::sort(pitches.begin(), pitches.end());
+    pitches.erase(std::unique(pitches.begin(), pitches.end()), pitches.end());
+    const int steps = static_cast<int>(pitches.size());
+
     int l = 64;
-    while (l && (l * notes > chord->upNote()->playTicks())) {
+    while (l && (l * steps > shortestTicks)) {
         l = 2 * l / 3;
     }
-    int start, end, step;
-    bool up = chord->arpeggio()->arpeggioType() != ArpeggioType::DOWN && chord->arpeggio()->arpeggioType() != ArpeggioType::DOWN_STRAIGHT;
-    if (up) {
-        start = 0;
-        end   = notes;
-        step  = 1;
-    } else {
-        start = notes - 1;
-        end   = -1;
-        step  = -1;
-    }
-    int j = 0;
-    for (int i = start; i != end; i += step) {
+    const bool up = arpeggio->arpeggioType() != ArpeggioType::DOWN && arpeggio->arpeggioType() != ArpeggioType::DOWN_STRAIGHT;
+    const auto tempoRatio = chord->score()->tempomap()->multipliedTempo(chord->tick().ticks()).val / Constants::DEFAULT_TEMPO.val;
+    const int chordTicks = chord->actualTicks().ticks();
+    for (size_t i = 0; i < chord->notes().size(); ++i) {
+        const int rank = static_cast<int>(std::lower_bound(pitches.cbegin(), pitches.cend(), chord->notes()[i]->ppitch())
+                                          - pitches.cbegin());
+        const int step = up ? rank : steps - 1 - rank;
         NoteEventList* events = &(ell)[i];
         events->clear();
 
-        auto tempoRatio = chord->score()->tempomap()->multipliedTempo(chord->tick().ticks()).val / Constants::DEFAULT_TEMPO.val;
-        int ot = (l * j * 1000) / chord->upNote()->playTicks()
-                 * tempoRatio * chord->arpeggio()->Stretch();
+        int ot = (l * step * 1000) / chordTicks * tempoRatio * arpeggio->Stretch();
         ot = std::clamp(ot + ontime, ot, 1000);
 
         events->push_back(NoteEvent(0, ot, 1000 - ot));
-        j++;
     }
 }
 

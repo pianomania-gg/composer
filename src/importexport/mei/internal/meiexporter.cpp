@@ -2499,8 +2499,9 @@ bool MeiExporter::collectNoteEvents(const Measure *measure) {
               m_durEvents.push_back({tickKey, t, note, indexGroupChord});
               continue;
             }
-            const bool repeatedTremolo = chord->tremoloTwoChord()
-                || (chord->tremoloSingleChord() && !chord->tremoloSingleChord()->isBuzzRoll());
+            const bool repeatedTremolo = CompatMidiRendererInternal::tremoloPlays(chord)
+                && (chord->tremoloTwoChord()
+                    || (chord->tremoloSingleChord() && !chord->tremoloSingleChord()->isBuzzRoll()));
             if (repeatedTremolo) {
               const auto attackTick = CompatMidiRendererInternal::canonicalTremoloWrittenAttackTick(note);
               if (!attackTick.has_value()) {
@@ -4151,13 +4152,19 @@ bool MeiExporter::writeArpeg(const Arpeggio *arpeggio,
     LOGE() << "MEI arpeggio has an invalid authored track span";
     return false;
   }
+  // A grace chord's segment is its parent's, whose track elements are main chords. A rolled grace
+  // chord therefore covers its own notes, and no main chord can join its roll.
+  if (startChord->isGrace() && arpeggio->endTrack() != startChord->track()) {
+    LOGE() << "MEI rolled grace chord cannot span other voices or staves";
+    return false;
+  }
 
   std::vector<std::string> anchorIds;
   std::string memberIds;
   std::vector<const Note *> exportedMembers;
   std::vector<const Note *> startAnchorHeads;
   for (track_idx_t track = arpeggio->track(); track <= arpeggio->endTrack(); ++track) {
-    const EngravingItem *element = segment->element(track);
+    const EngravingItem *element = track == startChord->track() ? startChord : segment->element(track);
     if (!element || !element->isChord()) {
       continue;
     }
@@ -6192,8 +6199,12 @@ bool MeiExporter::writeGliss(const Glissando *gliss,
       if (!base->isGlissandoSegment()) { LOGE() << "MEI glissando contains a foreign segment"; return false; }
       const auto *seg = static_cast<const GlissandoSegment *>(base);
       const PointF origin = seg->pagePos(), delta = seg->pos2();
+      // TDraw draws nothing for a segment whose end is not to the right of its start.
+      if (delta.x() <= 0) {
+        continue;
+      }
       const double length = std::hypot(delta.x(), delta.y());
-      if (!std::isfinite(length) || length <= 0 || delta.x() <= 0) { LOGE() << "MEI glissando has invalid rendered length"; return false; }
+      if (!std::isfinite(length)) { LOGE() << "MEI glissando has invalid rendered length"; return false; }
       const Page *page = seg->system() ? seg->system()->page() : nullptr;
       const auto &pages = m_score->pages();
       const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);

@@ -305,6 +305,9 @@ private slots:
     void bracketsAndPlaybackDisabledRollsAttackSimultaneously();
     void arpeggiatedDisabledNotesHaveNoAttacks();
     void repeatedRollsRetainOrdinaryWrittenAttacks();
+    void spanningRollsStaggerEveryCoveredNoteInSignOrder();
+    void spanningBracketsAndPlaybackDisabledRollsAttackTogether();
+    void bracketedChordsKeepOrdinaryArticulationAndOrnamentPlayback();
 
 private:
     bool exportFixture(const QString& fixtureName, MidiFile& midiFile, std::vector<ExportedMidiNote>& notes);
@@ -388,6 +391,83 @@ void MidiExportTimingTests::repeatedRollsRetainOrdinaryWrittenAttacks()
     for (size_t index = 0; index < first.size(); ++index) {
         QCOMPARE(first[index].pitch, second[index].pitch);
         QCOMPARE(first[index].start + measureTicks, second[index].start);
+    }
+}
+
+// Test value: Detects a roll whose sign covers other voices or the other staff sounding only the
+// chord that owns the sign while the covered chords attack together on the beat.
+void MidiExportTimingTests::spanningRollsStaggerEveryCoveredNoteInSignOrder()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_span_staves.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    const std::vector<std::pair<int, std::vector<int> > > rolls = {
+        { 0, { 48, 55, 72, 76 } },
+        { 1, { 76, 72, 55, 48 } },
+        { 2, { 65, 72, 76 } },
+    };
+    for (const auto& [measure, order] : rolls) {
+        const std::vector<ExportedMidiNote> attacks = notesInRange(notes, measure * measureTicks, (measure + 1) * measureTicks);
+        QCOMPARE(attacks.size(), order.size());
+        QCOMPARE(attacks.front().start, measure * measureTicks);
+        for (size_t index = 0; index < attacks.size(); ++index) {
+            QCOMPARE(attacks[index].pitch, order[index]);
+            QCOMPARE(attacks[index].offVelocity, 64);
+            QVERIFY(attacks[index].duration() > 0);
+            if (index > 0) {
+                QVERIFY(attacks[index - 1].start < attacks[index].start);
+            }
+        }
+    }
+    // The bass chord in the first roll is written twice as long as the treble chord and keeps its length.
+    const std::vector<ExportedMidiNote> longBass = notesForPitchInRange(notes, 48, 0, measureTicks);
+    QCOMPARE(longBass.size(), size_t(1));
+    QVERIFY(longBass.front().end > 480);
+}
+
+// Test value: Detects a bracket or a playback-disabled sign across both staves being performed as a roll.
+void MidiExportTimingTests::spanningBracketsAndPlaybackDisabledRollsAttackTogether()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_span_staves.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    for (int measure : { 3, 4 }) {
+        const std::vector<ExportedMidiNote> attacks = notesInRange(notes, measure * measureTicks, (measure + 1) * measureTicks);
+        QCOMPARE(attacks.size(), size_t(4));
+        for (const ExportedMidiNote& attack : attacks) {
+            QCOMPARE(attack.start, measure * measureTicks);
+            QCOMPARE(attack.offVelocity, 64);
+        }
+    }
+}
+
+// Test value: Detects a bracket being treated as a roll after rendering, which skipped the
+// staccato length repair and left generated trill notes marked as written attacks.
+void MidiExportTimingTests::bracketedChordsKeepOrdinaryArticulationAndOrnamentPlayback()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_arpeggio_bracket_articulations.mscx", midiFile, notes));
+    const int measureTicks = 4 * 480;
+    for (int pitch : { 72, 76 }) {
+        const std::vector<ExportedMidiNote> staccatos = notesForPitchInRange(notes, pitch, 0, measureTicks);
+        QCOMPARE(staccatos.size(), size_t(2));
+        QCOMPARE(staccatos[0].start, 0);
+        QCOMPARE(staccatos[1].start, 480);
+        QCOMPARE(staccatos[0].duration(), staccatos[1].duration());
+    }
+    const std::vector<ExportedMidiNote> bracketed = notesInRange(notes, measureTicks, 2 * measureTicks);
+    const std::vector<ExportedMidiNote> plain = notesInRange(notes, 2 * measureTicks, 3 * measureTicks);
+    QVERIFY(bracketed.size() > 2);
+    QVERIFY(countNotesWithOffVelocity(bracketed, 127) > 0);
+    QCOMPARE(bracketed.size(), plain.size());
+    for (size_t index = 0; index < bracketed.size(); ++index) {
+        QCOMPARE(bracketed[index].pitch, plain[index].pitch);
+        QCOMPARE(bracketed[index].start + measureTicks, plain[index].start);
+        QCOMPARE(bracketed[index].duration(), plain[index].duration());
+        QCOMPARE(bracketed[index].offVelocity, plain[index].offVelocity);
     }
 }
 
