@@ -40,6 +40,9 @@ struct PmMeiNoteRecord {
     int idx = 0;
 };
 
+//! Reject invalid two-chord tremolo links before playback or engraving traversal.
+bool pmValidateTremoloPartnerLinks(const mu::engraving::Score* score);
+
 //! Headless helper: render an already-laid-out score to MEI (with the pm:
 //! pianomania namespace) as a string. Wraps the internal MeiExporter so callers
 //! (e.g. the wasm converter) don't need its private pugixml/libmei includes.
