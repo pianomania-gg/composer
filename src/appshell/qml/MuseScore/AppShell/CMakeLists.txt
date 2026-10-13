@@ -28,6 +28,8 @@ qt_add_qml_module(appshell_qml
         aboutmodel.h
         appmenumodel.cpp
         appmenumodel.h
+        authoringcreationmenus.cpp
+        authoringcreationmenus.h
         composeraccountmodel.cpp
         composeraccountmodel.h
         DevTools/Settings/settingslistmodel.cpp

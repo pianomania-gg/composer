@@ -52,11 +52,7 @@ void NotationModule::registerExports()
 #endif
 
     ioc()->registerExport<INotationConfiguration>(moduleName(), m_configuration);
-    const auto configuration = m_configuration;
-    ioc()->registerExport<IAuthoringCapabilityPolicy>(moduleName(), std::make_shared<AuthoringCapabilityPolicy>(
-        [configuration]() { return configuration->pianoAuthoringPolicyEnabled(); },
-        [configuration](bool enabled) { configuration->setPianoAuthoringPolicyEnabled(enabled); },
-        configuration->pianoAuthoringPolicyChanged()));
+    ioc()->registerExport<IAuthoringCapabilityPolicy>(moduleName(), std::make_shared<AuthoringCapabilityPolicy>());
     ioc()->registerExport<IInstrumentsRepository>(moduleName(), m_instrumentsRepository);
 }
 

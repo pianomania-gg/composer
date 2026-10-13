@@ -103,8 +103,6 @@ SymbolDialog::SymbolDialog(const QString& s, QWidget* parent)
     QLayout* layout = new QVBoxLayout();
     frame->setLayout(layout);
     createSymbolPalette();
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    policy->changed().onNotify(m_symbolsWidget, [this]() { createSymbols(); });
 
     QScrollArea* symbolsArea = new PaletteScrollArea(m_symbolsWidget);
     symbolsArea->setFocusProxy(m_symbolsWidget);

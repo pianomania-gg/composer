@@ -103,8 +103,6 @@ static const Settings::Key IS_SNAPPED_TO_HORIZONTAL_GRID_KEY(module_name,  "ui/a
 static const Settings::Key HORIZONTAL_GRID_SIZE_KEY(module_name,  "ui/application/raster/horizontal");
 static const Settings::Key VERTICAL_GRID_SIZE_KEY(module_name,  "ui/application/raster/vertical");
 
-static const Settings::Key PIANO_AUTHORING_POLICY_ENABLED(module_name, "authoring/pianoCreationPolicyEnabled");
-
 static const Settings::Key STYLE_FILE_IMPORT_PATH_KEY(module_name, "import/style/styleFile");
 
 static constexpr int DEFAULT_GRID_SIZE_SPATIUM = 2;
@@ -123,11 +121,6 @@ static const std::map<NoteInputMethod, std::string> NOTE_INPUT_METHOD_TO_STR {
 
 void NotationConfiguration::init()
 {
-    settings()->setDefaultValue(PIANO_AUTHORING_POLICY_ENABLED, Val(true));
-    settings()->valueChanged(PIANO_AUTHORING_POLICY_ENABLED).onReceive(nullptr, [this](const Val&) {
-        m_pianoAuthoringPolicyChanged.notify();
-    });
-
     settings()->setDefaultValue(BACKGROUND_USE_COLOR, Val(true));
     settings()->valueChanged(BACKGROUND_USE_COLOR).onReceive(nullptr, [this](const Val&) {
         m_backgroundChanged.notify();
@@ -1178,20 +1171,4 @@ void NotationConfiguration::setStyleFileImportPath(const muse::io::path_t& path)
 async::Channel<std::string> NotationConfiguration::styleFileImportPathChanged() const
 {
     return m_styleFileImportPathChanged;
-}
-
-// The authoring policy is independent of the Composer build profile.
-bool NotationConfiguration::pianoAuthoringPolicyEnabled() const
-{
-    return settings()->value(PIANO_AUTHORING_POLICY_ENABLED).toBool();
-}
-
-void NotationConfiguration::setPianoAuthoringPolicyEnabled(bool enabled)
-{
-    settings()->setSharedValue(PIANO_AUTHORING_POLICY_ENABLED, Val(enabled));
-}
-
-muse::async::Notification NotationConfiguration::pianoAuthoringPolicyChanged() const
-{
-    return m_pianoAuthoringPolicyChanged;
 }

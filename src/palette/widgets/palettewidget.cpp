@@ -105,12 +105,6 @@ PaletteWidget::PaletteWidget(QWidget* parent)
 
     setReadOnly(false);
     setMouseTracking(true);
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    policy->changed().onNotify(this, [this]() {
-        m_currentIdx = -1;
-        setFilterText(QString());
-        update();
-    });
 }
 
 void PaletteWidget::setPalette(PalettePtr palette)

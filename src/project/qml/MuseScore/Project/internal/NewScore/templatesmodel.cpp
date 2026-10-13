@@ -21,7 +21,6 @@
  */
 #include "templatesmodel.h"
 
-#include "async/asyncable.h"
 #include "notation/iauthoringcapabilitypolicy.h"
 
 #include "log.h"
@@ -35,31 +34,11 @@ inline bool operator==(const Template& templ1, const Template& templ2)
 {
     return templ1.meta.filePath == templ2.meta.filePath;
 }
-
-class TemplatesPolicyChangeReceiver final : public QObject, public muse::async::Asyncable
-{
-public:
-    explicit TemplatesPolicyChangeReceiver(TemplatesModel* model)
-        : QObject(model), m_model(model)
-    {
-    }
-
-    void subscribe(const std::shared_ptr<IAuthoringCapabilityPolicy>& policy)
-    {
-        policy->changed().onNotify(this, [this]() { m_model->load(); });
-    }
-
-private:
-    TemplatesModel* m_model = nullptr;
-};
 }
 
 TemplatesModel::TemplatesModel(QObject* parent)
     : QObject(parent), muse::Contextable(muse::iocCtxForQmlObject(this))
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("project");
-    auto receiver = new TemplatesPolicyChangeReceiver(this);
-    receiver->subscribe(policy);
 }
 
 void TemplatesModel::load()

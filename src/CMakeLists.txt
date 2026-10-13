@@ -102,6 +102,12 @@ if (MUE_BUILD_APPSHELL_MODULE)
     endif()
 endif()
 
+# The menu filter tests need only uicomponents, so they also run in the
+# unit-test configuration, which leaves the appshell module out.
+if (MUE_BUILD_APPSHELL_TESTS AND MUSE_MODULE_UI_QML)
+    add_subdirectory(appshell/qml/MuseScore/AppShell/tests)
+endif()
+
 if (OS_IS_WASM)
     # Headless in-browser converter (Embind pmConvert). Replaces the old wasmtest
     # stub. The GUI/audio modules are turned off for the wasm headless profile in

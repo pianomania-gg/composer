@@ -377,6 +377,7 @@ endif()
 ###########################################
 if (NOT MUSE_ENABLE_UNIT_TESTS)
 
+    set(MUE_BUILD_APPSHELL_TESTS OFF)
     set(MUE_BUILD_BRAILLE_TESTS OFF)
     set(MUE_BUILD_ENGRAVING_TESTS OFF)
     set(MUE_BUILD_IMPORTEXPORT_TESTS OFF)

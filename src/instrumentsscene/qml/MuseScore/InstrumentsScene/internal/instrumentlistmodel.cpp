@@ -39,12 +39,6 @@ static const QString INSTRUMENT_TEMPLATE_KEY("instrumentTemplate");
 InstrumentListModel::InstrumentListModel(QObject* parent)
     : QAbstractListModel(parent), muse::Contextable(muse::iocCtxForQmlObject(this)), m_selection(new ItemMultiSelectionModel(this))
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("instrumentsscene");
-    policy->changed().onNotify(this, [this]() {
-        loadGroups();
-        loadInstruments();
-    });
-
     connect(m_selection, &ItemMultiSelectionModel::selectionChanged, this,
             [this](const QItemSelection& selected, const QItemSelection& deselected) {
         QModelIndexList changedIndexes;

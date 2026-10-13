@@ -39,10 +39,6 @@ static const muse::UriQuery CUSTOMIZE_KIT_URI("musescore://palette/customizekit"
 
 void PaletteActionsController::init()
 {
-    auto policy = muse::modularity::ioc(iocContext())->resolve<mu::notation::IAuthoringCapabilityPolicy>("palette");
-    policy->changed().onNotify(this, [this]() {
-        m_actionsReceiveAvailableChanged.send({ "customize-kit" });
-    });
     globalContext()->currentNotationChanged().onNotify(this, [this]() {
         if (auto current = interaction()) {
             current->selectionChanged().onNotify(this, [this]() {

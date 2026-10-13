@@ -2,7 +2,6 @@
 
 #include <string_view>
 #include "modularity/imoduleinterface.h"
-#include "async/notification.h"
 #include "engraving/types/symid.h"
 #include "io/path.h"
 
@@ -14,9 +13,6 @@ class IAuthoringCapabilityPolicy : MODULE_GLOBAL_INTERFACE
     INTERFACE_ID(IAuthoringCapabilityPolicy)
 public:
     virtual ~IAuthoringCapabilityPolicy() = default;
-    virtual bool enabled() const = 0;
-    virtual void setEnabled(bool enabled) = 0;
-    virtual muse::async::Notification changed() const = 0;
     virtual bool isRestrictedAction(std::string_view code) const = 0;
     virtual bool mayCreateAction(std::string_view code) const = 0;
     virtual bool mayCreateInstrument(std::string_view templateId) const = 0;

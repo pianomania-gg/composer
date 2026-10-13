@@ -518,11 +518,6 @@ void NoteInputBarModel::init()
 {
     subscribeOnChanges();
 
-    auto policy = muse::modularity::ioc(iocContext())->resolve<IAuthoringCapabilityPolicy>("notationscene");
-    policy->changed().onNotify(this, [this]() {
-        load();
-    });
-
     uiConfiguration()->toolConfigChanged(TOOLBAR_NAME).onNotify(this, [this]() {
         load();
     });

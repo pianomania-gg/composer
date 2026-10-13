@@ -22,18 +22,16 @@ TEST(AuthoringCapabilityPolicy, EffectiveRegistryRetainsOriginalPendingRows)
 
 TEST(AuthoringCapabilityPolicy, DedicatedCreationCannotBorrowExistingEditAuthority)
 {
-    EXPECT_FALSE(allowed(decide("action.dip", true)));
-    EXPECT_TRUE(allowed(decide("action.dip", false)));
-    EXPECT_FALSE(allowed(decide("action.dip", true, { Operation::CreateFromDedicatedControl, true })));
-    EXPECT_FALSE(allowed(decide("action.edit-strings", true, { Operation::EditExisting, false })));
-    EXPECT_TRUE(allowed(decide("action.edit-strings", true, { Operation::EditExisting, true })));
-    EXPECT_TRUE(allowed(decide("action.dip", true, { Operation::PreserveImported, false })));
+    EXPECT_FALSE(allowed(decide("action.dip")));
+    EXPECT_FALSE(allowed(decide("action.dip", { Operation::CreateFromDedicatedControl, true })));
+    EXPECT_FALSE(allowed(decide("action.edit-strings", { Operation::EditExisting, false })));
+    EXPECT_TRUE(allowed(decide("action.edit-strings", { Operation::EditExisting, true })));
+    EXPECT_TRUE(allowed(decide("action.dip", { Operation::PreserveImported, false })));
 }
 
-TEST(AuthoringCapabilityPolicy, ExactActionsAndInstrumentsRestoreWithFlagOff)
+TEST(AuthoringCapabilityPolicy, ExactActionsAndInstruments)
 {
-    bool enabled = true;
-    AuthoringCapabilityPolicy policy([&enabled]() { return enabled; }, [&enabled](bool value) { enabled = value; }, {});
+    AuthoringCapabilityPolicy policy;
     EXPECT_FALSE(policy.mayCreateAction("dip"));
     EXPECT_FALSE(policy.mayCreateAction("insert-fretframe"));
     EXPECT_TRUE(policy.mayCreateAction("chord-text"));
@@ -41,14 +39,11 @@ TEST(AuthoringCapabilityPolicy, ExactActionsAndInstrumentsRestoreWithFlagOff)
     EXPECT_FALSE(policy.mayCreateInstrument("guitar-nylon"));
     EXPECT_TRUE(policy.mayCreateInstrument("piano"));
     EXPECT_TRUE(policy.mayCreateInstrument("harpsichord"));
-    policy.setEnabled(false);
-    EXPECT_TRUE(policy.mayCreateAction("dip"));
-    EXPECT_TRUE(policy.mayCreateInstrument("guitar-nylon"));
 }
 
 TEST(AuthoringCapabilityPolicy, RawSymbolsUseApprovedExactIdentities)
 {
-    AuthoringCapabilityPolicy policy([]() { return true; }, [](bool) {}, {});
+    AuthoringCapabilityPolicy policy;
     EXPECT_FALSE(policy.mayCreateSymbol(mu::engraving::SymId::accdnCombDot));
     EXPECT_TRUE(policy.mayCreateSymbol(mu::engraving::SymId::stringsThumbPosition));
     EXPECT_TRUE(policy.mayCreateSymbol(mu::engraving::SymId::stringsHarmonic));
