@@ -81,6 +81,8 @@ struct MidiExportedFile {
         std::vector<Origin> origins;
     };
 
+    // Source ticks are canonical score ticks; the unfolded start is a tick in
+    // this file's MIDI timeline.
     struct TraversalSegment {
         std::string repeatSegmentId;
         int sourceStartTick = 0;
@@ -90,9 +92,10 @@ struct MidiExportedFile {
         std::string endingId;
     };
 
+    // A canonical event this variant plays. Its position is the canonical
+    // event's score tick.
     struct VariantCanonicalEvent {
         std::string scoreEventId;
-        int scoreTick = 0;
     };
 
     std::vector<AudibleEvent> audibleEvents;

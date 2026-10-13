@@ -511,9 +511,9 @@ bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResul
     return true;
 }
 
-std::string endingIdForSegment(mu::engraving::Score* score, const mu::engraving::RepeatSegment* segment, bool expandRepeats)
+std::string endingIdForSegment(mu::engraving::Score* score, const mu::engraving::RepeatSegment* segment)
 {
-    if (!score || !segment || !expandRepeats) {
+    if (!score || !segment) {
         return {};
     }
     for (const auto& entry : score->spannerMap().map()) {
@@ -539,15 +539,17 @@ std::string endingIdForSegment(mu::engraving::Score* score, const mu::engraving:
     return {};
 }
 
-std::vector<MidiExportedFile::TraversalSegment> traversalSegments(mu::engraving::Score* score,
-                                                                  const std::string& traversalId,
-                                                                  bool expandRepeats)
+// Every traversal segment names canonical score ticks as its source range and
+// the selected MIDI's ticks as its unfolded start. The repeats MIDI plays the
+// canonical score through MuseScore's unwound repeat list, so each repeat
+// segment already carries canonical source ticks.
+std::vector<MidiExportedFile::TraversalSegment> repeatTraversalSegments(mu::engraving::Score* score)
 {
     std::vector<MidiExportedFile::TraversalSegment> result;
     if (!score) {
         return result;
     }
-    const mu::engraving::RepeatList& repeatList = score->repeatList(expandRepeats, false);
+    const mu::engraving::RepeatList& repeatList = score->repeatList(true, false);
     result.reserve(repeatList.size());
     int ordinal = 0;
     for (const mu::engraving::RepeatSegment* segment : repeatList) {
@@ -556,7 +558,7 @@ std::vector<MidiExportedFile::TraversalSegment> traversalSegments(mu::engraving:
         }
         ++ordinal;
         const int sourceEndTick = segment->tick + segment->len();
-        const std::string endingId = endingIdForSegment(score, segment, expandRepeats);
+        const std::string endingId = endingIdForSegment(score, segment);
         std::string segmentId = "segment:" + std::to_string(segment->tick) + "-" + std::to_string(sourceEndTick)
                                 + ":pass:" + std::to_string(segment->playbackCount);
         if (!endingId.empty()) {
@@ -565,8 +567,68 @@ std::vector<MidiExportedFile::TraversalSegment> traversalSegments(mu::engraving:
         result.push_back({ segmentId, segment->tick, sourceEndTick, segment->utick, ordinal, endingId });
     }
     if (result.empty()) {
-        LOGE() << "Pianomania traversal contains no segments: " << traversalId;
+        LOGE() << "Pianomania repeats traversal contains no segments";
     }
+    return result;
+}
+
+// The base MIDI plays its score straight through. For a score with several
+// endings that score is a copy without the non-final endings, so its own ticks
+// are not canonical score ticks. Each run of played measures that follows one
+// run of consecutive canonical measures becomes one segment: its source range
+// is that canonical run and its unfolded start is where the run begins in the
+// base MIDI. The copy keeps the canonical measure identities that the
+// canonical MEI publishes, so measures are matched by identity.
+std::vector<MidiExportedFile::TraversalSegment> baseTraversalSegments(mu::engraving::Score* canonicalScore,
+                                                                      mu::engraving::Score* playedScore)
+{
+    std::vector<MidiExportedFile::TraversalSegment> result;
+    if (!canonicalScore || !playedScore) {
+        return result;
+    }
+    std::map<std::string, const mu::engraving::Measure*> canonicalMeasures;
+    for (const mu::engraving::Measure* measure = canonicalScore->firstMeasure(); measure;
+         measure = measure->nextMeasure()) {
+        const std::string id = stableXmlId(measure);
+        if (id.empty() || !canonicalMeasures.emplace(id, measure).second) {
+            LOGE() << "Pianomania base traversal requires one identity per canonical measure";
+            return {};
+        }
+    }
+
+    std::set<const mu::engraving::Measure*> playedCanonicalMeasures;
+    const mu::engraving::Measure* runFirst = nullptr;
+    const mu::engraving::Measure* runLast = nullptr;
+    int runUnfoldedStart = 0;
+    const auto closeRun = [&]() {
+        const int start = runFirst->tick().ticks();
+        const int end = runLast->endTick().ticks();
+        result.push_back({ "segment:" + std::to_string(start) + "-" + std::to_string(end) + ":pass:1",
+                           start, end, runUnfoldedStart, static_cast<int>(result.size()) + 1, {} });
+    };
+    for (const mu::engraving::Measure* measure = playedScore->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        const auto canonical = canonicalMeasures.find(stableXmlId(measure));
+        if (canonical == canonicalMeasures.end() || canonical->second->ticks() != measure->ticks()
+            || !playedCanonicalMeasures.insert(canonical->second).second) {
+            LOGE() << "Pianomania base MIDI measure does not play exactly one canonical measure: "
+                   << stableXmlId(measure);
+            return {};
+        }
+        if (runLast && runLast->nextMeasure() == canonical->second) {
+            runLast = canonical->second;
+            continue;
+        }
+        if (runFirst) {
+            closeRun();
+        }
+        runFirst = runLast = canonical->second;
+        runUnfoldedStart = measure->tick().ticks();
+    }
+    if (!runFirst) {
+        LOGE() << "Pianomania base traversal contains no measures";
+        return {};
+    }
+    closeRun();
     return result;
 }
 
@@ -741,11 +803,10 @@ std::vector<MidiExportedFile::VariantCanonicalEvent> variantCanonicalEvents(
     std::vector<MidiExportedFile::VariantCanonicalEvent> result;
     result.reserve(records.size());
     for (const mu::iex::mei::PmMeiNoteRecord& record : records) {
-        const mu::engraving::Chord* chord = record.note ? record.note->chord() : nullptr;
-        if (!chord || record.scoreEventId.empty()) {
+        if (!record.note || record.scoreEventId.empty()) {
             return {};
         }
-        result.push_back({ record.scoreEventId, chord->tick().ticks() });
+        result.push_back({ record.scoreEventId });
     }
     return result;
 }
@@ -904,9 +965,16 @@ bool buildManifestModel(const PianomaniaExportResult& result,
             built.audibleEvents.push_back(std::move(audible));
         }
 
+        // The variant score decides membership. Positions come from the
+        // canonical score, the coordinate system of every traversal segment.
         std::map<std::string, int> variantTicks;
         for (const MidiExportedFile::VariantCanonicalEvent& event : file.variantCanonicalEvents) {
-            if (!variantTicks.emplace(event.scoreEventId, event.scoreTick).second) {
+            const auto canonicalEvent = canonical.find(event.scoreEventId);
+            if (canonicalEvent == canonical.end()) {
+                LOGE() << "Variant contains a noncanonical score event identity: " << event.scoreEventId;
+                return false;
+            }
+            if (!variantTicks.emplace(event.scoreEventId, canonicalEvent->second->scoreTick).second) {
                 LOGE() << "Variant repeats a canonical event definition: " << event.scoreEventId;
                 return false;
             }
@@ -1395,7 +1463,9 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         file.path = path;
         file.expandRepeats = expandRepeats;
         file.traversalId = midiKindName(kind);
-        file.traversalSegments = traversalSegments(exportScore, file.traversalId, expandRepeats);
+        file.traversalSegments = kind == MidiExportedFile::Kind::Base
+                                 ? baseTraversalSegments(score, exportScore)
+                                 : repeatTraversalSegments(exportScore);
         file.variantCanonicalEvents = variantCanonicalEvents(canonicalVariantRecords);
         if (file.traversalSegments.empty() || file.variantCanonicalEvents.empty()
             || !stabilizeProvenance(provenance, file) || !verifyWrittenMidi(file)) {
@@ -1446,8 +1516,7 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
             if (!canonicalIds.count(event.scoreEventId)) {
                 rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
                                         std::string("Variant contains a noncanonical score event identity: ")
-                                        + event.scoreEventId + ", variant=" + midiKindName(file.kind)
-                                        + ", score_tick=" + std::to_string(event.scoreTick));
+                                        + event.scoreEventId + ", variant=" + midiKindName(file.kind));
                 return rv;
             }
         }
