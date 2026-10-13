@@ -35,6 +35,11 @@ set(MODULE_TEST_LINK
     iex_mei
 )
 
+set(MODULE_TEST_INCLUDE
+    ${PROJECT_SOURCE_DIR}/src/importexport/mei
+    ${PROJECT_SOURCE_DIR}/src/framework/global/thirdparty/pugixml
+)
+
 set(MODULE_TEST_DATA_ROOT ${CMAKE_CURRENT_LIST_DIR})
 
 include(SetupGTest)

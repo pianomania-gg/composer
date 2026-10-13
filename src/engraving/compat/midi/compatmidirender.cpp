@@ -352,7 +352,8 @@ std::vector<NoteEventList> CompatMidiRender::renderChord(const CompatMidiRendere
 
     bool tremolo = false;
 
-    if (chord->arpeggio() && chord->arpeggio()->playArpeggio()) {
+    if (chord->arpeggio() && chord->arpeggio()->playArpeggio()
+        && chord->arpeggio()->arpeggioType() != ArpeggioType::BRACKET) {
         CompatMidiRender::renderArpeggio(chord, ell, ontime);
         arpeggio = true;
     } else {

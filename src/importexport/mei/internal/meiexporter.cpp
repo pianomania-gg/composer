@@ -21,6 +21,8 @@
  */
 
 #include "meiexporter.h"
+#include "engraving/dom/chordbracket.h"
+#include <cmath>
 #include "../pmmeiexport.h"
 
 #include <QString>
@@ -2753,7 +2755,7 @@ bool MeiExporter::writeMeasure(const Measure *measure, int &measureN,
   }
 
   for (auto controlEvent : m_startingControlEventList) {
-    if (controlEvent.first->isArpeggio()) {
+    if (controlEvent.first->isArpeggio() || controlEvent.first->isChordBracket()) {
       success =
           success &&
           this->writeArpeg(dynamic_cast<const Arpeggio *>(controlEvent.first),
@@ -4143,16 +4145,259 @@ bool MeiExporter::writeArpeg(const Arpeggio *arpeggio,
                              const std::string &startid) {
   IF_ASSERT_FAILED(arpeggio) { return false; }
 
+  const Chord *startChord = arpeggio->chord();
+  const Segment *segment = startChord ? startChord->segment() : nullptr;
+  if (!segment || arpeggio->span() <= 0 || arpeggio->endTrack() >= m_score->ntracks()) {
+    LOGE() << "MEI arpeggio has an invalid authored track span";
+    return false;
+  }
+
+  std::vector<std::string> anchorIds;
+  std::string memberIds;
+  std::vector<const Note *> exportedMembers;
+  std::vector<const Note *> startAnchorHeads;
+  for (track_idx_t track = arpeggio->track(); track <= arpeggio->endTrack(); ++track) {
+    const EngravingItem *element = segment->element(track);
+    if (!element || !element->isChord()) {
+      continue;
+    }
+    const Chord *memberChord = toChord(element);
+    if (!shouldExportChordRest(memberChord)) {
+      continue;
+    }
+    const std::vector<const Note *> notes = visibleNotes(memberChord);
+    if (notes.empty()) {
+      LOGE() << "MEI arpeggio spans a chord without an exported note anchor";
+      return false;
+    }
+    const EngravingItem *anchor = notes.size() > 1
+        ? static_cast<const EngravingItem *>(memberChord)
+        : static_cast<const EngravingItem *>(notes.front());
+    const auto anchorId = m_exportedXmlIds.find(anchor);
+    if (anchorId == m_exportedXmlIds.end()) {
+      LOGE() << "MEI arpeggio is missing an emitted chord/note identity";
+      return false;
+    }
+    anchorIds.push_back("#" + anchorId->second);
+    if (anchorIds.size() == 1) {
+      startAnchorHeads = notes;
+    }
+    for (const Note *note : notes) {
+      const auto noteId = m_noteXmlIdCache.find(note);
+      if (noteId == m_noteXmlIdCache.end()) {
+        LOGE() << "MEI arpeggio is missing an emitted member-note identity";
+        return false;
+      }
+      if (!memberIds.empty()) {
+        memberIds += ' ';
+      }
+      memberIds += "#" + noteId->second;
+      exportedMembers.push_back(note);
+    }
+  }
+  if (anchorIds.empty() || anchorIds.front() != startid) {
+    LOGE() << "MEI arpeggio start identity disagrees with its authored span";
+    return false;
+  }
+
+  if (!std::isfinite(arpeggio->Stretch()) || arpeggio->Stretch() <= 0.0) {
+    LOGE() << "MEI arpeggio requires a finite positive playback stretch";
+    return false;
+  }
+  const bool isBracket = arpeggio->arpeggioType() == ArpeggioType::BRACKET;
+  const bool isStraight = arpeggio->arpeggioType() == ArpeggioType::UP_STRAIGHT
+      || arpeggio->arpeggioType() == ArpeggioType::DOWN_STRAIGHT;
   pugi::xml_node arpegNode = m_currentNode.append_child();
   libmei::Arpeg meiArpeg = Convert::arpegToMEI(arpeggio);
   meiArpeg.SetStartid(startid);
-
-  meiArpeg.Write(arpegNode, this->getXmlIdFor(arpeggio, 'a'));
-
-  // If the arpeggio is spanning to a lower staff, keep it as open control event
-  if (arpeggio->span() > 1) {
-    m_openControlEventMap[arpeggio] = arpegNode;
+  if (anchorIds.size() > 1) {
+    meiArpeg.SetPlist(std::vector<std::string>(anchorIds.cbegin() + 1, anchorIds.cend()));
   }
+  meiArpeg.Write(arpegNode, this->getXmlIdFor(arpeggio, 'a'));
+  arpegNode.append_attribute("pm:arpeggio-style") = isBracket ? "bracket" : (isStraight ? "straight" : "wavy");
+  arpegNode.append_attribute("pm:arpeggio-play") = arpeggio->playArpeggio() ? "true" : "false";
+  arpegNode.append_attribute("pm:arpeggio-stretch") = formatDecimalStr(arpeggio->Stretch(), 6).c_str();
+  arpegNode.append_attribute("pm:arpeggio-members") = memberIds.c_str();
+  if (!configuration()->meiExportLayout()) {
+    return true;
+  }
+
+  const System *system = startChord->measure() ? startChord->measure()->system() : nullptr;
+  const Page *page = system ? system->page() : nullptr;
+  const auto &pages = m_score->pages();
+  const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
+  const auto *layout = arpeggio->ldata();
+  const bool visible = arpeggio->visible() && !layout->isSkipDraw();
+  const double lineWidth = arpeggio->style().styleMM(arpeggio->isChordBracket()
+      ? Sid::chordBracketLineWidth : Sid::arpeggioLineWidth);
+  const PointF origin = arpeggio->pagePos();
+  const RectF bounds = arpeggio->pageBoundingRect();
+  if (!page || pageIt == pages.cend() || !std::isfinite(origin.x()) || !std::isfinite(origin.y())
+      || !std::isfinite(bounds.left()) || !std::isfinite(bounds.top())
+      || !std::isfinite(bounds.right()) || !std::isfinite(bounds.bottom())
+      || !std::isfinite(lineWidth) || lineWidth <= 0.0) {
+    LOGE() << "MEI arpeggio requires finite page-owned rendered geometry";
+    return false;
+  }
+
+  const auto formatPoint = [this](const PointF &point) {
+    return formatDecimalStr(point.x() / DPI, 6) + ","
+        + formatDecimalStr(toBottomLeftInches(point.y()), 6);
+  };
+  // TDraw uses the laid-out cached head symbol at the note's rendered page position.
+  // Child-inclusive note bounds also contain stems/accidentals and cannot define this anchor.
+  const auto renderedHeadBox = [](const Note *note) -> std::optional<RectF> {
+    const SymId symbol = note->ldata()->cachedNoteheadSym.value();
+    if (symbol == SymId::noSym) {
+      return std::nullopt;
+    }
+    const RectF box = note->symBbox(symbol).translated(note->pagePos());
+    if (!std::isfinite(box.left()) || !std::isfinite(box.top())
+        || !std::isfinite(box.right()) || !std::isfinite(box.bottom())
+        || box.width() <= 0.0 || box.height() <= 0.0
+        || !std::isfinite(box.center().x()) || !std::isfinite(box.center().y())) {
+      return std::nullopt;
+    }
+    return box;
+  };
+  std::optional<RectF> anchorHeadBox;
+  for (const Note *note : startAnchorHeads) {
+    const auto box = renderedHeadBox(note);
+    if (!box.has_value()) {
+      LOGE() << "MEI arpeggio requires a laid-out finite start notehead box";
+      return false;
+    }
+    anchorHeadBox = anchorHeadBox.has_value() ? anchorHeadBox->united(*box) : *box;
+  }
+  if (!anchorHeadBox.has_value()) {
+    LOGE() << "MEI arpeggio start anchor has no exported notehead geometry";
+    return false;
+  }
+  std::string memberCenters;
+  for (const Note *note : exportedMembers) {
+    const auto box = renderedHeadBox(note);
+    if (!box.has_value()) {
+      LOGE() << "MEI arpeggio requires a laid-out finite member notehead box";
+      return false;
+    }
+    if (!memberCenters.empty()) {
+      memberCenters += ';';
+    }
+    memberCenters += formatPoint(box->center());
+  }
+  std::string lines;
+  const auto appendLine = [&lines, &formatPoint, &origin](const PointF &start, const PointF &end) {
+    if (!lines.empty()) {
+      lines += ';';
+    }
+    lines += formatPoint(origin + start) + "," + formatPoint(origin + end);
+  };
+  std::string glyphs;
+  const auto appendGlyph = [this, &glyphs, &formatPoint, &origin, arpeggio](
+                               SymId symbol, const PointF &position, int rotation) -> bool {
+    const auto rotate = [rotation](const PointF &point) {
+      if (rotation == -90) {
+        return PointF(point.y(), -point.x());
+      }
+      if (rotation == 90) {
+        return PointF(-point.y(), point.x());
+      }
+      return point;
+    };
+    const RectF ink = m_score->engravingFont()->bbox(symbol, arpeggio->magS());
+    if (!std::isfinite(ink.left()) || !std::isfinite(ink.top())
+        || !std::isfinite(ink.right()) || !std::isfinite(ink.bottom())
+        || ink.width() <= 0.0 || ink.height() <= 0.0) {
+      LOGE() << "MEI arpeggio glyph has invalid rendered ink bounds";
+      return false;
+    }
+    const std::array<PointF, 4> corners = {
+        origin + rotate(position + PointF(ink.left(), ink.top())),
+        origin + rotate(position + PointF(ink.right(), ink.top())),
+        origin + rotate(position + PointF(ink.left(), ink.bottom())),
+        origin + rotate(position + PointF(ink.right(), ink.bottom()))};
+    double left = corners[0].x(), right = left, top = corners[0].y(), bottom = top;
+    for (const PointF &corner : corners) {
+      left = std::min(left, corner.x());
+      right = std::max(right, corner.x());
+      top = std::min(top, corner.y());
+      bottom = std::max(bottom, corner.y());
+    }
+    const AsciiStringView name = SymNames::nameForSymId(symbol);
+    if (!glyphs.empty()) {
+      glyphs += ';';
+    }
+    glyphs += std::string(name.ascii(), name.size()) + ","
+        + formatPoint(origin + rotate(position)) + "," + std::to_string(-rotation) + ","
+        + formatPoint(PointF(left, top)) + "," + formatPoint(PointF(right, bottom));
+    return true;
+  };
+
+  const double y1 = layout->bbox().top();
+  const double y2 = layout->bbox().bottom();
+  if (visible && arpeggio->isChordBracket()) {
+    const ChordBracket *bracket = toChordBracket(arpeggio);
+    const double width = bracket->absoluteFromSpatium(bracket->hookLength());
+    const double top = y1 + lineWidth * 0.5;
+    const double bottom = y2 - lineWidth * 0.5;
+    if (bracket->hookPos() != DirectionV::DOWN) {
+      appendLine(PointF(0.0, top), PointF(width, top));
+    }
+    if (bracket->hookPos() != DirectionV::UP) {
+      appendLine(PointF(0.0, bottom), PointF(width, bottom));
+    }
+    const double x = bracket->rightSide() ? width - lineWidth * 0.5 : lineWidth * 0.5;
+    appendLine(PointF(x, top), PointF(x, bottom));
+  } else if (visible && isBracket) {
+    const double width = arpeggio->style().styleS(Sid::arpeggioHookLen).val() * arpeggio->spatium();
+    appendLine(PointF(0.0, y1), PointF(width, y1));
+    appendLine(PointF(0.0, y2), PointF(width, y2));
+    appendLine(PointF(0.0, y1 - lineWidth * 0.5), PointF(0.0, y2 + lineWidth * 0.5));
+  } else if (visible && isStraight) {
+    const RectF &ink = layout->symsBBox;
+    const double x = arpeggio->spatium() * 0.5;
+    if (arpeggio->arpeggioType() == ArpeggioType::UP_STRAIGHT) {
+      if (!appendGlyph(SymId::arrowheadBlackUp, PointF(x - ink.width() * 0.5, y1 - ink.top()), 0)) {
+        return false;
+      }
+      appendLine(PointF(x, y1 - ink.top() * 0.5), PointF(x, y2));
+    } else {
+      if (!appendGlyph(SymId::arrowheadBlackDown, PointF(x - ink.width() * 0.5, y2 - ink.bottom()), 0)) {
+        return false;
+      }
+      appendLine(PointF(x, y1), PointF(x, y2 + ink.top() * 0.5));
+    }
+  } else if (visible) {
+    const bool down = arpeggio->arpeggioType() == ArpeggioType::DOWN;
+    const RectF &ink = layout->symsBBox;
+    PointF position = down ? PointF(-ink.left() + y1, -ink.top() - ink.height())
+                           : PointF(-ink.right() - y1, -ink.bottom() + ink.height());
+    for (SymId symbol : layout->symbols) {
+      if (!appendGlyph(symbol, position, down ? 90 : -90)) {
+        return false;
+      }
+      position.setX(position.x() + m_score->engravingFont()->advance(symbol, arpeggio->magS()));
+    }
+    if (glyphs.empty()) {
+      LOGE() << "MEI visible wavy arpeggio has no laid-out glyphs";
+      return false;
+    }
+  }
+
+  arpegNode.append_attribute("pm:arpeggio-anchor-center") = formatPoint(anchorHeadBox->center()).c_str();
+  arpegNode.append_attribute("pm:arpeggio-member-centers") = memberCenters.c_str();
+  arpegNode.append_attribute("pm:arpeggio-geometry-version") = "1";
+  arpegNode.append_attribute("pm:arpeggio-page") = static_cast<int>(std::distance(pages.cbegin(), pageIt)) + 1;
+  arpegNode.append_attribute("pm:arpeggio-visible") = visible ? "true" : "false";
+  arpegNode.append_attribute("pm:xy") = formatPoint(origin).c_str();
+  arpegNode.append_attribute("pm:arpeggio-bounds") =
+      (formatPoint(PointF(bounds.left(), bounds.top())) + ","
+       + formatPoint(PointF(bounds.right(), bounds.bottom()))).c_str();
+  arpegNode.append_attribute("pm:arpeggio-line-width") = formatDecimalStr(lineWidth / DPI, 6).c_str();
+  arpegNode.append_attribute("pm:arpeggio-font") = m_score->engravingFont()->family().c_str();
+  arpegNode.append_attribute("pm:arpeggio-line-cap") = "flat";
+  arpegNode.append_attribute("pm:arpeggio-lines") = lines.c_str();
+  arpegNode.append_attribute("pm:arpeggio-glyphs") = glyphs.c_str();
 
   return true;
 }
@@ -6273,22 +6518,12 @@ void MeiExporter::fillControlEventMap(const std::string &xmlId,
     if (arpeggio) {
       m_startingControlEventList.push_back(
           std::make_pair(arpeggio, "#" + xmlId));
-      // The arpeggio is spanning to a lower staff
-      if (arpeggio->span() > 1) {
-        // We need to retrieve the chord it is spanning to
-        track_idx_t bottomTrack = arpeggio->track() + (arpeggio->span() - 1);
-        const EngravingItem *element = chord->segment()->element(bottomTrack);
-        // We do not know the xml:id of the chord yet, keep it in a map
-        if (element && element->isChord()) {
-          m_arpegPlistMap[toChord(element)] = arpeggio;
-        }
-      }
     }
-    // This is the lower chord of a spanning arpeggio - we can now move it to
-    // the map with the chord xml:id
-    if (m_arpegPlistMap.count(chord)) {
-      m_plistMap[m_arpegPlistMap.at(chord)] = "#" + xmlId;
-      m_arpegPlistMap.erase(chord);
+    for (const EngravingItem *element : chord->el()) {
+      if (element->isChordBracket()) {
+        m_startingControlEventList.push_back(
+            std::make_pair(element, "#" + xmlId));
+      }
     }
   }
 }

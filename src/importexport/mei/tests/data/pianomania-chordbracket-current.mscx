@@ -1,0 +1,357 @@
+<?xml version='1.0' encoding='utf-8'?>
+<museScore version="4.60">
+  <programVersion>4.4.0</programVersion>
+  <programRevision />
+  <LastEID>100</LastEID>
+  <Score>
+    <Division>480</Division>
+    <showInvisible>1</showInvisible>
+    <showUnprintable>1</showUnprintable>
+    <showFrames>1</showFrames>
+    <showMargins>0</showMargins>
+    <open>1</open>
+    <metaTag name="arranger" />
+    <metaTag name="audioComUrl" />
+    <metaTag name="composer">Composer / arranger</metaTag>
+    <metaTag name="copyright" />
+    <metaTag name="creationDate">2021-12-24</metaTag>
+    <metaTag name="lyricist" />
+    <metaTag name="movementNumber" />
+    <metaTag name="movementTitle" />
+    <metaTag name="originalFormat">mscx</metaTag>
+    <metaTag name="platform">Linux</metaTag>
+    <metaTag name="source" />
+    <metaTag name="sourceRevisionId" />
+    <metaTag name="subtitle">Subtitle</metaTag>
+    <metaTag name="translator" />
+    <metaTag name="workNumber" />
+    <metaTag name="workTitle">Untitled Score</metaTag>
+    <Order id="orchestral">
+      <name>Orchestral</name>
+      <instrument id="piano">
+        <family id="keyboards">Keyboards</family>
+      </instrument>
+      <section id="woodwind" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>flutes</family>
+        <family>oboes</family>
+        <family>clarinets</family>
+        <family>saxophones</family>
+        <family>bassoons</family>
+        <unsorted group="woodwinds" />
+      </section>
+      <section id="brass" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>horns</family>
+        <family>trumpets</family>
+        <family>cornets</family>
+        <family>flugelhorns</family>
+        <family>trombones</family>
+        <family>tubas</family>
+      </section>
+      <section id="timpani" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>timpani</family>
+      </section>
+      <section id="percussion" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>keyboard-percussion</family>
+        <family>drums</family>
+        <family>unpitched-metal-percussion</family>
+        <family>unpitched-wooden-percussion</family>
+        <family>other-percussion</family>
+      </section>
+      <family>keyboards</family>
+      <family>harps</family>
+      <family>organs</family>
+      <family>synths</family>
+      <section id="plucked-strings" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>plucked-strings</family>
+      </section>
+      <soloists />
+      <section id="voices" brackets="true" barLineSpan="false" thinBrackets="true">
+        <family>voices</family>
+      </section>
+      <section id="strings" brackets="true" barLineSpan="true" thinBrackets="true">
+        <family>orchestral-strings</family>
+      </section>
+      <unsorted />
+    </Order>
+    <Part id="1">
+      <Staff id="1">
+        <StaffType group="pitched">
+          <name>stdNormal</name>
+        </StaffType>
+        <bracket type="1" span="2" col="0" visible="1" />
+        <barLineSpan>1</barLineSpan>
+      </Staff>
+      <Staff id="2">
+        <StaffType group="pitched">
+          <name>stdNormal</name>
+        </StaffType>
+        <defaultClef>F</defaultClef>
+      </Staff>
+      <trackName>Piano</trackName>
+      <Instrument id="piano">
+        <longName>Piano</longName>
+        <shortName>Pno.</shortName>
+        <trackName>Piano</trackName>
+        <minPitchP>21</minPitchP>
+        <maxPitchP>108</maxPitchP>
+        <minPitchA>21</minPitchA>
+        <maxPitchA>108</maxPitchA>
+        <instrumentId>keyboard.piano</instrumentId>
+        <clef staff="2">F</clef>
+        <Channel>
+          <program value="0" />
+          <synti>Fluid</synti>
+        </Channel>
+      </Instrument>
+    </Part>
+    <Staff id="1">
+      <VBox>
+        <height>10</height>
+        <eid>4294967296123</eid>
+        <Text>
+          <eid>4299262263301</eid>
+          <style>title</style>
+          <text>Untitled Score</text>
+        </Text>
+        <Text>
+          <eid>4303557230597</eid>
+          <style>subtitle</style>
+          <text>Subtitle</text>
+        </Text>
+        <Text>
+          <eid>4307852197893</eid>
+          <style>composer</style>
+          <text>Composer / arranger</text>
+        </Text>
+      </VBox>
+      <Measure>
+        <voice>
+          <TimeSig>
+            <eid>4312147165209</eid>
+            <sigN>4</sigN>
+            <sigD>4</sigD>
+          </TimeSig>
+          <Chord>
+            <eid>4316442132596</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>4320737099796</eid>
+              <pitch>65</pitch>
+              <tpc>13</tpc>
+            </Note>
+            <Note>
+              <eid>4325032067092</eid>
+              <pitch>69</pitch>
+              <tpc>17</tpc>
+            </Note>
+            <Note>
+              <eid>4329327034388</eid>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+            </Note>
+            <ChordBracket>
+              <eid>4333622001679</eid>
+              <bracketHookPos>auto</bracketHookPos>
+              <bracketRightSide>0</bracketRightSide>
+              <bracketHookLen>1</bracketHookLen>
+            </ChordBracket>
+          </Chord>
+          <Rest>
+            <eid>4337916968986</eid>
+            <durationType>16th</durationType>
+          </Rest>
+          <Rest>
+            <eid>4342211936282</eid>
+            <durationType>eighth</durationType>
+          </Rest>
+          <Rest>
+            <eid>4346506903578</eid>
+            <durationType>quarter</durationType>
+          </Rest>
+          <Rest>
+            <eid>4350801870874</eid>
+            <durationType>half</durationType>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Chord>
+            <eid>4355096838260</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>4359391805460</eid>
+              <pitch>65</pitch>
+              <tpc>13</tpc>
+            </Note>
+            <Note>
+              <eid>4363686772756</eid>
+              <pitch>69</pitch>
+              <tpc>17</tpc>
+            </Note>
+            <Note>
+              <eid>4367981740052</eid>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+            </Note>
+            <ChordBracket>
+              <eid>4372276707343</eid>
+              <bracketHookPos>up</bracketHookPos>
+              <bracketRightSide>0</bracketRightSide>
+              <bracketHookLen>1</bracketHookLen>
+            </ChordBracket>
+          </Chord>
+          <Rest>
+            <eid>4376571674650</eid>
+            <durationType>16th</durationType>
+          </Rest>
+          <Rest>
+            <eid>4380866641946</eid>
+            <durationType>eighth</durationType>
+          </Rest>
+          <Rest>
+            <eid>4385161609242</eid>
+            <durationType>quarter</durationType>
+          </Rest>
+          <Rest>
+            <eid>4389456576538</eid>
+            <durationType>half</durationType>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Chord>
+            <eid>4393751543924</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>4398046511124</eid>
+              <pitch>65</pitch>
+              <tpc>13</tpc>
+            </Note>
+            <Note>
+              <eid>4402341478420</eid>
+              <pitch>69</pitch>
+              <tpc>17</tpc>
+            </Note>
+            <Note>
+              <eid>4406636445716</eid>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+            </Note>
+            <ChordBracket>
+              <eid>4410931413007</eid>
+              <bracketHookPos>down</bracketHookPos>
+              <bracketRightSide>0</bracketRightSide>
+              <bracketHookLen>1</bracketHookLen>
+            </ChordBracket>
+          </Chord>
+          <Rest>
+            <eid>4415226380314</eid>
+            <durationType>16th</durationType>
+          </Rest>
+          <Rest>
+            <eid>4419521347610</eid>
+            <durationType>eighth</durationType>
+          </Rest>
+          <Rest>
+            <eid>4423816314906</eid>
+            <durationType>quarter</durationType>
+          </Rest>
+          <Rest>
+            <eid>4428111282202</eid>
+            <durationType>half</durationType>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Chord>
+            <eid>4432406249588</eid>
+            <durationType>16th</durationType>
+            <Note>
+              <eid>4436701216788</eid>
+              <pitch>65</pitch>
+              <tpc>13</tpc>
+            </Note>
+            <Note>
+              <eid>4440996184084</eid>
+              <pitch>69</pitch>
+              <tpc>17</tpc>
+            </Note>
+            <Note>
+              <eid>4445291151380</eid>
+              <pitch>72</pitch>
+              <tpc>14</tpc>
+            </Note>
+            <ChordBracket>
+              <eid>4449586118671</eid>
+              <bracketHookPos>auto</bracketHookPos>
+              <bracketRightSide>1</bracketRightSide>
+              <bracketHookLen>1.75</bracketHookLen>
+            </ChordBracket>
+          </Chord>
+          <Rest>
+            <eid>4453881085978</eid>
+            <durationType>16th</durationType>
+          </Rest>
+          <Rest>
+            <eid>4458176053274</eid>
+            <durationType>eighth</durationType>
+          </Rest>
+          <Rest>
+            <eid>4462471020570</eid>
+            <durationType>quarter</durationType>
+          </Rest>
+          <Rest>
+            <eid>4466765987866</eid>
+            <durationType>half</durationType>
+          </Rest>
+        </voice>
+      </Measure>
+    </Staff>
+    <Staff id="2">
+      <Measure>
+        <voice>
+          <TimeSig>
+            <eid>4471060955161</eid>
+            <sigN>4</sigN>
+            <sigD>4</sigD>
+          </TimeSig>
+          <Rest>
+            <eid>4475355922458</eid>
+            <durationType>measure</durationType>
+            <duration>4/4</duration>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Rest>
+            <eid>4479650889754</eid>
+            <durationType>measure</durationType>
+            <duration>4/4</duration>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Rest>
+            <eid>4483945857050</eid>
+            <durationType>measure</durationType>
+            <duration>4/4</duration>
+          </Rest>
+        </voice>
+      </Measure>
+      <Measure>
+        <voice>
+          <Rest>
+            <eid>4488240824346</eid>
+            <durationType>measure</durationType>
+            <duration>4/4</duration>
+          </Rest>
+        </voice>
+      </Measure>
+    </Staff>
+  </Score>
+</museScore>
