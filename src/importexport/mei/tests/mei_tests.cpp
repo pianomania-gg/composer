@@ -2199,6 +2199,10 @@ TEST_F(Mei_Tests, mei_directives_export_resolved_center_between_staves) {
         (((directiveStaffType->lines() - 1) * directiveLineDistance) - staffText->y())
         / directiveLineDistance;
 
+    const RectF customDynamicBounds = customDynamic->pageBoundingRect();
+    const double customDynamicSpatium = customDynamic->spatium();
+    const double pageHeight = score->style().styleD(Sid::pageHeight);
+
     const String outputName = u"hairpin-01.directive-center.test.mei";
     ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
     delete score;
@@ -2207,6 +2211,10 @@ TEST_F(Mei_Tests, mei_directives_export_resolved_center_between_staves) {
     const std::vector<std::string> directiveTags = collectStartTags(meiText, "dir");
     size_t centeredOrdinaryDirectives = 0;
     size_t staffRelativeDirectives = 0;
+    size_t customDynamicGroups = 0;
+    size_t customDynamicFragments = 0;
+    std::optional<std::string> customDynamicOwnerId;
+    std::optional<std::string> customDynamicStartId;
     for (const std::string& tag : directiveTags) {
         const std::optional<std::string> type = xmlAttributeValue(tag, "type");
         if (type == "mscore-staff-text") {
@@ -2217,14 +2225,60 @@ TEST_F(Mei_Tests, mei_directives_export_resolved_center_between_staves) {
             staffRelativeDirectives++;
             continue;
         }
+        if (type == "pm-piano-symbol-group") {
+            customDynamicOwnerId = xmlAttributeValue(tag, "xml:id");
+            customDynamicStartId = xmlAttributeValue(tag, "startid");
+            EXPECT_TRUE(customDynamicOwnerId.has_value()) << tag;
+            EXPECT_TRUE(customDynamicStartId.has_value()) << tag;
+            customDynamicGroups++;
+            continue;
+        }
+        if (type == "pm-piano-spanner-text") {
+            const std::optional<std::string> owner = xmlAttributeValue(tag, "pm:piano-symbol-owner");
+            EXPECT_TRUE(owner.has_value()) << tag;
+            EXPECT_EQ(xmlAttributeValue(tag, "pm:piano-symbol-role"), "begin") << tag;
+            EXPECT_EQ(xmlAttributeValue(tag, "visible"), "true") << tag;
+            EXPECT_GT(xmlAttributeDouble(tag, "pm:piano-symbol-page").value_or(0.0), 0.0) << tag;
+            EXPECT_TRUE(xmlAttributeValue(tag, "pm:xy").has_value()) << tag;
+            EXPECT_TRUE(xmlAttributeValue(tag, "pm:text-origin").has_value()) << tag;
+            const size_t tagStart = meiText.find(tag);
+            ASSERT_NE(tagStart, std::string::npos);
+            const size_t textStart = tagStart + tag.size();
+            EXPECT_EQ(meiText.compare(textStart, 23, "centered custom dynamic"), 0);
+            customDynamicFragments++;
+            continue;
+        }
         if (type.has_value() && type != "mscore-") {
             continue;
         }
         EXPECT_EQ(xmlAttributeValue(tag, "centerBetweenStaves"), "true") << tag;
         centeredOrdinaryDirectives++;
     }
-    EXPECT_EQ(centeredOrdinaryDirectives, 2u);
+    EXPECT_EQ(centeredOrdinaryDirectives, 1u);
     EXPECT_EQ(staffRelativeDirectives, 1u);
+    ASSERT_EQ(customDynamicGroups, 1u);
+    ASSERT_EQ(customDynamicFragments, 1u);
+    ASSERT_TRUE(customDynamicOwnerId.has_value());
+    ASSERT_TRUE(customDynamicStartId.has_value());
+    for (const std::string& tag : directiveTags) {
+        if (xmlAttributeValue(tag, "type") != "pm-piano-spanner-text") {
+            continue;
+        }
+        EXPECT_EQ(xmlAttributeValue(tag, "pm:piano-symbol-owner"), customDynamicOwnerId) << tag;
+        EXPECT_EQ(xmlAttributeValue(tag, "startid"), customDynamicStartId) << tag;
+
+        const std::optional<std::string> center = xmlAttributeValue(tag, "pm:xy");
+        ASSERT_TRUE(center.has_value()) << tag;
+        const size_t comma = center->find(',');
+        ASSERT_NE(comma, std::string::npos) << tag;
+        const double centerX = std::stod(center->substr(0, comma)) * DPI;
+        const double centerY = (pageHeight - std::stod(center->substr(comma + 1))) * DPI;
+        const double tolerance = 0.5 * customDynamicSpatium;
+        EXPECT_GE(centerX, customDynamicBounds.left() - tolerance);
+        EXPECT_LE(centerX, customDynamicBounds.right() + tolerance);
+        EXPECT_GE(centerY, customDynamicBounds.top() - tolerance);
+        EXPECT_LE(centerY, customDynamicBounds.bottom() + tolerance);
+    }
 
     size_t centeredDynamics = 0;
     size_t nonCenteredDynamics = 0;
@@ -2832,13 +2886,55 @@ TEST_F(Mei_Tests, pianomania_graces_do_not_duplicate_parent_segment_controls) {
     ASSERT_EQ(dynamicTags.size(), 1u);
 
     const std::vector<std::string> directiveTags = collectStartTags(meiText, "dir");
-    ASSERT_EQ(directiveTags.size(), 2u);
-    EXPECT_NE(meiText.find(">dolce</dir>"), std::string::npos);
-    EXPECT_NE(meiText.find(">legato</dir>"), std::string::npos);
+    ASSERT_EQ(directiveTags.size(), 4u);
+    std::set<std::string> ownerIds;
+    std::set<std::string> fragmentTexts;
+    size_t ownerGroups = 0;
+    size_t textFragments = 0;
     for (const std::string& directiveTag : directiveTags) {
-        EXPECT_TRUE(xmlAttributeValue(directiveTag, "startid").has_value());
-        EXPECT_TRUE(xmlAttributeValue(directiveTag, "yOffset").has_value());
-        EXPECT_TRUE(xmlAttributeValue(directiveTag, "pm:xy").has_value());
+        const std::optional<std::string> type = xmlAttributeValue(directiveTag, "type");
+        const std::optional<std::string> startid = xmlAttributeValue(directiveTag, "startid");
+        EXPECT_TRUE(startid.has_value()) << directiveTag;
+        if (type == "pm-piano-symbol-group") {
+            const std::optional<std::string> id = xmlAttributeValue(directiveTag, "xml:id");
+            ASSERT_TRUE(id.has_value()) << directiveTag;
+            ownerIds.insert(*id);
+            ownerGroups++;
+            continue;
+        }
+
+        ASSERT_EQ(type, "pm-piano-spanner-text") << directiveTag;
+        const std::optional<std::string> owner = xmlAttributeValue(directiveTag, "pm:piano-symbol-owner");
+        ASSERT_TRUE(owner.has_value()) << directiveTag;
+        EXPECT_EQ(xmlAttributeValue(directiveTag, "pm:piano-symbol-role"), "begin") << directiveTag;
+        EXPECT_EQ(xmlAttributeValue(directiveTag, "visible"), "true") << directiveTag;
+        EXPECT_GT(xmlAttributeDouble(directiveTag, "pm:piano-symbol-page").value_or(0.0), 0.0) << directiveTag;
+        EXPECT_TRUE(xmlAttributeValue(directiveTag, "pm:xy").has_value()) << directiveTag;
+        EXPECT_TRUE(xmlAttributeValue(directiveTag, "pm:text-origin").has_value()) << directiveTag;
+        const size_t tagStart = meiText.find(directiveTag);
+        ASSERT_NE(tagStart, std::string::npos);
+        const size_t textStart = tagStart + directiveTag.size();
+        const size_t textEnd = meiText.find("</dir>", textStart);
+        ASSERT_NE(textEnd, std::string::npos);
+        fragmentTexts.insert(meiText.substr(textStart, textEnd - textStart));
+        textFragments++;
+    }
+    EXPECT_EQ(ownerGroups, 2u);
+    EXPECT_EQ(textFragments, 2u);
+    EXPECT_EQ(ownerIds.size(), 2u);
+    EXPECT_EQ(fragmentTexts, (std::set<std::string> { "dolce", "legato" }));
+    for (const std::string& directiveTag : directiveTags) {
+        if (xmlAttributeValue(directiveTag, "type") != "pm-piano-spanner-text") {
+            continue;
+        }
+        const std::string owner = xmlAttributeValue(directiveTag, "pm:piano-symbol-owner").value_or("");
+        EXPECT_EQ(ownerIds.count(owner), 1u) << directiveTag;
+        const auto ownerTag = std::find_if(directiveTags.cbegin(), directiveTags.cend(), [&owner](const std::string& candidate) {
+            return xmlAttributeValue(candidate, "type") == "pm-piano-symbol-group"
+                && xmlAttributeValue(candidate, "xml:id") == owner;
+        });
+        ASSERT_NE(ownerTag, directiveTags.cend()) << directiveTag;
+        EXPECT_EQ(xmlAttributeValue(directiveTag, "startid"), xmlAttributeValue(*ownerTag, "startid"));
     }
 
     const std::vector<std::string> noteTags = collectStartTags(meiText, "note");
@@ -3525,6 +3621,7 @@ TEST_F(Mei_Tests, mei_export_snapped_expression_carries_text_origin) {
     Dynamic* dynamic = Factory::createDynamic(first, true);
     dynamic->setTrack(0);
     dynamic->setDynamicType(DynamicType::F);
+    dynamic->setXmlText(Dynamic::dynamicText(DynamicType::F));
     first->add(dynamic);
     Expression* snapped = Factory::createExpression(first, true);
     snapped->setTrack(0);
