@@ -59,6 +59,10 @@
 #include "project/internal/pianomaniacompatibility.generated.h"
 #include "engraving/types/types.h"
 
+namespace mu::project::pianomania {
+bool canonicalizePublicIdentityGraphForTesting(std::string& meiData, PianomaniaExportResult& result);
+}
+
 namespace {
 constexpr const char* MANIFEST_SCHEMA =
     mu::project::pianomania::compatibility::EXPORTER_PROVENANCE_SCHEMA;
@@ -251,20 +255,24 @@ std::set<QString> verifyFinalPublicIdentityGraph(const QByteArray& mei, const QJ
     EXPECT_FALSE(QJsonDocument(manifest).toJson(QJsonDocument::Compact).contains("mscore-"));
 
     const QString text = QString::fromUtf8(mei);
-    const QRegularExpression declarationPattern(QStringLiteral("xml:id=\\\"(pm-score-[0-9]{6})\\\""));
-    const QRegularExpression referencePattern(QStringLiteral("#(pm-score-[0-9]{6})"));
+    const QRegularExpression declarationPattern(QStringLiteral("xml:id=\\\"(pm-(?:score|symbol)-[A-Za-z0-9._-]+)\\\""));
+    const QRegularExpression scoreDeclarationPattern(QStringLiteral("xml:id=\\\"(pm-score-[0-9]{6})\\\""));
+    const QRegularExpression referencePattern(QStringLiteral("#(pm-(?:score|symbol)-[A-Za-z0-9._-]+)"));
     const QRegularExpression pianomaniaReferencePattern(
-        QStringLiteral("(?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids)=\\\"([^\\\"]*)\\\""));
+        QStringLiteral("(?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids|pm:piano-symbol-owner)=\\\"([^\\\"]*)\\\""));
     const QRegularExpression publicIdentityPattern(QStringLiteral("^pm-score-[0-9]{6}$"));
 
     std::set<QString> declared;
     QRegularExpressionMatchIterator declarations = declarationPattern.globalMatch(text);
-    int ordinal = 0;
     while (declarations.hasNext()) {
-        const QString identity = declarations.next().captured(1);
+        EXPECT_TRUE(declared.insert(declarations.next().captured(1)).second);
+    }
+    QRegularExpressionMatchIterator scoreDeclarations = scoreDeclarationPattern.globalMatch(text);
+    int ordinal = 0;
+    while (scoreDeclarations.hasNext()) {
+        const QString identity = scoreDeclarations.next().captured(1);
         ++ordinal;
         EXPECT_EQ(identity, QStringLiteral("pm-score-%1").arg(ordinal, 6, 10, QLatin1Char('0')));
-        EXPECT_TRUE(declared.insert(identity).second);
     }
     EXPECT_FALSE(declared.empty());
 
@@ -304,6 +312,50 @@ std::set<QString> verifyFinalPublicIdentityGraph(const QByteArray& mei, const QJ
         }
     }
     return declared;
+}
+
+// Test value: Derived piano-symbol and owned-text declarations must not renumber musical public IDs or private single-note chord IDs.
+TEST(Project_PianomaniaPublicIdentityTest, DerivedVisualDeclarationsUseOwnerNamespaceAfterPrimaryOrdering)
+{
+    std::string mei = R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><music>
+<measure xml:id="mscore-measure"><note xml:id="mscore-note"/>
+<dir xml:id="mscore-owner" type="pm-piano-symbol-group" startid="#mscore-note"/>
+<ornam xml:id="mscore-owner-begin-0-0" startid="#mscore-note" pm:piano-symbol-kind="symbol" pm:piano-symbol-owner="mscore-owner" pm:piano-symbol-role="begin"/>
+<dir xml:id="mscore-owner-begin-0-text-0" startid="#mscore-note" type="pm-piano-spanner-text" pm:piano-symbol-owner="mscore-owner" pm:piano-symbol-role="begin"/>
+<ornam xml:id="mscore-raw-symbol" startid="#mscore-note" pm:piano-symbol-kind="symbol"/>
+<annot corresp="#mscore-owner-begin-0-0"/>
+</measure></music></mei>)";
+    mu::project::pianomania::PianomaniaExportResult result;
+    mu::project::pianomania::CanonicalEvent event;
+    event.scoreEventId = "mscore-note";
+    event.chordId = "mscore-private-chord";
+    event.measureId = "mscore-measure";
+    result.canonicalEvents.push_back(event);
+
+    ASSERT_TRUE(mu::project::pianomania::canonicalizePublicIdentityGraphForTesting(mei, result));
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000001\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000002\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000003\""), std::string::npos);
+    EXPECT_EQ(result.canonicalEvents.front().chordId, "pm-score-000004");
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000003-begin-0-0\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000003-begin-0-text-0\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000002-symbol-1\""), std::string::npos);
+    EXPECT_NE(mei.find("corresp=\"#pm-symbol-pm-score-000003-begin-0-0\""), std::string::npos);
+    EXPECT_NE(mei.find("pm:piano-symbol-owner=\"pm-score-000003\""), std::string::npos);
+    EXPECT_EQ(mei.find("mscore-"), std::string::npos);
+}
+
+// Test value: A derived visual with a partial or undeclared owner remains a hard identity-graph failure instead of becoming an audible/public event.
+TEST(Project_PianomaniaPublicIdentityTest, RejectsMalformedDerivedVisualOwner)
+{
+    const std::vector<std::string> malformed {
+        R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><note xml:id="mscore-note"/><ornam xml:id="mscore-derived" startid="#mscore-note" pm:piano-symbol-kind="symbol" pm:piano-symbol-owner="mscore-note"/></mei>)",
+        R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><note xml:id="mscore-note"/><dir xml:id="mscore-derived" startid="#mscore-note" type="pm-piano-spanner-text" pm:piano-symbol-owner="mscore-missing" pm:piano-symbol-role="begin"/></mei>)",
+    };
+    for (std::string mei : malformed) {
+        mu::project::pianomania::PianomaniaExportResult result;
+        EXPECT_FALSE(mu::project::pianomania::canonicalizePublicIdentityGraphForTesting(mei, result));
+    }
 }
 
 void verifyLocator(const QJsonObject& locator)
