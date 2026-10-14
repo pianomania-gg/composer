@@ -3125,6 +3125,83 @@ TEST_F(Mei_Tests, mei_export_trill_and_ornaments_carry_drawn_glyph_geometry) {
     }
 }
 
+// Test value: Piano glyph export must preserve exact identity and ink geometry;
+// origin-only fields cannot position fermatas, articulations or composed dynamics.
+TEST_F(Mei_Tests, mei_piano_symbols_export_exact_identity_and_ink_center) {
+    const std::array<std::pair<String, const char*>, 5> fixtures = {{
+        {u"artic-01.mscx", "artic"}, {u"fermata-01.mscx", "fermata"},
+        {u"dynamic-01.mscx", "dynam"}, {PRACTICE_GEOMETRY_FIXTURE, "mordent"},
+        {u"ornam-01.mscx", "mordent"}
+    }};
+    for (const auto& fixture : fixtures) {
+        SCOPED_TRACE(fixture.first.toStdString());
+        std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + fixture.first, false));
+        ASSERT_TRUE(score);
+        score->setLayoutAll();
+        score->doLayout();
+        std::string mei;
+        ASSERT_TRUE(pmWriteMeiToString(score.get(), true, mei));
+        if (fixture.first == u"ornam-01.mscx") {
+            EXPECT_NE(mei.find("glyph.name=\"ornamentPrecompTrillWithMordent\""), std::string::npos);
+            EXPECT_EQ(mei.find("glyph.name=\"ornamentPrallMordent\""), std::string::npos);
+        }
+        const auto tags = collectStartTags(mei, fixture.second);
+        ASSERT_FALSE(tags.empty());
+        for (const auto& tag : tags) {
+            EXPECT_EQ(xmlAttributeValue(tag, "pm:piano-symbol-version"), "1") << tag;
+            const auto run = xmlAttributeValue(tag, "pm:piano-symbol-glyphs").value_or("");
+            if (run.find(';') == std::string::npos) {
+                EXPECT_EQ(xmlAttributeValue(tag, "glyph.auth"), "smufl") << tag;
+                EXPECT_FALSE(xmlAttributeValue(tag, "glyph.name").value_or("").empty()) << tag;
+            } else {
+                EXPECT_FALSE(xmlAttributeValue(tag, "glyph.name").has_value()) << tag;
+            }
+            EXPECT_GT(xmlAttributeDouble(tag, "pm:piano-symbol-page").value_or(0), 0) << tag;
+            const auto center = parseNumbers(xmlAttributeValue(tag, "pm:piano-symbol-center").value_or(""));
+            const auto ink = parseNumbers(xmlAttributeValue(tag, "pm:piano-symbol-ink-bounds").value_or(""));
+            const auto bounds = parseNumbers(xmlAttributeValue(tag, "pm:piano-symbol-bounds").value_or(""));
+            ASSERT_EQ(center.size(), 2u) << tag;
+            ASSERT_EQ(ink.size(), 4u) << tag;
+            ASSERT_EQ(bounds.size(), 4u) << tag;
+            EXPECT_GT(ink[2], ink[0]);
+            EXPECT_GT(ink[1], ink[3]);
+            EXPECT_NEAR(center[0], (ink[0] + ink[2]) * 0.5, 0.000002);
+            EXPECT_NEAR(center[1], (ink[1] + ink[3]) * 0.5, 0.000002);
+            EXPECT_GE(ink[0] + 0.000002, bounds[0]);
+            EXPECT_LE(ink[2] - 0.000002, bounds[2]);
+            EXPECT_LE(ink[1] - 0.000002, bounds[1]);
+            EXPECT_GE(ink[3] + 0.000002, bounds[3]);
+            if (std::string(fixture.second) == "dynam") {
+                EXPECT_FALSE(xmlAttributeValue(tag, "pm:piano-symbol-glyphs").value_or("").empty()) << tag;
+            }
+        }
+    }
+}
+
+// Test value: Detects legacy Ped./release-star ink entering the canonical game
+// export instead of the supported modern pedal-line geometry.
+TEST_F(Mei_Tests, mei_pedal_exports_modern_lines_without_legacy_text) {
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pedal-01.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+    std::string mei;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, mei));
+    const auto pedals = collectStartTags(mei, "pedal");
+    ASSERT_FALSE(pedals.empty());
+    std::set<std::string> owners;
+    for (const auto& tag : pedals) {
+        owners.insert(xmlAttributeValue(tag, "xml:id").value_or(""));
+        EXPECT_EQ(xmlAttributeValue(tag, "form"), "line");
+        EXPECT_FALSE(xmlAttributeValue(tag, "pm:pedal-lines").value_or("").empty());
+    }
+    for (const auto& tag : collectStartTags(mei, "ornam")) {
+        const auto owner = xmlAttributeValue(tag, "pm:piano-symbol-owner");
+        if (!owner) { continue; }
+        EXPECT_EQ(owners.count(*owner), 0u);
+    }
+}
+
 // Test value: Small (cue-size) notes, chords and rests are marked @cue so the
 // Practice renderer draws them, and their accidentals, at cue size.
 TEST_F(Mei_Tests, mei_export_small_notes_chords_and_rests_are_cue) {

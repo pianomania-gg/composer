@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "engraving/types/types.h"
+#include "engraving/types/symid.h"
 
 #include "imeiconfiguration.h"
 #include "modularity/ioc.h"
@@ -60,6 +61,7 @@ class Score;
 class Spanner;
 class SpannerSegment;
 class Staff;
+class Symbol;
 class TextBase;
 class TextLineBase;
 class TremoloSingleChord;
@@ -351,6 +353,7 @@ private:
   /** Temporary list of all note-events in the current measure */
   mutable std::unordered_map<const engraving::EngravingItem *, std::string>
       m_exportedXmlIds;
+  std::unordered_map<std::string, const engraving::EngravingItem *> m_exportedItemsByXmlId;
   struct DurEvent {
     int tick; // measure-relative tick (integer, robust for grouping)
     double tstamp;
@@ -463,6 +466,16 @@ private:
   getCenteredInchesFor(const engraving::EngravingItem *item) const;
   void appendCenteredPmPosition(pugi::xml_node node,
                                 const engraving::EngravingItem *item) const;
+  bool appendPianoSymbolGeometry(pugi::xml_node node,
+                                const engraving::EngravingItem *item,
+                                engraving::SymId symbol, const char *kind,
+                                bool textBounds = false,
+                                std::optional<muse::RectF> inkOverride = std::nullopt) const;
+  bool writePianoSymbol(const engraving::Symbol *symbol, const std::string &startid);
+  bool writePianoTextSymbols(const engraving::TextBase *text,
+                            const engraving::EngravingItem *owner,
+                            const std::string &ownerId, const std::string &startid,
+                            const char *role, size_t segmentIndex);
   std::string formatKeySigSymbols(const engraving::KeySig *keySig) const;
   void appendKeySigSymbols(pugi::xml_node node, const char *attributeName,
                            const engraving::KeySig *keySig) const;

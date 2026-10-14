@@ -24,22 +24,26 @@ class RegistryTests(unittest.TestCase):
         cls.header = coverage.generate(cls.rows, cls.ranges).decode()
 
     def test_effective_row_counts_and_exact_override_set(self):
-        self.assertEqual(collections.Counter(r["recommendation"] for r in self.rows), {"hide creation": 1675, "retain pending review": 2356, "keep": 1100})
+        self.assertEqual(collections.Counter(r["recommendation"] for r in self.rows), {'keep': 1079, 'hide creation': 1948, 'retain pending review': 2104})
         original = {r["feature_id"]: r["recommendation"] for r in self.original}
         changed = {r["feature_id"]: r["recommendation"] for r in self.rows if original[r["feature_id"]] != r["recommendation"]}
-        self.assertEqual(changed, coverage.OVERRIDES)
+        self.assertEqual(changed, {feature_id: decision for feature_id, decision in coverage.OVERRIDES.items()
+                                   if original[feature_id] != decision})
 
-    def test_all_original_pending_rows_remain_pending(self):
+    def test_unreviewed_original_pending_rows_remain_pending(self):
         effective = {r["feature_id"]: r["recommendation"] for r in self.rows}
         pending = [r for r in self.original if r["recommendation"] == "retain pending review"]
         self.assertEqual(len(pending), 2355)
         for row in pending:
-            self.assertEqual(effective[row["feature_id"]], "retain pending review")
+            expected = "hide creation" if row["feature_id"] in coverage.SOLO_PIANO_OVERRIDES else "retain pending review"
+            self.assertEqual(effective[row["feature_id"]], expected)
 
-    def test_ambiguous_semantics_are_not_globally_hidden(self):
+    def test_generic_piano_semantics_are_not_globally_hidden(self):
         body = re.search(r"hiddenPlayingTechniques = \{\{(.*?)\}\};", self.header, re.S).group(1)
-        for retained in ["Distortion", "Natural", "Harmonics", "JazzTone"]:
+        for retained in ["Natural"]:
             self.assertNotIn("PlayingTechniqueType::" + retained, body)
+        for hidden in ["Distortion", "JazzTone", "ColLegno"]:
+            self.assertIn("PlayingTechniqueType::" + hidden, body)
         body = re.search(r"hiddenArticulationSymbols = \{\{(.*?)\}\};", self.header, re.S).group(1)
         self.assertNotIn("SymId::stringsThumbPosition", body)
 
@@ -47,16 +51,17 @@ class RegistryTests(unittest.TestCase):
         hidden = [r for r in self.rows if r["recommendation"] == "hide creation"]
         symbols = {r["variant"] for r in hidden if r["family"] == "master_symbol_variant"}
         ranges = [r["variant"] for r in hidden if r["family"] == "master_symbol_range"]
-        self.assertEqual(len(symbols), 751)
-        self.assertEqual(len(ranges), 30)
-        self.assertEqual(symbols, {g for key in ranges for g in self.ranges[key]["glyphs"]})
+        self.assertEqual(len(symbols), 986)
+        self.assertEqual(len(ranges), 37)
+        exact = {r["variant"] for r in hidden if r["family"] == "master_symbol_variant" and r["feature_id"] in coverage.SOLO_PIANO_OVERRIDES}
+        self.assertEqual(symbols, {g for key in ranges for g in self.ranges[key]["glyphs"]} | exact)
 
     def test_current_instrument_ids_exist_without_rewriting_repository(self):
         ids = {e.get("id") for e in ET.parse(SOURCE / "share/instruments/instruments.xml").iter("Instrument")}
         all_instruments = [r for r in self.rows if r["family"] == "instrument"]
         self.assertEqual(len(all_instruments), 644)
         self.assertTrue(all(r["variant"] in ids for r in all_instruments))
-        self.assertEqual(sum(r["recommendation"] == "hide creation" for r in all_instruments), 637)
+        self.assertEqual(sum(r["recommendation"] == "hide creation" for r in all_instruments), 638)
 
     def test_bundled_templates_exist_and_user_template_is_pending(self):
         hidden = [r for r in self.rows if r["family"] == "template" and r["recommendation"] == "hide creation"]
@@ -77,7 +82,7 @@ class RegistryTests(unittest.TestCase):
             coverage.load_rows(ChangedInput())
 
     def test_effective_route_obligations_remain_explicit(self):
-        self.assertEqual(coverage.coverage(self.rows)["effective_hidden_recorded_obligations"], 5057)
+        self.assertEqual(coverage.coverage(self.rows)["effective_hidden_recorded_obligations"], 5902)
         for row in self.rows:
             if row["recommendation"] == "hide creation":
                 self.assertTrue(row["authoring_surfaces"])

@@ -2,6 +2,7 @@
 #include "authoringpolicycore.h"
 
 #include <algorithm>
+#include <QCoreApplication>
 #include <QDir>
 #include "engraving/dom/actionicon.h"
 #include "engraving/dom/articulation.h"
@@ -11,6 +12,7 @@
 #include "engraving/dom/playtechannotation.h"
 #include "engraving/dom/score.h"
 #include "engraving/dom/symbol.h"
+#include "engraving/dom/tremolosinglechord.h"
 #include "engraving/types/symnames.h"
 
 using namespace mu::notation;
@@ -32,6 +34,8 @@ AuthoringCapabilityPolicy::AuthoringCapabilityPolicy()
             m_hiddenSymbols.emplace(SymNames::symIdByName(muse::String::fromUtf8(std::string(row.variant))));
         }
     }
+    // A raw Symbol must not bypass a hidden semantic Articulation preset.
+    m_hiddenSymbols.insert(authoring::hiddenArticulationSymbols.begin(), authoring::hiddenArticulationSymbols.end());
 }
 
 bool AuthoringCapabilityPolicy::isRestrictedAction(std::string_view code) const
@@ -91,8 +95,7 @@ bool AuthoringCapabilityPolicy::mayCreateElement(const EngravingItem& item, std:
     }
     if (item.isArticulation()) {
         const auto& articulation = static_cast<const Articulation&>(item);
-        if (std::find(authoring::hiddenArticulationSymbols.begin(), authoring::hiddenArticulationSymbols.end(), articulation.symId())
-            != authoring::hiddenArticulationSymbols.end()) {
+        if (!mayCreateSymbol(articulation.symId())) {
             return false;
         }
         return std::find(authoring::hiddenArticulationTexts.begin(), authoring::hiddenArticulationTexts.end(), articulation.textType())
@@ -122,9 +125,22 @@ bool AuthoringCapabilityPolicy::mayCreateElement(const EngravingItem& item, std:
         }
     }
     if (item.isPlayTechAnnotation()) {
-        const auto technique = static_cast<const PlayTechAnnotation&>(item).techniqueType();
+        const auto& annotation = static_cast<const PlayTechAnnotation&>(item);
+        const auto technique = annotation.techniqueType();
+        // Natural also represents the retained "normal" preset. Arco is the
+        // dedicated bowing preset, including its translated palette version.
+        if (!authoring::allowed(authoring::decide("palette.text.arco")) && technique == PlayingTechniqueType::Natural
+            && (annotation.xmlText() == u"arco"
+                || annotation.xmlText() == muse::String::fromQString(QCoreApplication::translate("palette", "arco")))) {
+            return false;
+        }
         return std::find(authoring::hiddenPlayingTechniques.begin(), authoring::hiddenPlayingTechniques.end(), technique)
             == authoring::hiddenPlayingTechniques.end();
+    }
+    if (item.type() == ElementType::TREMOLO_SINGLECHORD) {
+        const auto& tremolo = static_cast<const TremoloSingleChord&>(item);
+        return !tremolo.isBuzzRoll()
+               || authoring::allowed(authoring::decide("palette.tremolo.tremolo-type-buzz-roll"));
     }
     switch (item.type()) {
     case ElementType::FRET_DIAGRAM:
