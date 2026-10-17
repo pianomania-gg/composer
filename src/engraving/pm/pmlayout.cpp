@@ -1029,10 +1029,18 @@ void resetPianomaniaItemPlacement(EngravingItem* item)
     }
 
     bool changed = false;
-    if (const std::optional<PlacementV> side = authoredOuterStaffSide(item);
-        side.has_value() && item->placement() != *side) {
-        item->undoChangeProperty(Pid::PLACEMENT, PropertyValue::fromValue(*side), PropertyFlags::UNSTYLED);
-        changed = true;
+    if (const std::optional<PlacementV> side = authoredOuterStaffSide(item); side.has_value()) {
+        if (item->hasVoiceAssignmentProperties()) {
+            const DirectionV direction = *side == PlacementV::ABOVE ? DirectionV::UP : DirectionV::DOWN;
+            if (item->getProperty(Pid::DIRECTION).value<DirectionV>() != direction
+                || item->propertyFlags(Pid::DIRECTION) != PropertyFlags::UNSTYLED) {
+                item->undoChangeProperty(Pid::DIRECTION, PropertyValue::fromValue(direction), PropertyFlags::UNSTYLED);
+                changed = true;
+            }
+        } else if (item->placement() != *side) {
+            item->undoChangeProperty(Pid::PLACEMENT, PropertyValue::fromValue(*side), PropertyFlags::UNSTYLED);
+            changed = true;
+        }
     }
 
     changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET) || changed;
