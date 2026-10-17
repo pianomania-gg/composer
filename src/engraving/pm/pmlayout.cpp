@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <regex>
 #include <unordered_map>
 #include <unordered_set>
@@ -977,18 +978,64 @@ void splitPianomaniaDynamicExpressionText(MasterScore* score)
     }
 }
 
+std::optional<PlacementV> authoredOuterStaffSide(const EngravingItem* item)
+{
+    if (!item
+        || (!item->isDynamic() && !item->isExpression() && !item->isStaffText()
+            && !item->isSystemText() && !item->isTempoText() && !item->isRehearsalMark())) {
+        return std::nullopt;
+    }
+
+    const PointF defaultOffset = item->propertyDefault(Pid::OFFSET).value<PointF>();
+    if (item->offset().y() == defaultOffset.y()) {
+        return std::nullopt;
+    }
+
+    const Segment* segment = item->explicitParent() && item->explicitParent()->type() == ElementType::SEGMENT
+                             ? toSegment(item->explicitParent()) : nullptr;
+    const Staff* staff = item->staff();
+    const System* system = segment ? segment->system() : nullptr;
+    if (!staff || !system || !system->staff(staff->idx())) {
+        return std::nullopt;
+    }
+
+    const RectF bounds = item->pageBoundingRect();
+    if (!bounds.isValid()) {
+        return std::nullopt;
+    }
+
+    const double staffTop = system->staffYpage(staff->idx());
+    const double staffBottom = staffTop + staff->staffHeight(item->tick());
+    if (bounds.bottom() <= staffTop) {
+        return PlacementV::ABOVE;
+    }
+    if (bounds.top() >= staffBottom) {
+        return PlacementV::BELOW;
+    }
+    return std::nullopt;
+}
+
 // Hand placement saved against the source layout (an offset, autoplace off, a
 // min-distance override) no longer points at anything once Auto Layout re-casts
-// the systems, so autoplace takes those items back. A chosen side (above,
-// below, between the staves) is authored intent and stays. Slurs and
-// fingerings are normalized by Prettify instead.
+// the systems, so autoplace takes those items back. When a manual vertical
+// offset put text wholly outside its staff, retain that effective authored side
+// as an explicit placement before clearing the obsolete coordinates. Text in a
+// grand-staff gap keeps its existing placement. Slurs and fingerings are
+// normalized by Prettify instead.
 void resetPianomaniaItemPlacement(EngravingItem* item)
 {
     if (!item || item->generated()) {
         return;
     }
 
-    bool changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET);
+    bool changed = false;
+    if (const std::optional<PlacementV> side = authoredOuterStaffSide(item);
+        side.has_value() && item->placement() != *side) {
+        item->undoChangeProperty(Pid::PLACEMENT, PropertyValue::fromValue(*side), PropertyFlags::UNSTYLED);
+        changed = true;
+    }
+
+    changed = resetPianomaniaPlacementProperty(item, Pid::OFFSET) || changed;
     changed = resetPianomaniaPlacementProperty(item, Pid::AUTOPLACE) || changed;
     changed = resetPianomaniaPlacementProperty(item, Pid::MIN_DISTANCE) || changed;
     if (item->isExpression()) {

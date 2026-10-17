@@ -2470,6 +2470,68 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutResetsStaleManualPlacement)
     delete score;
 }
 
+// Burgmuller Op. 100 No. 2 m24 stores "dolce" on the B after an opening
+// eighth rest. Its only above-staff instruction is the effective position of
+// a large manual offset; resetting that offset must retain the authored side.
+// An ordinary expression in the grand-staff gap must keep the automatic below
+// placement instead of being pulled above with it.
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManuallyPlacedExpression)
+{
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
+    ASSERT_TRUE(score);
+    relayoutScore(score);
+
+    Segment* target = score->firstSegment(SegmentType::ChordRest);
+    while (target && (!target->element(0) || !target->element(0)->isChord())) {
+        target = target->next1(SegmentType::ChordRest);
+    }
+    ASSERT_TRUE(target);
+
+    Segment* ordinaryTarget = target->next1(SegmentType::ChordRest);
+    while (ordinaryTarget && (!ordinaryTarget->element(0) || !ordinaryTarget->element(0)->isChord())) {
+        ordinaryTarget = ordinaryTarget->next1(SegmentType::ChordRest);
+    }
+    ASSERT_TRUE(ordinaryTarget);
+
+    Expression* dolce = Factory::createExpression(target);
+    dolce->setTrack(0);
+    dolce->setXmlText(u"dolce");
+    target->add(dolce);
+
+    Expression* ordinary = Factory::createExpression(ordinaryTarget);
+    ordinary->setTrack(0);
+    ordinary->setXmlText(u"cantabile");
+    ordinaryTarget->add(ordinary);
+    relayoutScore(score);
+
+    const double spatium = dolce->spatium();
+    dolce->setOffset(PointF(-1.45503 * spatium, -6.03662 * spatium));
+    dolce->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
+    relayoutScore(score);
+
+    const System* authoredSystem = dolce->segment()->system();
+    ASSERT_TRUE(authoredSystem);
+    const double authoredStaffTop = authoredSystem->staffYpage(dolce->staffIdx());
+    ASSERT_LE(dolce->pageBoundingRect().bottom(), authoredStaffTop);
+    ASSERT_FALSE(dolce->placeAbove());
+    ASSERT_FALSE(ordinary->placeAbove());
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    relayoutScore(score);
+
+    EXPECT_TRUE(dolce->placeAbove());
+    EXPECT_EQ(dolce->propertyFlags(Pid::PLACEMENT), PropertyFlags::UNSTYLED);
+    EXPECT_EQ(dolce->offset(), dolce->propertyDefault(Pid::OFFSET).value<PointF>());
+    const System* laidOutSystem = dolce->segment()->system();
+    ASSERT_TRUE(laidOutSystem);
+    EXPECT_LT(dolce->pageBoundingRect().bottom(), laidOutSystem->staffYpage(dolce->staffIdx()));
+
+    EXPECT_FALSE(ordinary->placeAbove());
+    EXPECT_EQ(ordinary->offset(), ordinary->propertyDefault(Pid::OFFSET).value<PointF>());
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutPlacesLowerStaffFermataBelow)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/manual-placement-normalization.mscx");
