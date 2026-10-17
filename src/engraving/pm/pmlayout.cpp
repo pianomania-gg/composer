@@ -1004,7 +1004,7 @@ std::optional<PlacementV> authoredOuterStaffSide(const EngravingItem* item)
         return std::nullopt;
     }
 
-    const double staffTop = system->staffYpage(staff->idx());
+    const double staffTop = system->pagePos().y() + system->staff(staff->idx())->y();
     const double staffBottom = staffTop + staff->staffHeight(item->tick());
     if (bounds.bottom() <= staffTop) {
         return PlacementV::ABOVE;

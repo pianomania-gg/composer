@@ -2511,7 +2511,7 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManua
 
     const System* authoredSystem = dolce->segment()->system();
     ASSERT_TRUE(authoredSystem);
-    const double authoredStaffTop = authoredSystem->staffYpage(dolce->staffIdx());
+    const double authoredStaffTop = authoredSystem->pagePos().y() + authoredSystem->staff(dolce->staffIdx())->y();
     ASSERT_LE(dolce->pageBoundingRect().bottom(), authoredStaffTop);
     ASSERT_FALSE(dolce->placeAbove());
     ASSERT_FALSE(ordinary->placeAbove());
@@ -2524,7 +2524,8 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManua
     EXPECT_EQ(dolce->offset(), dolce->propertyDefault(Pid::OFFSET).value<PointF>());
     const System* laidOutSystem = dolce->segment()->system();
     ASSERT_TRUE(laidOutSystem);
-    EXPECT_LT(dolce->pageBoundingRect().bottom(), laidOutSystem->staffYpage(dolce->staffIdx()));
+    const double laidOutStaffTop = laidOutSystem->pagePos().y() + laidOutSystem->staff(dolce->staffIdx())->y();
+    EXPECT_LT(dolce->pageBoundingRect().bottom(), laidOutStaffTop);
 
     EXPECT_FALSE(ordinary->placeAbove());
     EXPECT_EQ(ordinary->offset(), ordinary->propertyDefault(Pid::OFFSET).value<PointF>());
