@@ -981,7 +981,7 @@ void splitPianomaniaDynamicExpressionText(MasterScore* score)
 std::optional<PlacementV> authoredOuterStaffSide(const EngravingItem* item)
 {
     if (!item
-        || (!item->isDynamic() && !item->isExpression() && !item->isStaffText()
+        || (!item->isExpression() && !item->isStaffText()
             && !item->isSystemText() && !item->isTempoText() && !item->isRehearsalMark())) {
         return std::nullopt;
     }
@@ -1033,8 +1033,8 @@ void resetPianomaniaItemPlacement(EngravingItem* item)
         if (item->hasVoiceAssignmentProperties()) {
             const DirectionV direction = *side == PlacementV::ABOVE ? DirectionV::UP : DirectionV::DOWN;
             if (item->getProperty(Pid::DIRECTION).value<DirectionV>() != direction
-                || item->propertyFlags(Pid::DIRECTION) != PropertyFlags::UNSTYLED) {
-                item->undoChangeProperty(Pid::DIRECTION, PropertyValue::fromValue(direction), PropertyFlags::UNSTYLED);
+                || item->propertyFlags(Pid::DIRECTION) != PropertyFlags::NOSTYLE) {
+                item->undoChangeProperty(Pid::DIRECTION, PropertyValue::fromValue(direction), PropertyFlags::NOSTYLE);
                 changed = true;
             }
         } else if (item->placement() != *side) {

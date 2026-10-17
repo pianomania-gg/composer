@@ -2514,7 +2514,7 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManua
 
     EXPECT_TRUE(dolce->placeAbove());
     EXPECT_EQ(dolce->getProperty(Pid::DIRECTION).value<DirectionV>(), DirectionV::UP);
-    EXPECT_EQ(dolce->propertyFlags(Pid::DIRECTION), PropertyFlags::UNSTYLED);
+    EXPECT_EQ(dolce->propertyFlags(Pid::DIRECTION), PropertyFlags::NOSTYLE);
     EXPECT_EQ(dolce->offset(), dolce->propertyDefault(Pid::OFFSET).value<PointF>());
     EXPECT_DOUBLE_EQ(dolce->minDistance().val(),
                      dolce->propertyDefault(Pid::MIN_DISTANCE).value<Spatium>().val());
