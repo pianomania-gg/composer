@@ -2505,14 +2505,26 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManua
     relayoutScore(score);
 
     const double spatium = dolce->spatium();
-    dolce->setOffset(PointF(-1.45503 * spatium, -6.03662 * spatium));
-    dolce->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
-    relayoutScore(score);
-
     const System* authoredSystem = dolce->segment()->system();
     ASSERT_TRUE(authoredSystem);
     const double authoredStaffTop = authoredSystem->pagePos().y() + authoredSystem->staff(dolce->staffIdx())->y();
-    ASSERT_LE(dolce->pageBoundingRect().bottom(), authoredStaffTop);
+    ASSERT_GT(dolce->pageBoundingRect().bottom(), authoredStaffTop);
+
+    // The source offset is layout-relative, so its numeric Y value cannot be
+    // transplanted into this fixture's wider grand-staff gap. Reproduce the
+    // authored state by moving the whole expression above the staff; the
+    // source's -999 minimum distance keeps autoplace from displacing it.
+    const double upwardShift = dolce->pageBoundingRect().bottom() - authoredStaffTop + 0.5 * spatium;
+    dolce->setOffset(dolce->offset() + PointF(-1.45503 * spatium, -upwardShift));
+    dolce->setPropertyFlags(Pid::OFFSET, PropertyFlags::UNSTYLED);
+    dolce->setMinDistance(Spatium(-999.0));
+    dolce->setPropertyFlags(Pid::MIN_DISTANCE, PropertyFlags::UNSTYLED);
+    relayoutScore(score);
+
+    const System* shiftedSystem = dolce->segment()->system();
+    ASSERT_TRUE(shiftedSystem);
+    const double shiftedStaffTop = shiftedSystem->pagePos().y() + shiftedSystem->staff(dolce->staffIdx())->y();
+    ASSERT_LE(dolce->pageBoundingRect().bottom(), shiftedStaffTop);
     ASSERT_FALSE(dolce->placeAbove());
     ASSERT_FALSE(ordinary->placeAbove());
 
@@ -2522,6 +2534,8 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutRetainsOuterStaffSideOfManua
     EXPECT_TRUE(dolce->placeAbove());
     EXPECT_EQ(dolce->propertyFlags(Pid::PLACEMENT), PropertyFlags::UNSTYLED);
     EXPECT_EQ(dolce->offset(), dolce->propertyDefault(Pid::OFFSET).value<PointF>());
+    EXPECT_DOUBLE_EQ(dolce->minDistance().val(),
+                     dolce->propertyDefault(Pid::MIN_DISTANCE).value<Spatium>().val());
     const System* laidOutSystem = dolce->segment()->system();
     ASSERT_TRUE(laidOutSystem);
     const double laidOutStaffTop = laidOutSystem->pagePos().y() + laidOutSystem->staff(dolce->staffIdx())->y();
