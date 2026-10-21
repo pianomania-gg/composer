@@ -178,7 +178,7 @@ private slots:
         QVERIFY(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate));
         corrupt.write("not an image");
         corrupt.close();
-        QVERIFY_EXCEPTION_THROWN(readBackground(path), std::runtime_error);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, readBackground(path));
     }
 
     // Test value: Detects oversized artwork reaching decode at the bounded image input boundary.
@@ -189,7 +189,7 @@ private slots:
         QImage image(8193, 1, QImage::Format_RGB32);
         image.fill(Qt::blue);
         QVERIFY(image.save(path));
-        QVERIFY_EXCEPTION_THROWN(readBackground(path), std::runtime_error);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, readBackground(path));
     }
 };
 int main(int argc, char** argv)

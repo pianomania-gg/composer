@@ -51,6 +51,7 @@
 #include "importexport/mei/pmmeiexport.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/staff.h"
+#include "engraving/dom/tie.h"
 #include "engraving/pm/pmlayout.h"
 #include "engraving/pm/pmprettify.h"
 #include "engraving/rw/compat/pianomaniaheldnotepitchcurvemigration.h"
@@ -687,6 +688,90 @@ TEST(Project_PianomaniaCoordinatedExportTest, TiedContinuationsDoNotRequireNewPl
         countCanonicalEvents(document.object().value("canonical_events").toArray(),
                              "alias_reason", "tie_continuation"),
         1);
+    const QByteArray mei = readFile(directory.filePath("song.mei"));
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral("<tie\\b(?=[^>]*\\bstartid=)(?=[^>]*\\bendid=)[^>]*>"))
+                    .match(QString::fromUtf8(mei))
+                    .hasMatch());
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, InvisibleTieToInvisibleContinuationKeepsPlaybackWithoutMeiTie)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       "pianomania_cross_voice_tie.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    mu::engraving::Note* continuation = nullptr;
+    score->scanElements([&continuation](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote() && mu::engraving::toNote(item)->tieBack()) {
+            continuation = mu::engraving::toNote(item);
+        }
+    });
+    ASSERT_NE(continuation, nullptr);
+    mu::engraving::Tie* tie = continuation->tieBack();
+    ASSERT_NE(tie, nullptr);
+    ASSERT_NE(tie->startNote(), nullptr);
+    const int semanticStartTick = tie->startNote()->chord()->tick().ticks();
+    const int semanticEndTick = continuation->chord()->tick().ticks()
+                                + continuation->chord()->actualTicks().ticks();
+    ASSERT_GT(semanticEndTick, semanticStartTick);
+
+    continuation->setVisible(false);
+    tie->setVisible(false);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), 1u);
+    ASSERT_EQ(result.val.files.size(), 1u);
+    ASSERT_EQ(result.val.files[0].audibleEvents.size(), 1u);
+    const auto& audible = result.val.files[0].audibleEvents[0];
+    ASSERT_EQ(audible.origins.size(), 1u);
+    EXPECT_EQ(audible.origins[0].sourceStartTick, semanticStartTick);
+    EXPECT_EQ(audible.origins[0].sourceEndTick, semanticEndTick);
+
+    const QByteArray mei = readFile(directory.filePath("song.mei"));
+    EXPECT_EQ(mei.count("<note "), 1);
+    EXPECT_FALSE(mei.contains("<tie "));
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, VisibleTieWithoutCanonicalEndpointFailsExport)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       "pianomania_cross_voice_tie.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    score->scanElements([](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote() && mu::engraving::toNote(item)->tieBack()) {
+            mu::engraving::toNote(item)->setVisible(false);
+        }
+    });
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+
+    EXPECT_FALSE(result.ret);
+    EXPECT_NE(result.ret.toString().find("Failed to write coordinated Pianomania MEI"), std::string::npos)
+        << result.ret.toString();
 }
 
 TEST(Project_PianomaniaCoordinatedExportTest, GraceTieRootOwnsSharedAttackInEitherRecordOrder)

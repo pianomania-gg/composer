@@ -30,8 +30,6 @@
 using namespace muse;
 using namespace mu::project;
 
-static constexpr int RET_CODE_CHANGE_SAVE_LOCATION_TYPE = 1234;
-
 RetVal<SaveLocation> OpenSaveProjectScenario::askSaveLocation(INotationProjectPtr project, SaveMode mode,
                                                               SaveLocationType preselectedType) const
 {

@@ -6281,6 +6281,24 @@ bool MeiExporter::writeTempo(const TempoText *tempoText,
 bool MeiExporter::writeTie(const Tie *tie, const std::string &startid) {
   IF_ASSERT_FAILED(tie) { return false; }
 
+  const Note *endNote = tie->endNote();
+  if (!tie->isLaissezVib() && !tie->isPartialTie() && endNote &&
+      !shouldExportNote(endNote)) {
+    // Some authored scores use a hidden ordinary tie into a hidden note only
+    // to extend MIDI playback. Neither object is a visible written identity,
+    // so canonical MEI must retain the visible attack and omit the nonvisual
+    // control element. MIDI export still follows the complete source tie
+    // chain. Do not apply this rule to partial ties, laissez-vibrer, visible
+    // ties, or visible endpoint notes: those require an explicit MEI
+    // representation or a hard export failure.
+    if (!tie->visible() && !endNote->visible()) {
+      return true;
+    }
+    LOGE() << "MEI export cannot write an ordinary tie whose terminal note "
+              "is absent from canonical notation";
+    return false;
+  }
+
   pugi::xml_node tieNode = m_currentNode.append_child();
   libmei::Tie meiTie = Convert::tieToMEI(tie);
   meiTie.SetStartid(startid);
