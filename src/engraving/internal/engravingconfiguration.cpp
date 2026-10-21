@@ -194,35 +194,6 @@ async::Channel<muse::io::path_t> EngravingConfiguration::partStyleFilePathChange
     return m_partStyleFilePathChanged;
 }
 
-static bool defaultPageSizeIsLetter()
-{
-    // try PAPERSIZE environment variable
-    const char* papersize = getenv("PAPERSIZE");
-    if (papersize) {
-        return strcmp(papersize, "letter") == 0;
-    }
-#ifndef NO_QT_SUPPORT
-    // try locale
-    switch (QLocale::system().territory()) {
-    case QLocale::UnitedStates:
-    case QLocale::Canada:
-    case QLocale::Mexico:
-    case QLocale::Chile:
-    case QLocale::Colombia:
-    case QLocale::CostaRica:
-    case QLocale::Panama:
-    case QLocale::Guatemala:
-    case QLocale::DominicanRepublic:
-    case QLocale::Philippines:
-        return true;
-    default:
-        return false;
-    }
-#else
-    return false;
-#endif
-}
-
 SizeF EngravingConfiguration::defaultPageSize() const
 {
     static const SizeF size(10.0, 7.5);

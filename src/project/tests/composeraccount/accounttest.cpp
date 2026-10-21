@@ -2,8 +2,13 @@
 #include <QApplication>
 #include <QTest>
 #include <QFontDatabase>
-// Exercise the actual session and dialog code with an in-memory account; never
-// read or alter the user's credential vault, and intercept all browser launches.
+#include <QUuid>
+#ifdef Q_OS_MACOS
+#include <dlfcn.h>
+#endif
+// Exercise the actual session and dialog code with an in-memory account and
+// intercept all browser launches. The macOS vault regression uses only a
+// randomized dummy service with exact cleanup, never the product vault name.
 #include "../../internal/composersession.cpp"
 
 using namespace mu::project::composer;
@@ -16,6 +21,8 @@ private slots:
 #ifdef Q_OS_WIN
         QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf");
         QApplication::setFont(QFont("Segoe UI", 10));
+#elif defined(Q_OS_MACOS)
+        QApplication::setFont(QFont("Helvetica", 10));
 #endif
         if (qEnvironmentVariableIsSet("COMPOSER_TEST_DARK")) {
             auto palette = QApplication::palette();
@@ -34,6 +41,57 @@ private slots:
         QDesktopServices::setUrlHandler("https", this, "openUrl");
     }
     void cleanup() { QDesktopServices::unsetUrlHandler("https"); }
+#ifdef Q_OS_MACOS
+    void modernKeychainApiReadsUpdatesAndDeletesLegacyEntry() {
+        const QByteArray name = "PianomaniaComposer/account-regression/"
+                                + QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+        struct ExactItemCleanup {
+            QByteArray name;
+            ~ExactItemCleanup() noexcept {
+                try {
+                    macVaultWrite(name, {});
+                } catch (const std::exception& failure) {
+                    const QByteArray message = "Failed to clean up Keychain interoperability fixture "
+                                               + name + ": " + failure.what();
+                    QTest::qFail(message.constData(), __FILE__, __LINE__);
+                } catch (...) {
+                    const QByteArray message = "Failed to clean up Keychain interoperability fixture " + name;
+                    QTest::qFail(message.constData(), __FILE__, __LINE__);
+                }
+            }
+        } cleanup { name };
+        qInfo().noquote() << "Keychain interoperability dummy service:" << name;
+
+        // This dynamic legacy symbol is intentionally confined to this
+        // interoperability fixture so it can create the old item format.
+        // Product code uses only the modern SecItem APIs.
+        using LegacyAddGenericPassword = OSStatus (*)(
+            void*, UInt32, const char*, UInt32, const char*, UInt32, const void*, void**);
+        auto legacyAdd = reinterpret_cast<LegacyAddGenericPassword>(
+            dlsym(RTLD_DEFAULT, "SecKeychainAddGenericPassword"));
+        QVERIFY(legacyAdd);
+
+        const QByteArray initial = "legacy-dummy-account-data";
+        QCOMPARE(legacyAdd(nullptr, UInt32(name.size()), name.constData(), 0, "",
+                           UInt32(initial.size()), initial.constData(), nullptr), errSecSuccess);
+        QCOMPARE(macVaultRead(name), initial);
+
+        const QByteArray updated = "updated-dummy-account-data";
+        macVaultWrite(name, updated);
+        QCOMPARE(macVaultRead(name), updated);
+
+        macVaultWrite(name, {});
+        QCOMPARE(macVaultRead(name), QByteArray());
+
+        const QByteArray modern = "modern-dummy-account-data";
+        macVaultWrite(name, modern);
+        QCOMPARE(macVaultRead(name), modern);
+        macVaultWrite(name, {});
+        QCOMPARE(macVaultRead(name), QByteArray());
+        macVaultWrite(name, {});
+        QCOMPARE(macVaultRead(name), QByteArray());
+    }
+#endif
     void statusDoesNotCreateAccount() {
         AccountState state;
         state.refresh();
