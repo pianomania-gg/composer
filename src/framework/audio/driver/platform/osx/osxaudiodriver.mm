@@ -113,7 +113,7 @@ bool OSXAudioDriver::open(const Spec& spec, Spec* activeSpec)
     AudioObjectPropertyAddress bufferSizeRangeAddress = {
         .mSelector = kAudioDevicePropertyBufferFrameSizeRange,
         .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMaster
+        .mElement = kAudioObjectPropertyElementMain
     };
 
     result = AudioObjectGetPropertyData(osxDeviceId(), &bufferSizeRangeAddress, 0, 0, &bufferSizeRangeSize, &bufferSizeRange);
@@ -130,7 +130,7 @@ bool OSXAudioDriver::open(const Spec& spec, Spec* activeSpec)
     AudioObjectPropertyAddress preferredBufferSizeAddress = {
         .mSelector = kAudioDevicePropertyBufferFrameSize,
         .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMaster
+        .mElement = kAudioObjectPropertyElementMain
     };
 
     result = AudioObjectSetPropertyData(osxDeviceId(), &preferredBufferSizeAddress, 0, 0, sizeof(bufferSizeOut), (void*)&bufferSizeOut);
@@ -239,13 +239,13 @@ void OSXAudioDriver::updateDeviceMap()
     AudioObjectPropertyAddress devicesPropertyAddress = {
         .mSelector = kAudioHardwarePropertyDevices,
         .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMaster,
+        .mElement = kAudioObjectPropertyElementMain,
     };
 
     AudioObjectPropertyAddress namePropertyAddress = {
         .mSelector = kAudioDevicePropertyDeviceNameCFString,
         .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMaster,
+        .mElement = kAudioObjectPropertyElementMain,
     };
 
     auto getStreamsCount
@@ -317,7 +317,7 @@ std::vector<samples_t> OSXAudioDriver::availableOutputDeviceBufferSizes() const
     AudioObjectPropertyAddress bufferFrameSizePropertyAddress = {
         .mSelector = kAudioDevicePropertyBufferFrameSizeRange,
         .mScope = kAudioObjectPropertyScopeGlobal,
-        .mElement = kAudioObjectPropertyElementMaster
+        .mElement = kAudioObjectPropertyElementMain
     };
 
     AudioValueRange range = { 0, 0 };
@@ -377,7 +377,7 @@ bool OSXAudioDriver::audioQueueSetDeviceName(const AudioDeviceID& deviceId)
     AudioObjectPropertyAddress propertyAddress;
     propertyAddress.mSelector = kAudioDevicePropertyDeviceUID;
     propertyAddress.mScope = kAudioDevicePropertyScopeOutput;
-    propertyAddress.mElement = kAudioObjectPropertyElementMaster;
+    propertyAddress.mElement = kAudioObjectPropertyElementMain;
 
     auto result = AudioObjectGetPropertyData(osxDeviceId, &propertyAddress, 0, NULL, &deviceUIDSize, &deviceUID);
     if (result != noErr) {
@@ -400,7 +400,7 @@ muse::audio::AudioDeviceID OSXAudioDriver::defaultDeviceId() const
     AudioObjectPropertyAddress deviceNamePropertyAddress = {
         .mSelector = kAudioHardwarePropertyDefaultOutputDevice,
         .mScope = kAudioDevicePropertyScopeOutput,
-        .mElement = kAudioObjectPropertyElementMaster
+        .mElement = kAudioObjectPropertyElementMain
     };
 
     OSStatus result = AudioObjectGetPropertyData(kAudioObjectSystemObject, &deviceNamePropertyAddress, 0, 0, &deviceIdSize, &osxDeviceId);
@@ -460,7 +460,7 @@ void OSXAudioDriver::initDeviceMapListener()
     AudioObjectPropertyAddress propertyAddress;
     propertyAddress.mSelector = kAudioHardwarePropertyDevices;
     propertyAddress.mScope = kAudioObjectPropertyScopeGlobal;
-    propertyAddress.mElement = kAudioObjectPropertyElementMaster;
+    propertyAddress.mElement = kAudioObjectPropertyElementMain;
 
     auto result = AudioObjectAddPropertyListener(kAudioObjectSystemObject, &propertyAddress, &onDeviceListChanged, this);
     if (result != noErr) {

@@ -2808,27 +2808,6 @@ bool MeiExporter::assignIndicesForMeasure(const Measure *measure) {
 
   m_noteIdxAssignment.clear(); // per-measure cache is fine
 
-  // helper: find index for a continuation note (tieBack != nullptr)
-  auto findTieIndex = [&](const Note *n, int p) -> int {
-    const Note *initial = n;
-    while (initial->tieBack())
-      initial = initial->tieBack()->startNote();
-
-    // prefer same-measure cache if the start is earlier in this measure
-    if (auto it = m_noteIdxAssignment.find(initial);
-        it != m_noteIdxAssignment.end())
-      return it->second;
-
-    // otherwise, look in the global tie-start map (from earlier measures)
-    if (auto it = m_idxForTieStart.find(initial); it != m_idxForTieStart.end())
-      return it->second;
-
-    // defensive fallback: shouldn’t happen if measures are processed in order
-    int idx = updateNoteIndex(p);
-    m_idxForTieStart[initial] = idx;
-    return idx;
-  };
-
   // walk groups of equal tick
   for (size_t i = 0; i < m_durEvents.size();) {
     int tick = m_durEvents[i].tick;
@@ -2858,17 +2837,51 @@ bool MeiExporter::assignIndicesForMeasure(const Measure *measure) {
     // note events.
     std::unordered_map<IndexGroupKey, int, IndexGroupKeyHash> idxByPitch;
 
+    // A cross-voice tie continuation can precede its root in the stable
+    // traversal order. Reserve the root's index in this tick group so the
+    // later root and any same-onset roots reuse that exact index.
+    auto findTieIndex = [&](const Note *n) -> int {
+      const Note *initial = n;
+      while (initial->tieBack())
+        initial = initial->tieBack()->startNote();
+
+      if (auto it = m_noteIdxAssignment.find(initial);
+          it != m_noteIdxAssignment.end())
+        return it->second;
+
+      if (auto it = m_idxForTieStart.find(initial);
+          it != m_idxForTieStart.end())
+        return it->second;
+
+      const Chord *initialChord = initial->chord();
+      IndexGroupKey key {
+        initial->ppitch(),
+        initialChord && initialChord->isGrace() ? initialChord : nullptr
+      };
+      auto [it, inserted] = idxByPitch.emplace(key, 0);
+      if (inserted)
+        it->second = updateNoteIndex(initial->ppitch());
+      m_idxForTieStart[initial] = it->second;
+      return it->second;
+    };
+
     for (size_t k = i; k < j; ++k) {
       const Note *note = m_durEvents[k].note;
       int p = note->ppitch();
       int idx;
 
       if (note->tieBack() != nullptr) {
-        idx = findTieIndex(note, p);
+        idx = findTieIndex(note);
       } else {
         IndexGroupKey key { p, m_durEvents[k].indexGroupChord };
+        auto reserved = note->tieFor() != nullptr
+                            ? m_idxForTieStart.find(note)
+                            : m_idxForTieStart.end();
         auto it = idxByPitch.find(key);
-        if (it != idxByPitch.end()) {
+        if (reserved != m_idxForTieStart.end()) {
+          idx = reserved->second;
+          idxByPitch.emplace(key, idx);
+        } else if (it != idxByPitch.end()) {
           idx = it->second; // same-beat same-pitch across staves
         } else {
           idx = updateNoteIndex(p);
@@ -6267,6 +6280,24 @@ bool MeiExporter::writeTempo(const TempoText *tempoText,
 
 bool MeiExporter::writeTie(const Tie *tie, const std::string &startid) {
   IF_ASSERT_FAILED(tie) { return false; }
+
+  const Note *endNote = tie->endNote();
+  if (!tie->isLaissezVib() && !tie->isPartialTie() && endNote &&
+      !shouldExportNote(endNote)) {
+    // Some authored scores use a hidden ordinary tie into a hidden note only
+    // to extend MIDI playback. Neither object is a visible written identity,
+    // so canonical MEI must retain the visible attack and omit the nonvisual
+    // control element. MIDI export still follows the complete source tie
+    // chain. Do not apply this rule to partial ties, laissez-vibrer, visible
+    // ties, or visible endpoint notes: those require an explicit MEI
+    // representation or a hard export failure.
+    if (!tie->visible() && !endNote->visible()) {
+      return true;
+    }
+    LOGE() << "MEI export cannot write an ordinary tie whose terminal note "
+              "is absent from canonical notation";
+    return false;
+  }
 
   pugi::xml_node tieNode = m_currentNode.append_child();
   libmei::Tie meiTie = Convert::tieToMEI(tie);

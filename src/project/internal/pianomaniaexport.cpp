@@ -802,12 +802,25 @@ bool verifyWrittenMidi(const MidiExportedFile& file)
     return true;
 }
 
+const mu::engraving::Note* tieChainRoot(const mu::engraving::Note* note)
+{
+    std::set<const mu::engraving::Note*> visited;
+    while (note && note->tieBack() && note->tieBack()->startNote()) {
+        if (!visited.insert(note).second) {
+            return nullptr;
+        }
+        note = note->tieBack()->startNote();
+    }
+    return note;
+}
+
 bool buildCanonicalEvents(const std::vector<mu::iex::mei::PmMeiNoteRecord>& records,
                           std::vector<CanonicalEvent>& destination)
 {
     destination.clear();
     destination.reserve(records.size());
-    std::map<std::pair<int, int>, size_t> primaryByLocator;
+    std::map<std::pair<int, int>, std::vector<size_t> > eventsByLocator;
+    std::map<const mu::engraving::Note*, size_t> eventIndexByNote;
     std::set<std::string> identities;
 
     for (const mu::iex::mei::PmMeiNoteRecord& record : records) {
@@ -857,35 +870,66 @@ bool buildCanonicalEvents(const std::vector<mu::iex::mei::PmMeiNoteRecord>& reco
                                         ? record.chordId
                                         : record.measureId + "@" + record.beat;
 
-        const std::pair<int, int> locator(event.heardMidiKey, event.idx);
-        auto primary = primaryByLocator.find(locator);
-        if (primary == primaryByLocator.end()) {
-            primaryByLocator.emplace(locator, destination.size());
-        } else {
-            CanonicalEvent& target = destination[primary->second];
-            const mu::engraving::Note* targetNote = records[primary->second].note;
-            event.aliasOf = target.scoreEventId;
-            if (event.scoreTick == target.scoreTick) {
-                event.aliasReason = "same_onset";
-            } else if (note->tieBack()) {
-                event.aliasReason = "tie_continuation";
-            } else if (targetNote && targetNote->tieBack()
-                       && targetNote->tieBack()->startNote() == note) {
-                // MEI records are emitted in staff/layer order, so a
-                // cross-voice tie continuation can be encountered before its
-                // earlier tie start. Make the written attack authoritative
-                // and retroactively classify the continuation as its alias.
-                target.aliasOf = event.scoreEventId;
-                target.aliasReason = "tie_continuation";
-                event.aliasOf.clear();
-                primary->second = destination.size();
-            } else {
-                LOGE() << "Canonical locator is reused without same-onset or tie alias: "
-                       << event.scoreEventId;
+        const size_t eventIndex = destination.size();
+        if (!eventIndexByNote.emplace(note, eventIndex).second) {
+            LOGE() << "Duplicate coordinated Pianomania note record: " << event.scoreEventId;
+            return false;
+        }
+        eventsByLocator[{ event.heardMidiKey, event.idx }].push_back(eventIndex);
+        destination.push_back(std::move(event));
+    }
+
+    for (const auto& [locator, eventIndices] : eventsByLocator) {
+        std::map<size_t, size_t> rootIndexByEvent;
+        std::set<size_t> rootIndices;
+        for (const size_t eventIndex : eventIndices) {
+            const mu::engraving::Note* root = tieChainRoot(records[eventIndex].note);
+            if (!root) {
+                LOGE() << "Canonical locator encounters a cyclic tie chain: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            const auto rootRecord = eventIndexByNote.find(root);
+            if (rootRecord == eventIndexByNote.end()) {
+                LOGE() << "Canonical tie root is missing from coordinated MEI records: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            const CanonicalEvent& rootEvent = destination[rootRecord->second];
+            if (std::pair<int, int>(rootEvent.heardMidiKey, rootEvent.idx) != locator) {
+                LOGE() << "Canonical tie root does not share its continuation locator: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            rootIndexByEvent.emplace(eventIndex, rootRecord->second);
+            rootIndices.insert(rootRecord->second);
+        }
+
+        const size_t primaryIndex = *rootIndices.cbegin();
+        const CanonicalEvent& primary = destination[primaryIndex];
+        for (const size_t rootIndex : rootIndices) {
+            const CanonicalEvent& root = destination[rootIndex];
+            if (root.scoreTick != primary.scoreTick
+                || root.eventType != primary.eventType
+                || root.measureId != primary.measureId
+                || root.measureNumber != primary.measureNumber
+                || root.beat != primary.beat) {
+                LOGE() << "Canonical locator has incompatible attack roots: "
+                       << root.scoreEventId;
                 return false;
             }
         }
-        destination.push_back(std::move(event));
+
+        for (const size_t eventIndex : eventIndices) {
+            if (eventIndex == primaryIndex) {
+                continue;
+            }
+            CanonicalEvent& event = destination[eventIndex];
+            event.aliasOf = primary.scoreEventId;
+            event.aliasReason = eventIndex == rootIndexByEvent.at(eventIndex)
+                                    ? "same_onset"
+                                    : "tie_continuation";
+        }
     }
     return !destination.empty();
 }
