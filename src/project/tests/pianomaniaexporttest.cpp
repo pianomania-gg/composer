@@ -738,7 +738,8 @@ TEST(Project_PianomaniaCoordinatedExportTest, InvisibleTieToInvisibleContinuatio
     const auto& audible = result.val.files[0].audibleEvents[0];
     ASSERT_EQ(audible.origins.size(), 1u);
     EXPECT_EQ(audible.origins[0].sourceStartTick, semanticStartTick);
-    EXPECT_EQ(audible.origins[0].sourceEndTick, semanticEndTick);
+    EXPECT_EQ(audible.origins[0].sourceEndTick, audible.endTick);
+    EXPECT_GT(audible.origins[0].sourceEndTick, continuation->chord()->tick().ticks());
 
     const QByteArray mei = readFile(directory.filePath("song.mei"));
     EXPECT_EQ(mei.count("<note "), 1);
@@ -770,7 +771,7 @@ TEST(Project_PianomaniaCoordinatedExportTest, VisibleTieWithoutCanonicalEndpoint
         muse::io::path_t(directory.filePath("song.mei")), false);
 
     EXPECT_FALSE(result.ret);
-    EXPECT_NE(result.ret.toString().find("Failed to write coordinated Pianomania MEI"), std::string::npos)
+    EXPECT_NE(result.ret.toString().find("Failed to build coordinated Pianomania MEI identities"), std::string::npos)
         << result.ret.toString();
 }
 
