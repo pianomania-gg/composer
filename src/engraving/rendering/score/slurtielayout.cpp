@@ -835,6 +835,27 @@ bool curveRemainsInsidePage(const SlurSegment* segment, const std::array<PointF,
     return true;
 }
 
+// Pianomania: the stem direction a slur decision should assume for `chord`. A chord on another
+// system than `reference` may not have been laid out yet, so its direction is estimated from its
+// note lines. The estimate is never stored: the chord may already be laid out, with its stem and
+// beam built from its stored direction. A user-moved beam keeps anchors from the page position its
+// system had before page layout moved it, so a stored estimate could turn a drawn-down stem up
+// without laying the stem out again, and exports would then contradict the engraving.
+bool slurDecisionChordUp(const Chord* chord, const ChordRest* reference, const LayoutContext& ctx)
+{
+    const System* chordSystem = chord->measure()->system();
+    const System* referenceSystem = reference->measure()->system();
+    if (chord->staff()->isDrumStaff(chord->tick()) || !chordSystem || !referenceSystem || chordSystem == referenceSystem) {
+        return chord->up();
+    }
+    for (Note* note : chord->notes()) {
+        note->updateLine();     // because chord direction is based on note lines
+    }
+    Chord::LayoutData estimate;
+    ChordLayout::computeUp(chord, &estimate, ctx);
+    return estimate.up;
+}
+
 } // namespace
 
 // The general solver uses a coarse collision approximation. A narrow
@@ -3576,16 +3597,9 @@ void SlurTieLayout::computeUp(Slur* slur, LayoutContext& ctx)
         }
         Chord* chord1 = slur->startCR()->isChord() ? toChord(slur->startCR()) : 0;
         Chord* chord2 = slur->endCR()->isChord() ? toChord(slur->endCR()) : 0;
-        if (chord2 && !chord2->staff()->isDrumStaff(chord2->tick())
-            && slur->startCR()->measure()->system() != slur->endCR()->measure()->system()) {
-            // HACK: if the end chord is in a different system, it may have never been laid out yet.
-            // But we need to know its direction to decide slur direction, so need to compute it here.
-            for (Note* note : chord2->notes()) {
-                note->updateLine(); // because chord direction is based on note lines
-            }
-
-            ChordLayout::computeUp(chord2, ctx);
-        }
+        // An end chord on a different system may never have been laid out yet. Its direction
+        // decides the slur direction only through isDirectionMixture(), which estimates it
+        // there without storing the estimate (see slurDecisionChordUp()).
 
         if (chord1 && chord1->beam() && chord1->beam()->cross()) {
             // TODO: stem direction is not finalized, so we cannot use it here
@@ -3982,7 +3996,7 @@ bool SlurTieLayout::isDirectionMixture(const Chord* c1, const Chord* c2, LayoutC
         return false;
     }
     const bool up = c1->up();
-    if (c2->isGrace() && c2->up() != up) {
+    if (c2->isGrace() && slurDecisionChordUp(c2, c1, ctx) != up) {
         return true;
     }
     if (c1->isGraceBefore() && c2->isGraceAfter() && c1->parentItem() == c2->parentItem()) {
@@ -4000,19 +4014,7 @@ bool SlurTieLayout::isDirectionMixture(const Chord* c1, const Chord* c2, LayoutC
         if (!e || !e->isChord()) {
             continue;
         }
-        Chord* c = toChord(e);
-        const Measure* m = c->measure();
-        const System* c1Sys = c1->measure()->system();
-        const System* cSys = m->system();
-        if (!c->staff()->isDrumStaff(c->tick()) && c1Sys && cSys && c1Sys != cSys) {
-            // This chord is on a different system and may not have been laid out yet
-            for (Note* note : c->notes()) {
-                note->updateLine();     // because chord direction is based on note lines
-            }
-            ChordLayout::computeUp(c, ctx);
-        }
-
-        if (c->up() != up) {
+        if (slurDecisionChordUp(toChord(e), c1, ctx) != up) {
             return true;
         }
     }
