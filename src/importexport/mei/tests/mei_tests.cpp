@@ -3797,3 +3797,56 @@ TEST_F(Mei_Tests, mei_export_glissando_skips_only_segments_musescore_does_not_dr
 }
 
 }
+
+namespace mu::iex::mei {
+
+// Test value: Detects a chord whose exported stem.dir contradicts the stem MuseScore draws. A beam
+// dragged below high notes starts a system; a slur crossing that system break into a cross-staff
+// beam is re-laid out after page layout moves the system. Its direction check used to store a
+// direction estimated from the beam's pre-move anchors, flipping the first chord to up.
+TEST_F(Mei_Tests, mei_export_moved_beam_stem_dir_matches_drawn_stem_under_cross_system_slur)
+{
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(MEI_DIR + u"pianomania-moved-beam-system-start-slur.mscx", false));
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    const Measure* moved = score->firstMeasure()->nextMeasure()->nextMeasure();
+    ASSERT_TRUE(moved);
+    ASSERT_NE(moved->system(), moved->prevMeasure()->system()) << "fixture measure 3 must start a system";
+    const Segment* first = moved->first(SegmentType::ChordRest);
+    ASSERT_TRUE(first && first->element(0) && first->element(0)->isChord());
+    const Beam* beam = toChord(first->element(0))->beam();
+    ASSERT_TRUE(beam && beam->userModified());
+    ASSERT_EQ(beam->elements().size(), 6u);
+
+    for (const ChordRest* cr : beam->elements()) {
+        ASSERT_TRUE(cr->isChord());
+        const Chord* chord = toChord(cr);
+        ASSERT_TRUE(chord->stem());
+        const RectF stem = chord->stem()->pageBoundingRect();
+        EXPECT_GT(stem.bottom(), chord->downNote()->pagePos().y() + chord->spatium()) << "the beam is drawn below the notes";
+        EXPECT_FALSE(chord->up()) << "tick " << chord->tick().ticks();
+    }
+
+    std::string text;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, text));
+    size_t movedChords = 0;
+    for (const std::string& tag : collectStartTags(text, "chord ")) {
+        EXPECT_EQ(xmlAttributeValue(tag, "stem.dir"), std::optional<std::string>("down")) << tag;
+        ++movedChords;
+    }
+    EXPECT_EQ(movedChords, 2u);
+    size_t movedNotes = 0;
+    for (const std::string& tag : collectStartTags(text, "note ")) {
+        const std::optional<std::string> oct = xmlAttributeValue(tag, "oct");
+        if (oct == std::optional<std::string>("6")
+            || (oct == std::optional<std::string>("5") && xmlAttributeValue(tag, "pname") == std::optional<std::string>("g"))) {
+            EXPECT_EQ(xmlAttributeValue(tag, "stem.dir"), std::optional<std::string>("down")) << tag;
+            ++movedNotes;
+        }
+    }
+    EXPECT_EQ(movedNotes, 8u);
+}
+
+}
