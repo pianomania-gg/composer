@@ -1567,7 +1567,7 @@ static void renderHarmony(EventsHolder& events, Measure const* m, Harmony* h, in
     }
 }
 
-static ChordRest* findPreviousChordRestForGraceOffset(Chord* chord)
+static ChordRest* findPreviousChordRestForGraceOffset(const Chord* chord)
 {
     if (!chord || !chord->segment()) {
         return nullptr;
@@ -1585,6 +1585,8 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
     // calculate offset for grace notes here
     const auto& grChords = chord->graceNotesBefore();
     const bool graceNotesPlayBeforeBeat = graceNotesBeforePlayBeforeBeat(chord);
+    // Short graces with no room before the beat start on it, and the written note follows them.
+    const std::vector<int> onBeatLeads = graceNotesPlayBeforeBeat ? std::vector<int>() : onBeatShortGraceLeadTicks(chord);
 
     int graceTickSum = 0;
 
@@ -1599,15 +1601,29 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
         previousGraceChord = toChord(previousGraceChordRest);
     }
 
-    std::vector<int> beforeBeatLeads;
+    // Crushed graces are struck these ticks before the written note starts, in written order.
+    std::vector<int> crushLeads;
+    // How many ticks after its beat the written note starts.
+    int writtenNoteDelay = 0;
     if (graceNotesPlayBeforeBeat) {
         int previousTicks = 0;
         if (previousGraceChordRest) {
             previousTicks = prevChord ? prevChord->ticks().ticks() : previousGraceChordRest->actualTicks().ticks();
         }
 
-        beforeBeatLeads = beforeBeatGraceLeadTicks(chord, previousTicks);
-        graceTickSum = beforeBeatLeads.empty() ? 0 : beforeBeatLeads.front();
+        crushLeads = beforeBeatGraceLeadTicks(chord, previousTicks);
+        graceTickSum = crushLeads.empty() ? 0 : crushLeads.front();
+        // graceNotesBeforePlayBeforeBeat chose this reading because the score has room for the
+        // crush before the written note. A traversal that places the written note earlier than
+        // that would start the graces before the performance does.
+        if (static_cast<int64_t>(chord->tick().ticks()) + tickOffset < graceTickSum) {
+            LOGE() << "GRACE_BEFORE_BEAT_NO_ROOM: grace notes before " << chord->eid()
+                   << " would start before the performance";
+            return;
+        }
+    } else if (!onBeatLeads.empty()) {
+        crushLeads = onBeatLeads;
+        writtenNoteDelay = onBeatLeads.front();
     } else {
         bool hasGraceBend = std::any_of(grChords.begin(), grChords.end(), [](Chord* ch) {
             return std::any_of(ch->notes().begin(), ch->notes().end(), [](Note* n) {
@@ -1639,10 +1655,12 @@ void CompatMidiRendererInternal::collectGraceBeforeChordEvents(Chord* chord, Cho
                     params.previousChordTicks = previousGraceChordRest->actualTicks().ticks();
                 }
 
-                if (graceNotesPlayBeforeBeat) {
+                if (!crushLeads.empty()) {
                     const size_t leadIndex = static_cast<size_t>(currentBeaforeBeatNote);
-                    params.graceOffsetOn = leadIndex < beforeBeatLeads.size() ? beforeBeatLeads[leadIndex] : 0;
-                    params.graceOffsetOff = leadIndex + 1 < beforeBeatLeads.size() ? beforeBeatLeads[leadIndex + 1] : 0;
+                    const int strikeLead = leadIndex < crushLeads.size() ? crushLeads[leadIndex] : 0;
+                    const int releaseLead = leadIndex + 1 < crushLeads.size() ? crushLeads[leadIndex + 1] : 0;
+                    params.graceOffsetOn = strikeLead - writtenNoteDelay;
+                    params.graceOffsetOff = releaseLead - writtenNoteDelay;
 
                     collectNote(events, note, params, st, pitchWheelRenderer, m_context);
                 } else if (isGraceBend) {
@@ -2489,7 +2507,7 @@ static int nearestPitchDistance(const Chord* from, const Chord* to)
     return nearest == std::numeric_limits<int>::max() ? 0 : nearest;
 }
 
-bool CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(const Chord* chord)
+bool CompatMidiRendererInternal::graceNotesBeforeAreShort(const Chord* chord)
 {
     if (!chord) {
         return false;
@@ -2511,13 +2529,12 @@ bool CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(const Chord* cho
     return grace->durationType().fraction() <= LONGEST_BEFORE_BEAT_GRACE_VALUE;
 }
 
-std::vector<int> CompatMidiRendererInternal::beforeBeatGraceLeadTicks(const Chord* chord, int previousTicks)
+// For each short grace note before `chord`, in written order, the ticks before the written note
+// at which it is struck. The crush never takes more than half of `sourceTicks`, the note it
+// takes its time from, unless `sourceTicks` is non-positive.
+static std::vector<int> shortGraceLeadTicks(const Chord* chord, int sourceTicks)
 {
     std::vector<int> leads;
-    if (!graceNotesBeforePlayBeforeBeat(chord)) {
-        return leads;
-    }
-
     const std::vector<Chord*>& graces = chord->graceNotesBefore();
 
     const double ticksPerSecond = chord->score()->multipliedTempo(chord->tick()).val * Constants::DIVISION;
@@ -2538,8 +2555,8 @@ std::vector<int> CompatMidiRendererInternal::beforeBeatGraceLeadTicks(const Chor
 
     const int graceCount = static_cast<int>(graces.size());
     double scale = 1.0;
-    if (previousTicks > 0 && total > std::max(graceCount, previousTicks / 2)) {
-        scale = std::max(graceCount, previousTicks / 2) / total;
+    if (sourceTicks > 0 && total > std::max(graceCount, sourceTicks / 2)) {
+        scale = std::max(graceCount, sourceTicks / 2) / total;
     }
 
     // Cumulative leads counted back from the written note, in written order.
@@ -2550,6 +2567,70 @@ std::vector<int> CompatMidiRendererInternal::beforeBeatGraceLeadTicks(const Chor
     }
 
     return leads;
+}
+
+bool CompatMidiRendererInternal::graceNotesBeforePlayBeforeBeat(const Chord* chord)
+{
+    if (!graceNotesBeforeAreShort(chord)) {
+        return false;
+    }
+
+    // The crush takes its time from what sounds before the written note, never more than half
+    // of the chord or rest before it. It plays before the beat only when the score has that much
+    // time before the written note; the first chord of a score has none.
+    const ChordRest* previous = findPreviousChordRestForGraceOffset(chord);
+    const std::vector<int> leads = shortGraceLeadTicks(chord, previous ? previous->actualTicks().ticks() : 0);
+    return leads.front() <= chord->tick().ticks();
+}
+
+std::vector<int> CompatMidiRendererInternal::beforeBeatGraceLeadTicks(const Chord* chord, int previousTicks)
+{
+    if (!graceNotesBeforePlayBeforeBeat(chord)) {
+        return {};
+    }
+
+    return shortGraceLeadTicks(chord, previousTicks);
+}
+
+static bool hasGraceBendBefore(const Chord* chord)
+{
+    const std::vector<Chord*>& graces = chord->graceNotesBefore();
+    return std::any_of(graces.begin(), graces.end(), [](const Chord* grace) {
+        return std::any_of(grace->notes().begin(), grace->notes().end(), [](const Note* note) {
+            return note->isGraceBendStart();
+        });
+    });
+}
+
+int CompatMidiRendererInternal::onBeatShortGraceLeadIn(const Chord* chord)
+{
+    if (!graceNotesBeforeAreShort(chord) || graceNotesBeforePlayBeforeBeat(chord) || hasGraceBendBefore(chord)) {
+        return 0;
+    }
+
+    const int chordTicks = chord->actualTicks().ticks();
+    const std::vector<int> leads = shortGraceLeadTicks(chord, chordTicks);
+    return std::max(1, static_cast<int>(std::lround(static_cast<double>(leads.front()) * NoteEvent::NOTE_LENGTH / chordTicks)));
+}
+
+std::vector<int> CompatMidiRendererInternal::onBeatShortGraceLeadTicks(const Chord* chord)
+{
+    const int leadIn = onBeatShortGraceLeadIn(chord);
+    if (leadIn <= 0) {
+        return {};
+    }
+
+    // The written note starts where collectNote places its first NoteEvent: this many ticks
+    // after the beat. Fit the crush to end exactly there.
+    const int chordTicks = chord->actualTicks().ticks();
+    const int writtenNoteDelay = (chordTicks * leadIn) / NoteEvent::NOTE_LENGTH;
+    const std::vector<int> leads = shortGraceLeadTicks(chord, chordTicks);
+    std::vector<int> fitted;
+    fitted.reserve(leads.size());
+    for (const int lead : leads) {
+        fitted.push_back(static_cast<int>(std::lround(static_cast<double>(lead) * writtenNoteDelay / leads.front())));
+    }
+    return fitted;
 }
 
 bool CompatMidiRendererInternal::graceNotesMerged(Chord* chord)
