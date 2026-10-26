@@ -51,6 +51,7 @@
 #include "importexport/mei/pmmeiexport.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/staff.h"
+#include "engraving/dom/tie.h"
 #include "engraving/pm/pmlayout.h"
 #include "engraving/pm/pmprettify.h"
 #include "engraving/rw/compat/pianomaniaheldnotepitchcurvemigration.h"
@@ -58,6 +59,10 @@
 #include "project/internal/pianomaniaexport.h"
 #include "project/internal/pianomaniacompatibility.generated.h"
 #include "engraving/types/types.h"
+
+namespace mu::project::pianomania {
+bool canonicalizePublicIdentityGraphForTesting(std::string& meiData, PianomaniaExportResult& result);
+}
 
 namespace {
 constexpr const char* MANIFEST_SCHEMA =
@@ -251,20 +256,24 @@ std::set<QString> verifyFinalPublicIdentityGraph(const QByteArray& mei, const QJ
     EXPECT_FALSE(QJsonDocument(manifest).toJson(QJsonDocument::Compact).contains("mscore-"));
 
     const QString text = QString::fromUtf8(mei);
-    const QRegularExpression declarationPattern(QStringLiteral("xml:id=\\\"(pm-score-[0-9]{6})\\\""));
-    const QRegularExpression referencePattern(QStringLiteral("#(pm-score-[0-9]{6})"));
+    const QRegularExpression declarationPattern(QStringLiteral("xml:id=\\\"(pm-(?:score|symbol)-[A-Za-z0-9._-]+)\\\""));
+    const QRegularExpression scoreDeclarationPattern(QStringLiteral("xml:id=\\\"(pm-score-[0-9]{6})\\\""));
+    const QRegularExpression referencePattern(QStringLiteral("#(pm-(?:score|symbol)-[A-Za-z0-9._-]+)"));
     const QRegularExpression pianomaniaReferencePattern(
-        QStringLiteral("(?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids)=\\\"([^\\\"]*)\\\""));
+        QStringLiteral("(?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids|pm:piano-symbol-owner)=\\\"([^\\\"]*)\\\""));
     const QRegularExpression publicIdentityPattern(QStringLiteral("^pm-score-[0-9]{6}$"));
 
     std::set<QString> declared;
     QRegularExpressionMatchIterator declarations = declarationPattern.globalMatch(text);
-    int ordinal = 0;
     while (declarations.hasNext()) {
-        const QString identity = declarations.next().captured(1);
+        EXPECT_TRUE(declared.insert(declarations.next().captured(1)).second);
+    }
+    QRegularExpressionMatchIterator scoreDeclarations = scoreDeclarationPattern.globalMatch(text);
+    int ordinal = 0;
+    while (scoreDeclarations.hasNext()) {
+        const QString identity = scoreDeclarations.next().captured(1);
         ++ordinal;
         EXPECT_EQ(identity, QStringLiteral("pm-score-%1").arg(ordinal, 6, 10, QLatin1Char('0')));
-        EXPECT_TRUE(declared.insert(identity).second);
     }
     EXPECT_FALSE(declared.empty());
 
@@ -304,6 +313,50 @@ std::set<QString> verifyFinalPublicIdentityGraph(const QByteArray& mei, const QJ
         }
     }
     return declared;
+}
+
+// Test value: Derived piano-symbol and owned-text declarations must not renumber musical public IDs or private single-note chord IDs.
+TEST(Project_PianomaniaPublicIdentityTest, DerivedVisualDeclarationsUseOwnerNamespaceAfterPrimaryOrdering)
+{
+    std::string mei = R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><music>
+<measure xml:id="mscore-measure"><note xml:id="mscore-note"/>
+<dir xml:id="mscore-owner" type="pm-piano-symbol-group" startid="#mscore-note"/>
+<ornam xml:id="mscore-owner-begin-0-0" startid="#mscore-note" pm:piano-symbol-kind="symbol" pm:piano-symbol-owner="mscore-owner" pm:piano-symbol-role="begin"/>
+<dir xml:id="mscore-owner-begin-0-text-0" startid="#mscore-note" type="pm-piano-spanner-text" pm:piano-symbol-owner="mscore-owner" pm:piano-symbol-role="begin"/>
+<ornam xml:id="mscore-raw-symbol" startid="#mscore-note" pm:piano-symbol-kind="symbol"/>
+<annot corresp="#mscore-owner-begin-0-0"/>
+</measure></music></mei>)";
+    mu::project::pianomania::PianomaniaExportResult result;
+    mu::project::pianomania::CanonicalEvent event;
+    event.scoreEventId = "mscore-note";
+    event.chordId = "mscore-private-chord";
+    event.measureId = "mscore-measure";
+    result.canonicalEvents.push_back(event);
+
+    ASSERT_TRUE(mu::project::pianomania::canonicalizePublicIdentityGraphForTesting(mei, result));
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000001\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000002\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-score-000003\""), std::string::npos);
+    EXPECT_EQ(result.canonicalEvents.front().chordId, "pm-score-000004");
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000003-begin-0-0\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000003-begin-0-text-0\""), std::string::npos);
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000002-symbol-1\""), std::string::npos);
+    EXPECT_NE(mei.find("corresp=\"#pm-symbol-pm-score-000003-begin-0-0\""), std::string::npos);
+    EXPECT_NE(mei.find("pm:piano-symbol-owner=\"pm-score-000003\""), std::string::npos);
+    EXPECT_EQ(mei.find("mscore-"), std::string::npos);
+}
+
+// Test value: A derived visual with a partial or undeclared owner remains a hard identity-graph failure instead of becoming an audible/public event.
+TEST(Project_PianomaniaPublicIdentityTest, RejectsMalformedDerivedVisualOwner)
+{
+    const std::vector<std::string> malformed {
+        R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><note xml:id="mscore-note"/><ornam xml:id="mscore-derived" startid="#mscore-note" pm:piano-symbol-kind="symbol" pm:piano-symbol-owner="mscore-note"/></mei>)",
+        R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><note xml:id="mscore-note"/><dir xml:id="mscore-derived" startid="#mscore-note" type="pm-piano-spanner-text" pm:piano-symbol-owner="mscore-missing" pm:piano-symbol-role="begin"/></mei>)",
+    };
+    for (std::string mei : malformed) {
+        mu::project::pianomania::PianomaniaExportResult result;
+        EXPECT_FALSE(mu::project::pianomania::canonicalizePublicIdentityGraphForTesting(mei, result));
+    }
 }
 
 void verifyLocator(const QJsonObject& locator)
@@ -635,6 +688,278 @@ TEST(Project_PianomaniaCoordinatedExportTest, TiedContinuationsDoNotRequireNewPl
         countCanonicalEvents(document.object().value("canonical_events").toArray(),
                              "alias_reason", "tie_continuation"),
         1);
+    const QByteArray mei = readFile(directory.filePath("song.mei"));
+    EXPECT_TRUE(QRegularExpression(
+                    QStringLiteral("<tie\\b(?=[^>]*\\bstartid=)(?=[^>]*\\bendid=)[^>]*>"))
+                    .match(QString::fromUtf8(mei))
+                    .hasMatch());
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, InvisibleTieToInvisibleContinuationKeepsPlaybackWithoutMeiTie)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       "pianomania_cross_voice_tie.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    mu::engraving::Note* continuation = nullptr;
+    score->scanElements([&continuation](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote() && mu::engraving::toNote(item)->tieBack()) {
+            continuation = mu::engraving::toNote(item);
+        }
+    });
+    ASSERT_NE(continuation, nullptr);
+    mu::engraving::Tie* tie = continuation->tieBack();
+    ASSERT_NE(tie, nullptr);
+    ASSERT_NE(tie->startNote(), nullptr);
+    const int semanticStartTick = tie->startNote()->chord()->tick().ticks();
+    const int semanticEndTick = continuation->chord()->tick().ticks()
+                                + continuation->chord()->actualTicks().ticks();
+    ASSERT_GT(semanticEndTick, semanticStartTick);
+
+    continuation->setVisible(false);
+    tie->setVisible(false);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), 1u);
+    ASSERT_EQ(result.val.files.size(), 1u);
+    ASSERT_EQ(result.val.files[0].audibleEvents.size(), 1u);
+    const auto& audible = result.val.files[0].audibleEvents[0];
+    ASSERT_EQ(audible.origins.size(), 1u);
+    EXPECT_EQ(audible.origins[0].sourceStartTick, semanticStartTick);
+    EXPECT_EQ(audible.origins[0].sourceEndTick, audible.endTick);
+    EXPECT_GT(audible.origins[0].sourceEndTick, continuation->chord()->tick().ticks());
+
+    const QByteArray mei = readFile(directory.filePath("song.mei"));
+    EXPECT_EQ(mei.count("<note "), 1);
+    EXPECT_FALSE(mei.contains("<tie "));
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, VisibleTieWithoutCanonicalEndpointFailsExport)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       "pianomania_cross_voice_tie.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    score->scanElements([](mu::engraving::EngravingItem* item) {
+        if (item && item->isNote() && mu::engraving::toNote(item)->tieBack()) {
+            mu::engraving::toNote(item)->setVisible(false);
+        }
+    });
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+
+    EXPECT_FALSE(result.ret);
+    EXPECT_NE(result.ret.toString().find("Failed to build coordinated Pianomania MEI identities"), std::string::npos)
+        << result.ret.toString();
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, GraceTieRootOwnsSharedAttackInEitherRecordOrder)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+
+    struct FixtureExpectation {
+        const char* file;
+        size_t canonicalEvents;
+        size_t audibleEvents;
+        bool reverseEncounter;
+    };
+    const std::vector<FixtureExpectation> fixtures {
+        { "pianomania-grace-tie-principal.mscx", 2, 1, false },
+        { "pianomania-grace-tie-reverse-order.mscx", 3, 2, true },
+    };
+
+    for (const FixtureExpectation& expectation : fixtures) {
+        SCOPED_TRACE(expectation.file);
+        const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                         + u"/src/project/tests/data/"
+                                         + muse::String::fromUtf8(expectation.file);
+        std::unique_ptr<mu::engraving::MasterScore> score(
+            mu::engraving::ScoreRW::readScore(fixturePath, true));
+        ASSERT_NE(score, nullptr);
+
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        const auto result = mu::project::pianomania::exportPianomaniaBundle(
+            score.get(), muse::io::path_t(fixturePath),
+            muse::io::path_t(directory.filePath("song")),
+            muse::io::path_t(directory.filePath("song.mei")), false);
+        ASSERT_TRUE(result.ret) << result.ret.toString();
+        ASSERT_EQ(result.val.canonicalEvents.size(), expectation.canonicalEvents);
+        ASSERT_EQ(result.val.files.size(), 1u);
+        EXPECT_EQ(result.val.files[0].audibleEvents.size(), expectation.audibleEvents);
+
+        const auto grace = std::find_if(
+            result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+            [](const auto& event) {
+                return event.heardMidiKey == 71 && event.eventType == "written_grace";
+            });
+        const auto principal = std::find_if(
+            result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+            [](const auto& event) {
+                return event.heardMidiKey == 71 && event.eventType == "written";
+            });
+        ASSERT_NE(grace, result.val.canonicalEvents.cend());
+        ASSERT_NE(principal, result.val.canonicalEvents.cend());
+        EXPECT_NE(grace->scoreEventId, principal->scoreEventId);
+        EXPECT_NE(grace->chordId, principal->chordId);
+        EXPECT_EQ(grace->scoreTick, principal->scoreTick);
+        EXPECT_LT(grace->beat, principal->beat);
+        EXPECT_EQ(grace->heardMidiKey, principal->heardMidiKey);
+        EXPECT_EQ(grace->idx, principal->idx);
+        EXPECT_EQ(principal < grace, expectation.reverseEncounter);
+        EXPECT_TRUE(grace->aliasOf.empty());
+        EXPECT_TRUE(grace->aliasReason.empty());
+        EXPECT_EQ(principal->aliasOf, grace->scoreEventId);
+        EXPECT_EQ(principal->aliasReason, "tie_continuation");
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(
+            QByteArray::fromStdString(result.val.manifestJson), &parseError);
+        ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+        const QJsonArray audible = document.object().value("files").toArray()
+                                     .at(0).toObject().value("audible_events").toArray();
+        EXPECT_EQ(std::count_if(audible.cbegin(), audible.cend(), [](const QJsonValue& value) {
+            return value.toObject().value("heard_midi_key").toInt() == 71;
+        }), 1);
+        const auto sharedAttack = std::find_if(audible.cbegin(), audible.cend(), [](const QJsonValue& value) {
+            return value.toObject().value("heard_midi_key").toInt() == 71;
+        });
+        ASSERT_NE(sharedAttack, audible.cend());
+        const QJsonObject sharedAttackObject = sharedAttack->toObject();
+        EXPECT_EQ(sharedAttackObject.value("event_type").toString(), "written_grace");
+        EXPECT_EQ(sharedAttackObject.value("idx").toInt(-1), grace->idx);
+        const QJsonArray aliasIds = sharedAttackObject.value("alias_ids").toArray();
+        ASSERT_EQ(aliasIds.size(), 1);
+        EXPECT_EQ(aliasIds.at(0).toString(), QString::fromStdString(principal->scoreEventId));
+
+        const QString mei = QString::fromUtf8(readFile(directory.filePath("song.mei")));
+        const QString tiePattern = QStringLiteral("<tie\\b(?=[^>]*\\bstartid=\"#%1\")"
+                                                  "(?=[^>]*\\bendid=\"#%2\")[^>]*>")
+                                       .arg(QRegularExpression::escape(QString::fromStdString(grace->scoreEventId)),
+                                            QRegularExpression::escape(
+                                                QString::fromStdString(principal->scoreEventId)));
+        EXPECT_TRUE(QRegularExpression(tiePattern).match(mei).hasMatch())
+            << tiePattern.toStdString();
+    }
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, UntiedGraceAndPrincipalKeepDistinctAttacks)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/project/tests/data/pianomania-grace-principal-untied.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), 2u);
+    ASSERT_EQ(result.val.files.size(), 1u);
+    EXPECT_EQ(result.val.files[0].audibleEvents.size(), 2u);
+    EXPECT_EQ(result.val.canonicalEvents[0].heardMidiKey, 71);
+    EXPECT_EQ(result.val.canonicalEvents[1].heardMidiKey, 71);
+    EXPECT_NE(result.val.canonicalEvents[0].eventType, result.val.canonicalEvents[1].eventType);
+    EXPECT_NE(result.val.canonicalEvents[0].idx, result.val.canonicalEvents[1].idx);
+    EXPECT_TRUE(result.val.canonicalEvents[0].aliasOf.empty());
+    EXPECT_TRUE(result.val.canonicalEvents[1].aliasOf.empty());
+}
+
+TEST(Project_PianomaniaCoordinatedExportTest, SameOnsetUnisonTieRootsShareOneAttack)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/project/tests/data/pianomania-unison-tie-chains.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    ASSERT_EQ(result.val.canonicalEvents.size(), 6u);
+    ASSERT_EQ(result.val.files.size(), 1u);
+    ASSERT_EQ(result.val.files[0].audibleEvents.size(), 3u);
+
+    const auto primary = std::find_if(
+        result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+        [](const auto& event) { return event.heardMidiKey == 60 && event.aliasOf.empty(); });
+    ASSERT_NE(primary, result.val.canonicalEvents.cend());
+    EXPECT_EQ(std::count_if(
+        result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+        [](const auto& event) { return event.heardMidiKey == 60 && event.aliasOf.empty(); }), 1);
+    EXPECT_EQ(std::count_if(
+        result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+        [](const auto& event) { return event.aliasReason == "same_onset"; }), 1);
+    EXPECT_EQ(std::count_if(
+        result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+        [](const auto& event) { return event.aliasReason == "tie_continuation"; }), 2);
+    const auto secondaryRoot = std::find_if(
+        result.val.canonicalEvents.cbegin(), result.val.canonicalEvents.cend(),
+        [](const auto& event) { return event.aliasReason == "same_onset"; });
+    ASSERT_NE(secondaryRoot, result.val.canonicalEvents.cend());
+    EXPECT_NE(primary->chordId, secondaryRoot->chordId);
+    EXPECT_NE(primary->simultaneousGroupId, secondaryRoot->simultaneousGroupId);
+    EXPECT_EQ(primary->scoreTick, secondaryRoot->scoreTick);
+    EXPECT_EQ(primary->measureId, secondaryRoot->measureId);
+    EXPECT_EQ(primary->measureNumber, secondaryRoot->measureNumber);
+    EXPECT_EQ(primary->beat, secondaryRoot->beat);
+    for (const auto& event : result.val.canonicalEvents) {
+        if (event.heardMidiKey == 60 && event.scoreEventId != primary->scoreEventId) {
+            EXPECT_EQ(event.aliasOf, primary->scoreEventId);
+        }
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(result.val.manifestJson), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+    const QJsonArray audible = document.object().value("files").toArray()
+                                 .at(0).toObject().value("audible_events").toArray();
+    ASSERT_EQ(audible.size(), 3);
+    const auto sharedAttack = std::find_if(audible.cbegin(), audible.cend(), [](const QJsonValue& value) {
+        return value.toObject().value("heard_midi_key").toInt() == 60;
+    });
+    ASSERT_NE(sharedAttack, audible.cend());
+    EXPECT_EQ(sharedAttack->toObject().value("alias_ids").toArray().size(), 3);
+    EXPECT_EQ(std::count_if(audible.cbegin(), audible.cend(), [](const QJsonValue& value) {
+        return value.toObject().value("heard_midi_key").toInt() == 64;
+    }), 1);
+    EXPECT_EQ(std::count_if(audible.cbegin(), audible.cend(), [](const QJsonValue& value) {
+        return value.toObject().value("heard_midi_key").toInt() == 67;
+    }), 1);
+    EXPECT_EQ(readFile(directory.filePath("song.mei")).count("<tie "), 2);
 }
 
 TEST(Project_PianomaniaCoordinatedExportTest, PublicArtifactsAreIndependentOfInternalMuseScoreIdentities)

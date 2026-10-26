@@ -403,42 +403,143 @@ bool containsMuseScoreMeiIdentity(const std::string& value)
     static const std::regex declarationPattern(R"(xml:id="mscore-[A-Za-z0-9._-]+")");
     static const std::regex referencePattern(R"(#mscore-[A-Za-z0-9._-]+)");
     static const std::regex pianomaniaReferencePattern(
-        R"((?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids)="[^"]*mscore-[^"]*")");
+        R"((?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids|pm:piano-symbol-owner)="[^"]*mscore-[^"]*")");
     return std::regex_search(value, declarationPattern)
            || std::regex_search(value, referencePattern)
            || std::regex_search(value, pianomaniaReferencePattern);
 }
 
+std::string xmlAttribute(const std::string& tag, const std::string& name)
+{
+    const std::regex pattern(name + R"REGEX(="([^"]*)")REGEX");
+    std::smatch match;
+    return std::regex_search(tag, match, pattern) ? match[1].str() : std::string {};
+}
+
+bool isDerivedPianoVisual(const std::string& tag)
+{
+    const bool genericSymbol = tag.rfind("<ornam", 0) == 0
+                               && xmlAttribute(tag, "pm:piano-symbol-kind") == "symbol";
+    const bool spannerText = tag.rfind("<dir", 0) == 0
+                             && xmlAttribute(tag, "type") == "pm-piano-spanner-text";
+    return genericSymbol || spannerText;
+}
+
+std::string derivedPianoVisualIdentity(const std::string& ownerPublic,
+                                       const std::string& sourceIdentity,
+                                       const std::string& sourceOwner,
+                                       const std::string& role,
+                                       size_t ownerOrdinal)
+{
+    std::string suffix;
+    if (!sourceOwner.empty() && sourceIdentity.rfind(sourceOwner + "-", 0) == 0) {
+        suffix = sourceIdentity.substr(sourceOwner.size() + 1);
+    } else {
+        suffix = role.empty() ? "symbol-" + std::to_string(ownerOrdinal)
+                              : role + "-" + std::to_string(ownerOrdinal);
+    }
+    return "pm-symbol-" + ownerPublic + "-" + suffix;
+}
+
 bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResult& result,
                                     QHash<QString, QString>* sourceToCanonical)
 {
-    static const std::regex declarationPattern(R"REGEX(xml:id="(mscore-[A-Za-z0-9._-]+)")REGEX");
-    static const std::regex publicDeclarationPattern(R"REGEX(xml:id="(pm-score-[0-9]{6})")REGEX");
+    static const std::regex declarationPattern(R"REGEX(<[^>]*\bxml:id="(mscore-[A-Za-z0-9._-]+)"[^>]*>)REGEX");
+    static const std::regex publicDeclarationPattern(R"REGEX(xml:id="(pm-(?:score|symbol)-[A-Za-z0-9._-]+)")REGEX");
     static const std::regex referencePattern(R"(#(mscore-[A-Za-z0-9._-]+))");
     static const std::regex pianomaniaReferencePattern(
-        R"REGEX((?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids)="([^"]*)")REGEX");
+        R"REGEX((?:pm:covered-id|pm:covered-ids|pm:coveredUuids|pm:terminal-ids|pm:post-terminal-ids|pm:piano-symbol-owner)="([^"]*)")REGEX");
+
+    struct Declaration {
+        std::string identity;
+        std::string tag;
+        bool derived = false;
+    };
 
     std::map<std::string, std::string> replacements;
     std::set<std::string> generated;
+    std::set<std::string> primaryIdentities;
+    std::set<std::string> declaredSourceIdentities;
+    std::vector<Declaration> declarations;
     size_t ordinal = 0;
     for (std::sregex_iterator it(meiData.begin(), meiData.end(), declarationPattern), end; it != end; ++it) {
+        const std::string tag = (*it)[0].str();
         const std::string identity = (*it)[1].str();
-        const std::string replacement = publicIdentity(++ordinal);
-        if (!replacements.emplace(identity, replacement).second || !generated.insert(replacement).second) {
+        if (!declaredSourceIdentities.insert(identity).second) {
             LOGE() << "Coordinated Pianomania MEI contains duplicate score identities";
             return false;
         }
+        declarations.push_back({identity, tag, isDerivedPianoVisual(tag)});
+    }
+    for (const Declaration& declaration : declarations) {
+        if (declaration.derived) {
+            continue;
+        }
+        const std::string replacement = publicIdentity(++ordinal);
+        if (!replacements.emplace(declaration.identity, replacement).second || !generated.insert(replacement).second) {
+            LOGE() << "Coordinated Pianomania MEI contains duplicate score identities";
+            return false;
+        }
+        primaryIdentities.insert(declaration.identity);
     }
     if (replacements.empty()) {
         LOGE() << "Coordinated Pianomania MEI contains no MuseScore identity declarations";
         return false;
     }
+    std::set<std::string> existingPublic;
     for (std::sregex_iterator it(meiData.begin(), meiData.end(), publicDeclarationPattern), end; it != end; ++it) {
-        if (generated.count((*it)[1].str())) {
+        const std::string identity = (*it)[1].str();
+        if (!existingPublic.insert(identity).second || generated.count(identity)) {
             LOGE() << "Coordinated Pianomania public score identity collides";
             return false;
         }
     }
+    // Single-note chords have no public MEI chord element. Keep their
+    // manifest identities after the identities declared by the canonical MEI.
+    for (const CanonicalEvent& event : result.canonicalEvents) {
+        if (isMuseScoreIdentity(event.chordId) && !replacements.count(event.chordId)) {
+            const std::string replacement = publicIdentity(++ordinal);
+            if (!replacements.emplace(event.chordId, replacement).second
+                || !generated.insert(replacement).second || existingPublic.count(replacement)) {
+                LOGE() << "Coordinated Pianomania private chord identity collides";
+                return false;
+            }
+        }
+    }
+
+    // Visual-only fragments get owner-based identities after every primary
+    // score declaration and private single-note chord identity is fixed. They
+    // therefore cannot perturb the public musical identity sequence.
+    std::map<std::string, size_t> derivedOrdinals;
+    for (const Declaration& declaration : declarations) {
+        if (!declaration.derived) {
+            continue;
+        }
+        const std::string owner = xmlAttribute(declaration.tag, "pm:piano-symbol-owner");
+        const std::string role = xmlAttribute(declaration.tag, "pm:piano-symbol-role");
+        if (owner.empty() != role.empty()
+            || (!role.empty() && role != "begin" && role != "end" && role != "continue")) {
+            LOGE() << "Coordinated Pianomania derived piano visual has an incomplete owner declaration";
+            return false;
+        }
+        const std::string start = xmlAttribute(declaration.tag, "startid");
+        const std::string resolvedOwner = !owner.empty() ? owner
+            : start.size() > 1 && start.front() == '#' ? start.substr(1) : std::string {};
+        if (!isMuseScoreIdentity(resolvedOwner) || !primaryIdentities.count(resolvedOwner)
+            || !replacements.count(resolvedOwner)) {
+            LOGE() << "Coordinated Pianomania derived piano visual has an undeclared primary owner";
+            return false;
+        }
+        const size_t ownerOrdinal = ++derivedOrdinals[resolvedOwner];
+        const std::string replacement = derivedPianoVisualIdentity(
+            replacements.at(resolvedOwner), declaration.identity, owner, role, ownerOrdinal);
+        if (!replacements.emplace(declaration.identity, replacement).second
+            || !generated.insert(replacement).second || existingPublic.count(replacement)) {
+            LOGE() << "Coordinated Pianomania derived piano visual identity collides";
+            return false;
+        }
+    }
+
     for (std::sregex_iterator it(meiData.begin(), meiData.end(), referencePattern), end; it != end; ++it) {
         if (!replacements.count((*it)[1].str())) {
             LOGE() << "Coordinated Pianomania MEI contains an undeclared MuseScore reference";
@@ -453,14 +554,6 @@ bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResul
                 LOGE() << "Coordinated Pianomania MEI contains an undeclared spanner identity";
                 return false;
             }
-        }
-    }
-
-    // Single-note chords have no public MEI chord element. Keep their
-    // manifest identities after the identities declared by the canonical MEI.
-    for (const CanonicalEvent& event : result.canonicalEvents) {
-        if (isMuseScoreIdentity(event.chordId) && !replacements.count(event.chordId)) {
-            replacements.emplace(event.chordId, publicIdentity(++ordinal));
         }
     }
 
@@ -709,12 +802,25 @@ bool verifyWrittenMidi(const MidiExportedFile& file)
     return true;
 }
 
+const mu::engraving::Note* tieChainRoot(const mu::engraving::Note* note)
+{
+    std::set<const mu::engraving::Note*> visited;
+    while (note && note->tieBack() && note->tieBack()->startNote()) {
+        if (!visited.insert(note).second) {
+            return nullptr;
+        }
+        note = note->tieBack()->startNote();
+    }
+    return note;
+}
+
 bool buildCanonicalEvents(const std::vector<mu::iex::mei::PmMeiNoteRecord>& records,
                           std::vector<CanonicalEvent>& destination)
 {
     destination.clear();
     destination.reserve(records.size());
-    std::map<std::pair<int, int>, size_t> primaryByLocator;
+    std::map<std::pair<int, int>, std::vector<size_t> > eventsByLocator;
+    std::map<const mu::engraving::Note*, size_t> eventIndexByNote;
     std::set<std::string> identities;
 
     for (const mu::iex::mei::PmMeiNoteRecord& record : records) {
@@ -764,35 +870,66 @@ bool buildCanonicalEvents(const std::vector<mu::iex::mei::PmMeiNoteRecord>& reco
                                         ? record.chordId
                                         : record.measureId + "@" + record.beat;
 
-        const std::pair<int, int> locator(event.heardMidiKey, event.idx);
-        auto primary = primaryByLocator.find(locator);
-        if (primary == primaryByLocator.end()) {
-            primaryByLocator.emplace(locator, destination.size());
-        } else {
-            CanonicalEvent& target = destination[primary->second];
-            const mu::engraving::Note* targetNote = records[primary->second].note;
-            event.aliasOf = target.scoreEventId;
-            if (event.scoreTick == target.scoreTick) {
-                event.aliasReason = "same_onset";
-            } else if (note->tieBack()) {
-                event.aliasReason = "tie_continuation";
-            } else if (targetNote && targetNote->tieBack()
-                       && targetNote->tieBack()->startNote() == note) {
-                // MEI records are emitted in staff/layer order, so a
-                // cross-voice tie continuation can be encountered before its
-                // earlier tie start. Make the written attack authoritative
-                // and retroactively classify the continuation as its alias.
-                target.aliasOf = event.scoreEventId;
-                target.aliasReason = "tie_continuation";
-                event.aliasOf.clear();
-                primary->second = destination.size();
-            } else {
-                LOGE() << "Canonical locator is reused without same-onset or tie alias: "
-                       << event.scoreEventId;
+        const size_t eventIndex = destination.size();
+        if (!eventIndexByNote.emplace(note, eventIndex).second) {
+            LOGE() << "Duplicate coordinated Pianomania note record: " << event.scoreEventId;
+            return false;
+        }
+        eventsByLocator[{ event.heardMidiKey, event.idx }].push_back(eventIndex);
+        destination.push_back(std::move(event));
+    }
+
+    for (const auto& [locator, eventIndices] : eventsByLocator) {
+        std::map<size_t, size_t> rootIndexByEvent;
+        std::set<size_t> rootIndices;
+        for (const size_t eventIndex : eventIndices) {
+            const mu::engraving::Note* root = tieChainRoot(records[eventIndex].note);
+            if (!root) {
+                LOGE() << "Canonical locator encounters a cyclic tie chain: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            const auto rootRecord = eventIndexByNote.find(root);
+            if (rootRecord == eventIndexByNote.end()) {
+                LOGE() << "Canonical tie root is missing from coordinated MEI records: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            const CanonicalEvent& rootEvent = destination[rootRecord->second];
+            if (std::pair<int, int>(rootEvent.heardMidiKey, rootEvent.idx) != locator) {
+                LOGE() << "Canonical tie root does not share its continuation locator: "
+                       << destination[eventIndex].scoreEventId;
+                return false;
+            }
+            rootIndexByEvent.emplace(eventIndex, rootRecord->second);
+            rootIndices.insert(rootRecord->second);
+        }
+
+        const size_t primaryIndex = *rootIndices.cbegin();
+        const CanonicalEvent& primary = destination[primaryIndex];
+        for (const size_t rootIndex : rootIndices) {
+            const CanonicalEvent& root = destination[rootIndex];
+            if (root.scoreTick != primary.scoreTick
+                || root.eventType != primary.eventType
+                || root.measureId != primary.measureId
+                || root.measureNumber != primary.measureNumber
+                || root.beat != primary.beat) {
+                LOGE() << "Canonical locator has incompatible attack roots: "
+                       << root.scoreEventId;
                 return false;
             }
         }
-        destination.push_back(std::move(event));
+
+        for (const size_t eventIndex : eventIndices) {
+            if (eventIndex == primaryIndex) {
+                continue;
+            }
+            CanonicalEvent& event = destination[eventIndex];
+            event.aliasOf = primary.scoreEventId;
+            event.aliasReason = eventIndex == rootIndexByEvent.at(eventIndex)
+                                    ? "same_onset"
+                                    : "tie_continuation";
+        }
     }
     return !destination.empty();
 }
@@ -1283,6 +1420,13 @@ bool buildManifestJson(PianomaniaExportResult& result)
     root["files"] = fileJson;
     result.manifestJson = QJsonDocument(root).toJson(QJsonDocument::Compact).toStdString() + "\n";
     return true;
+}
+}
+
+namespace mu::project::pianomania {
+bool canonicalizePublicIdentityGraphForTesting(std::string& meiData, PianomaniaExportResult& result)
+{
+    return canonicalizePublicIdentityGraph(meiData, result, nullptr);
 }
 }
 

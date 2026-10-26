@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <utility>
+#include <vector>
 #include <QJsonArray>
 #include "project/internal/notationcompatibility.h"
 
@@ -10,6 +12,14 @@ QByteArray document(const QByteArray& content)
         + content + "</layer></staff></measure></section></score></mdiv></body></music></mei>";
 }
 const QByteArray note = "<note xml:id='n1' idx='0' pname='c' oct='4' dur='4' beat='1'/>";
+QByteArray articulation(const QByteArray& tokens, const QByteArray& glyph)
+{
+    return "<artic xmlns:pm='http://pianomania.gg/ns/mei' artic='" + tokens
+        + "' glyph.auth='smufl' glyph.name='" + glyph
+        + "' pm:piano-symbol-kind='articulation' pm:piano-symbol-version='1'"
+          " pm:piano-symbol-page='1' pm:piano-symbol-visible='true' pm:piano-symbol-center='1.5,1.5'"
+          " pm:piano-symbol-bounds='1,2,2,1' pm:piano-symbol-ink-bounds='1,2,2,1'/>";
+}
 }
 TEST(NotationCompatibility, WarningRetainsLocationsAndUnverifiedMidiAdmission)
 {
@@ -29,9 +39,7 @@ TEST(NotationCompatibility, WarningRetainsLocationsAndUnverifiedMidiAdmission)
     const QByteArray supportedMei = document(notes + gliss);
     auto supported = analyzeMei(supportedMei, inventoryScore(nullptr, "fixture"));
     ASSERT_TRUE(admits(supported));
-    auto supportedRows = supported["findings"].toArray(); ASSERT_EQ(supportedRows.size(), 1);
-    EXPECT_EQ(supportedRows.first().toObject()["reasonCode"].toString(), "glissando_render_unverified");
-    EXPECT_TRUE(supportedRows.first().toObject()["omittedBehavior"].toArray().isEmpty());
+    EXPECT_TRUE(supported["findings"].toArray().isEmpty());
     auto unsupported = analyzeMei(document(notes + QByteArray(gliss).replace("Edwin", "Arial")), inventoryScore(nullptr, "fixture"));
     auto unsupportedRows = unsupported["findings"].toArray(); ASSERT_EQ(unsupportedRows.size(), 1);
     EXPECT_EQ(unsupportedRows.first().toObject()["reasonCode"].toString(), "glissando_text_omission");
@@ -61,8 +69,14 @@ TEST(NotationCompatibility, UnknownWrapperRejectsOncePerWrapper)
 }
 TEST(NotationCompatibility, ExistingComponentGroupsHaveNoFalseArticulationWarning)
 {
-    for (const QByteArray& tokens : {QByteArray("acc stacc"), QByteArray("stacc acc"), QByteArray("ten marc"), QByteArray("marc ten")}) {
-        QByteArray mei = document(note + "<artic artic='" + tokens + "'/>");
+    const std::vector<std::pair<QByteArray, QByteArray>> cases {
+        { "acc stacc", "articAccentStaccatoAbove" },
+        { "stacc acc", "articAccentStaccatoAbove" },
+        { "ten marc", "articMarcatoTenutoAbove" },
+        { "marc ten", "articMarcatoTenutoAbove" },
+    };
+    for (const auto& [tokens, glyph] : cases) {
+        QByteArray mei = document(note + articulation(tokens, glyph));
         QByteArray original = mei;
         auto report = analyzeMei(mei, inventoryScore(nullptr, "fixture"));
         EXPECT_TRUE(admits(report));
@@ -73,7 +87,7 @@ TEST(NotationCompatibility, ExistingComponentGroupsHaveNoFalseArticulationWarnin
 }
 TEST(NotationCompatibility, UnknownComponentsKeepSpecificDiagnostics)
 {
-    for (const QByteArray& tokens : {QByteArray("spicc"), QByteArray("future-artic"), QByteArray("stacc future-artic")}) {
+    for (const QByteArray& tokens : {QByteArray("future-artic"), QByteArray("stacc future-artic")}) {
         auto report = analyzeMei(document(note + "<artic artic='" + tokens + "'/>"), inventoryScore(nullptr, "fixture"));
         EXPECT_TRUE(admits(report));
         auto findings = report["findings"].toArray(); ASSERT_EQ(findings.size(), 1);
@@ -81,6 +95,10 @@ TEST(NotationCompatibility, UnknownComponentsKeepSpecificDiagnostics)
         EXPECT_EQ(row["variant"].toString().toUtf8(), tokens);
         EXPECT_EQ(row["reasonCode"].toString(), tokens.contains(' ') ? "unsupported_articulation_combination" : "unsupported_articulation");
     }
+    auto supported = analyzeMei(document(note + articulation("spicc", "articStaccatissimoWedgeAbove")),
+                                inventoryScore(nullptr, "fixture"));
+    EXPECT_TRUE(admits(supported));
+    EXPECT_TRUE(supported["findings"].toArray().isEmpty());
 }
 TEST(NotationCompatibility, MissingIdentityRejectsAndCanonicalBytesStayUnchanged)
 {

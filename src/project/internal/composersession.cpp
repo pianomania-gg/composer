@@ -41,6 +41,77 @@ QJsonObject session;
 bool loaded = false;
 bool selectAccountOnNextSignIn = false;
 
+#ifdef Q_OS_MACOS
+CFMutableDictionaryRef macVaultQuery(const QByteArray& name) {
+    CFStringRef serviceName = CFStringCreateWithBytes(
+        kCFAllocatorDefault, reinterpret_cast<const UInt8*>(name.constData()), name.size(),
+        kCFStringEncodingUTF8, false);
+    if (!serviceName) return nullptr;
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (query) {
+        CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
+        CFDictionarySetValue(query, kSecAttrService, serviceName);
+        CFDictionarySetValue(query, kSecAttrAccount, CFSTR(""));
+    }
+    CFRelease(serviceName);
+    return query;
+}
+
+QByteArray macVaultRead(const QByteArray& name) {
+    CFMutableDictionaryRef query = macVaultQuery(name);
+    if (!query) throw std::runtime_error("Could not read macOS Keychain.");
+    CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
+    CFTypeRef result = nullptr;
+    const OSStatus status = SecItemCopyMatching(query, &result);
+    CFRelease(query);
+    if (status == errSecItemNotFound) {
+        if (result) CFRelease(result);
+        return {};
+    }
+    if (status != errSecSuccess || !result || CFGetTypeID(result) != CFDataGetTypeID()) {
+        if (result) CFRelease(result);
+        throw std::runtime_error("Could not read macOS Keychain.");
+    }
+    CFDataRef data = static_cast<CFDataRef>(result);
+    QByteArray bytes(reinterpret_cast<const char*>(CFDataGetBytePtr(data)), int(CFDataGetLength(data)));
+    CFRelease(data);
+    return bytes;
+}
+
+void macVaultWrite(const QByteArray& name, const QByteArray& bytes) {
+    CFMutableDictionaryRef query = macVaultQuery(name);
+    if (!query) throw std::runtime_error("Could not update macOS Keychain.");
+    OSStatus status = errSecSuccess;
+    if (bytes.isEmpty()) {
+        status = SecItemDelete(query);
+        if (status == errSecItemNotFound) status = errSecSuccess;
+    } else {
+        CFDataRef data = CFDataCreate(
+            kCFAllocatorDefault, reinterpret_cast<const UInt8*>(bytes.constData()), bytes.size());
+        CFMutableDictionaryRef changes = CFDictionaryCreateMutable(
+            kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (!data || !changes) {
+            if (changes) CFRelease(changes);
+            if (data) CFRelease(data);
+            CFRelease(query);
+            throw std::runtime_error("Could not update macOS Keychain.");
+        }
+        CFDictionarySetValue(changes, kSecValueData, data);
+        status = SecItemUpdate(query, changes);
+        if (status == errSecItemNotFound) {
+            CFDictionarySetValue(query, kSecValueData, data);
+            status = SecItemAdd(query, nullptr);
+        }
+        CFRelease(changes);
+        CFRelease(data);
+    }
+    CFRelease(query);
+    if (status != errSecSuccess) throw std::runtime_error("Could not update macOS Keychain.");
+}
+#endif
+
 QByteArray vaultRead() {
 #ifdef Q_OS_WIN
     PCREDENTIALW credential = nullptr;
@@ -53,14 +124,7 @@ QByteArray vaultRead() {
     CredFree(credential);
     return bytes;
 #elif defined(Q_OS_MACOS)
-    QByteArray name = vaultName().toUtf8();
-    void* data = nullptr; UInt32 size = 0;
-    OSStatus status = SecKeychainFindGenericPassword(nullptr, UInt32(name.size()), name.data(), 0, "", &size, &data, nullptr);
-    if (status == errSecItemNotFound) return {};
-    if (status != errSecSuccess) throw std::runtime_error("Could not read macOS Keychain.");
-    QByteArray bytes(static_cast<char*>(data), int(size));
-    SecKeychainItemFreeContent(nullptr, data);
-    return bytes;
+    return macVaultRead(vaultName().toUtf8());
 #else
     throw std::runtime_error("Secure Composer sign-in requires Windows or macOS.");
 #endif
@@ -79,16 +143,7 @@ void vaultWrite(const QByteArray& bytes) {
     credential.CredentialBlobSize = DWORD(bytes.size()); credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
     if (!CredWriteW(&credential, 0)) throw std::runtime_error("Could not save the account in Windows Credential Manager.");
 #elif defined(Q_OS_MACOS)
-    QByteArray name = vaultName().toUtf8(); SecKeychainItemRef item = nullptr;
-    OSStatus found = SecKeychainFindGenericPassword(nullptr, UInt32(name.size()), name.data(), 0, "", nullptr, nullptr, &item);
-    OSStatus status = errSecSuccess;
-    if (found == errSecSuccess) {
-        status = bytes.isEmpty() ? SecKeychainItemDelete(item) : SecKeychainItemModifyAttributesAndData(item, nullptr, UInt32(bytes.size()), bytes.data());
-        CFRelease(item);
-    } else if (found == errSecItemNotFound && !bytes.isEmpty()) {
-        status = SecKeychainAddGenericPassword(nullptr, UInt32(name.size()), name.data(), 0, "", UInt32(bytes.size()), bytes.data(), nullptr);
-    } else if (found != errSecItemNotFound) status = found;
-    if (status != errSecSuccess) throw std::runtime_error("Could not update macOS Keychain.");
+    macVaultWrite(vaultName().toUtf8(), bytes);
 #else
     throw std::runtime_error("Secure Composer sign-in requires Windows or macOS.");
 #endif

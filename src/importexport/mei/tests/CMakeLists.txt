@@ -53,6 +53,7 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_rehearsal_mark_on_hidden_rest:"
     "Mei_Tests.mei_pianomania_grace_same_pitch_indices:"
     "Mei_Tests.pianomania_text_directive_exports_text_box_centre:"
+    "Mei_Tests.pianomania_graces_do_not_duplicate_parent_segment_controls:"
     "Mei_Tests.mei_export_laissez_vibrer_keeps_pm_geometry:"
     "Mei_Tests.mei_export_final_barline_pedal_keeps_rendered_geometry_without_endid:"
     "Mei_Tests.mei_export_connected_pedal_includes_owned_rendered_segments:"
@@ -77,6 +78,8 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_wedge_keeps_only_owned_endpoint_system_geometry:"
     "Mei_Tests.pianomania_staff_centered_dynamic_clears_ledger_accidental:"
     "Mei_Tests.mei_export_trill_and_ornaments_carry_drawn_glyph_geometry:"
+    "Mei_Tests.mei_piano_symbols_export_exact_identity_and_ink_center:"
+    "Mei_Tests.mei_pedal_exports_modern_lines_without_legacy_text:"
     "Mei_Tests.mei_export_small_notes_chords_and_rests_are_cue:"
     "Mei_Tests.mei_export_key_signature_symbols_match_layout:"
     "Mei_Tests.mei_export_hidden_accidental_is_gestural_only:"
@@ -88,7 +91,8 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.pianomania_staff_centered_dynamic_keeps_cross_staff_beam_margin:"
     "Mei_Tests.mei_export_snapped_expression_carries_text_origin:"
     "Mei_Tests.mei_pianomania_rolled_grace_chord_exports_its_own_notes:"
-    "Mei_Tests.mei_export_glissando_skips_only_segments_musescore_does_not_draw"
+    "Mei_Tests.mei_export_glissando_skips_only_segments_musescore_does_not_draw:"
+    "Mei_Tests.mei_export_moved_beam_stem_dir_matches_drawn_stem_under_cross_system_slur"
 )
 
 add_test(
@@ -102,5 +106,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*44 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*48 tests"
 )

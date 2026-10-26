@@ -64,6 +64,7 @@
 #include "engraving/dom/jump.h"
 #include "engraving/iengravingfont.h"
 #include "engraving/infrastructure/eid.h"
+#include "engraving/infrastructure/smufl.h"
 #include "engraving/dom/keysig.h"
 #include "engraving/dom/laissezvib.h"
 #include "engraving/dom/lyrics.h"
@@ -87,6 +88,7 @@
 #include "engraving/dom/slur.h"
 #include "engraving/dom/staff.h"
 #include "engraving/dom/stem.h"
+#include "engraving/dom/symbol.h"
 #include "engraving/dom/system.h"
 #include "engraving/dom/tempotext.h"
 #include "engraving/dom/text.h"
@@ -120,6 +122,16 @@ using namespace mu::engraving;
 #define MEI_COUNTER_BASED_IDS false
 
 namespace {
+// Text music fragments use canonical SMuFL codes even when the score font
+// delegates drawing a symbol to its declared engraving-font substitute.
+SymId pianoTextSymbol(char32_t code) {
+  for (size_t index = 1; index <= static_cast<size_t>(SymId::lastSym); ++index) {
+    const SymId symbol = static_cast<SymId>(index);
+    if (Smufl::smuflCode(symbol) == code) { return symbol; }
+  }
+  return SymId::noSym;
+}
+
 bool shouldExportStaff(const Staff *staff) {
   const Part *part = staff ? staff->part() : nullptr;
   return staff && staff->show() && part && part->show();
@@ -641,6 +653,212 @@ void MeiExporter::appendCenteredPmPosition(pugi::xml_node node,
   node.append_attribute("pm:xy") = xyStr.c_str();
 }
 
+static std::string standardPianoGlyphName(const std::string &name) {
+  const std::pair<const char *, const char *> aliases[] = {
+    {"ornamentPrallMordent", "ornamentPrecompTrillWithMordent"},
+    {"ornamentUpPrall", "ornamentPrecompSlideTrillDAnglebert"},
+    {"ornamentUpMordent", "ornamentPrecompSlideTrillBach"},
+    {"ornamentPrallDown", "ornamentPrecompTrillLowerSuffix"},
+    {"ornamentDownMordent", "ornamentPrecompTurnTrillBach"},
+    {"ornamentPrallUp", "ornamentPrecompTrillSuffixDandrieu"},
+    {"ornamentLinePrall", "ornamentPrecompAppoggTrill"},
+    {"ornamentPrecompSlide", "ornamentSchleifer"},
+  };
+  for (const auto &alias : aliases) {
+    if (name == alias.first) { return alias.second; }
+  }
+  return name;
+}
+
+bool MeiExporter::appendPianoSymbolGeometry(pugi::xml_node node,
+                                           const EngravingItem *item,
+                                           SymId symbol, const char *kind,
+                                           bool textBounds,
+                                           std::optional<RectF> inkOverride) const {
+  if (!node || !item || symbol == SymId::noSym) {
+    LOGE() << "MEI piano symbol requires an authored glyph and notation item";
+    return false;
+  }
+  if (!configuration()->meiExportLayout()) { return true; }
+  if (!node.attribute("glyph.auth")) {
+    node.append_attribute("glyph.auth") = "smufl";
+  }
+  if (!node.attribute("glyph.name")) {
+    const AsciiStringView name = SymNames::nameForSymId(symbol);
+    node.append_attribute("glyph.name") = std::string(name.ascii(), name.size()).c_str();
+  }
+  const std::string sourceGlyphName = node.attribute("glyph.name").value();
+  node.attribute("glyph.name").set_value(standardPianoGlyphName(sourceGlyphName).c_str());
+
+  const EngravingItem *pageItem = item->findAncestor(ElementType::PAGE);
+  const Page *page = pageItem ? toPage(pageItem) : nullptr;
+  const auto &pages = m_score->pages();
+  const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
+  const RectF layoutBounds = item->pageBoundingRect();
+  const RectF ink = inkOverride.value_or(textBounds ? layoutBounds : item->symBbox(symbol).translated(item->pagePos()));
+  const RectF bounds = layoutBounds.united(ink);
+  const auto finiteBounds = [](const RectF &box) {
+    return std::isfinite(box.left()) && std::isfinite(box.top())
+        && std::isfinite(box.right()) && std::isfinite(box.bottom())
+        && box.width() > 0.0 && box.height() > 0.0;
+  };
+  if (!page || pageIt == pages.cend() || !finiteBounds(ink) || !finiteBounds(bounds)) {
+    LOGE() << "MEI piano symbol requires finite page-owned glyph geometry";
+    return false;
+  }
+  const auto point = [this](const PointF &value) {
+    return formatDecimalStr(value.x() / DPI, 6) + ","
+        + formatDecimalStr(toBottomLeftInches(value.y()), 6);
+  };
+  const auto rectangle = [&point](const RectF &box) {
+    return point(PointF(box.left(), box.top())) + ","
+        + point(PointF(box.right(), box.bottom()));
+  };
+  node.append_attribute("pm:piano-symbol-version") = "1";
+  node.append_attribute("pm:piano-symbol-kind") = kind;
+  if (!node.attribute("pm:piano-symbol-visible")) {
+    node.append_attribute("pm:piano-symbol-visible") =
+        item->visible() && !item->ldata()->isSkipDraw() ? "true" : "false";
+  }
+  node.append_attribute("pm:piano-symbol-page") =
+      static_cast<int>(std::distance(pages.cbegin(), pageIt)) + 1;
+  node.append_attribute("pm:piano-symbol-bounds") = rectangle(bounds).c_str();
+  node.append_attribute("pm:piano-symbol-ink-bounds") = rectangle(ink).c_str();
+  // Existing item-specific pm:xy fields retain their established anchor semantics.
+  node.append_attribute("pm:piano-symbol-center") = point(ink.center()).c_str();
+  if (!node.attribute("pm:xy")) {
+    node.append_attribute("pm:xy") = point(ink.center()).c_str();
+  }
+  const std::string startId = node.attribute("startid").value();
+  const auto anchorIt = m_exportedItemsByXmlId.find(startId.empty() ? startId : startId.substr(1));
+  if (anchorIt != m_exportedItemsByXmlId.end()) {
+    const EngravingItem *anchor = anchorIt->second;
+    if (anchor->isChord()) {
+      const auto notes = visibleNotes(toChord(anchor));
+      if (!notes.empty()) { anchor = notes.front(); }
+    }
+    const PointF anchorCenter = anchor->isNote()
+        ? anchor->symBbox(toNote(anchor)->noteHead()).translated(anchor->pagePos()).center()
+        : anchor->pagePos();
+    const double sourceSpatium = anchor->spatium() / DPI;
+    if (!std::isfinite(sourceSpatium) || sourceSpatium <= 0) { return false; }
+    node.append_attribute("pm:piano-symbol-anchor-center") = point(anchorCenter).c_str();
+    node.append_attribute("pm:piano-symbol-spatium") = formatDecimalStr(sourceSpatium, 9).c_str();
+    if (!node.attribute("yOffset")) {
+      node.append_attribute("yOffset") = formatDecimalStr((anchorCenter.y() - ink.center().y()) / anchor->spatium(), 6).c_str();
+    }
+  }
+  return true;
+}
+
+bool MeiExporter::writePianoSymbol(const Symbol *symbol, const std::string &startid) {
+  IF_ASSERT_FAILED(symbol) { return false; }
+  if (!configuration()->meiExportLayout()) { return true; }
+  // Imported placeholder Symbol nodes carry no notation glyph and draw nothing.
+  if (symbol->sym() == SymId::noSym) { return true; }
+  pugi::xml_node node = m_currentNode.append_child("ornam");
+  node.append_attribute("xml:id") = this->getXmlIdFor(symbol, 'o').c_str();
+  node.append_attribute("startid") = startid.c_str();
+  node.append_attribute("staff") = static_cast<int>(symbol->staffIdx()) + 1;
+  node.append_attribute("pm:piano-symbol-rotation") =
+      formatDecimalStr(-symbol->symAngle(), 6).c_str();
+  return appendPianoSymbolGeometry(node, symbol, symbol->sym(), "symbol", true);
+}
+
+bool MeiExporter::writePianoTextSymbols(const TextBase *text,
+                                      const EngravingItem *owner,
+                                      const std::string &ownerId,
+                                      const std::string &startid,
+                                      const char *role, size_t segmentIndex) {
+  if (!configuration()->meiExportLayout() || !text || text->empty()) {
+    return true;
+  }
+  std::string glyphStartId = startid;
+  if (std::string(role) == "end" && owner->isSpanner()) {
+    const EngravingItem *end = toSpanner(owner)->endElement();
+    if (end && end->isChord()) {
+      const auto notes = visibleNotes(toChord(end));
+      end = notes.size() == 1 ? notes.front() : end;
+    }
+    if (end && (end->isNote() || end->isChord() || end->isRest())) {
+      glyphStartId = "#" + getXmlIdFor(end, end->isNote() ? 'n' : end->isChord() ? 'c' : 'r');
+    }
+  }
+  size_t glyphIndex = 0;
+  size_t textIndex = 0;
+  for (const TextBlock &block : text->ldata()->blocks) {
+    for (const TextFragment &fragment : block.fragments()) {
+      const muse::draw::Font font = fragment.font(text);
+      if (font.type() != muse::draw::Font::Type::MusicSymbol
+          && font.type() != muse::draw::Font::Type::MusicSymbolText) {
+        if (!fragment.text.trimmed().isEmpty()) {
+          const muse::draw::FontMetrics metrics(font);
+          const PointF baseline = text->pagePos() + fragment.pos + PointF(0.0, block.y());
+          const RectF ink = metrics.tightBoundingRect(fragment.text).translated(baseline);
+          const Page *page = toPage(text->findAncestor(ElementType::PAGE));
+          const auto &pages = m_score->pages();
+          const auto pageIt = std::find(pages.cbegin(), pages.cend(), page);
+          if (!page || pageIt == pages.cend() || ink.width() <= 0 || ink.height() <= 0) {
+            return false;
+          }
+          pugi::xml_node node = m_currentNode.append_child("dir");
+          const std::string id = ownerId + "-" + role + "-" + std::to_string(segmentIndex)
+              + "-text-" + std::to_string(textIndex++);
+          node.append_attribute("xml:id") = id.c_str();
+          node.append_attribute("startid") = glyphStartId.c_str();
+          node.append_attribute("staff") = static_cast<int>(owner->staffIdx()) + 1;
+          node.append_attribute("type") = "pm-piano-spanner-text";
+          node.append_attribute("pm:piano-symbol-owner") = ownerId.c_str();
+          node.append_attribute("pm:piano-symbol-role") = role;
+          node.append_attribute("pm:piano-symbol-page") =
+              static_cast<int>(std::distance(pages.cbegin(), pageIt)) + 1;
+          node.append_attribute("visible") = owner->visible() && text->visible() ? "true" : "false";
+          const std::string center = formatDecimalStr(ink.center().x() / DPI, 6) + ","
+              + formatDecimalStr(toBottomLeftInches(ink.center().y()), 6);
+          const std::string origin = formatDecimalStr(ink.left() / DPI, 6) + ","
+              + formatDecimalStr(toBottomLeftInches(baseline.y()), 6);
+          node.append_attribute("pm:xy") = center.c_str();
+          node.append_attribute("pm:text-origin") = origin.c_str();
+          node.text().set(fragment.text.toStdString().c_str());
+        }
+        continue;
+      }
+      const muse::draw::FontMetrics metrics(font);
+      double x = fragment.pos.x();
+      for (size_t i = 0; i < fragment.text.size(); ++i) {
+        const Char character = fragment.text.at(i);
+        const String glyphText { character };
+        if (character.isSpace()) {
+          x += metrics.horizontalAdvance(glyphText);
+          continue;
+        }
+        const SymId symbol = pianoTextSymbol(character.unicode());
+        if (symbol == SymId::noSym) {
+          LOGE() << "MEI piano text contains unrecognized engraving codepoint " << character.unicode();
+          return false;
+        }
+        const PointF baseline = text->pagePos() + PointF(x, block.y() + fragment.pos.y());
+        const RectF ink = metrics.tightBoundingRect(glyphText).translated(baseline);
+        pugi::xml_node node = m_currentNode.append_child("ornam");
+        const std::string id = ownerId + "-" + role + "-" + std::to_string(segmentIndex)
+            + "-" + std::to_string(glyphIndex++);
+        node.append_attribute("xml:id") = id.c_str();
+        node.append_attribute("startid") = glyphStartId.c_str();
+        node.append_attribute("staff") = static_cast<int>(owner->staffIdx()) + 1;
+        node.append_attribute("pm:piano-symbol-owner") = ownerId.c_str();
+        node.append_attribute("pm:piano-symbol-role") = role;
+        node.append_attribute("pm:piano-symbol-visible") =
+            owner->visible() && text->visible() && !text->ldata()->isSkipDraw() ? "true" : "false";
+        if (!appendPianoSymbolGeometry(node, text, symbol, "symbol", true, ink)) {
+          return false;
+        }
+        x += metrics.horizontalAdvance(glyphText);
+      }
+    }
+  }
+  return true;
+}
+
 /**
  * Pianomania: the symbols a key signature draws, exactly as laid out
  * (cancellation naturals included): "<SymIdName>:<xPos>:<line>" entries,
@@ -882,6 +1100,7 @@ bool MeiExporter::write(std::string &meiData) {
   // Reset the note indices
   noteIndexMap = {};
   m_exportedXmlIds.clear();
+  m_exportedItemsByXmlId.clear();
   m_noteXmlIdCache.clear();
   m_tremoloChordNodes.clear();
   m_pianomaniaNoteRecords.clear();
@@ -2589,27 +2808,6 @@ bool MeiExporter::assignIndicesForMeasure(const Measure *measure) {
 
   m_noteIdxAssignment.clear(); // per-measure cache is fine
 
-  // helper: find index for a continuation note (tieBack != nullptr)
-  auto findTieIndex = [&](const Note *n, int p) -> int {
-    const Note *initial = n;
-    while (initial->tieBack())
-      initial = initial->tieBack()->startNote();
-
-    // prefer same-measure cache if the start is earlier in this measure
-    if (auto it = m_noteIdxAssignment.find(initial);
-        it != m_noteIdxAssignment.end())
-      return it->second;
-
-    // otherwise, look in the global tie-start map (from earlier measures)
-    if (auto it = m_idxForTieStart.find(initial); it != m_idxForTieStart.end())
-      return it->second;
-
-    // defensive fallback: shouldn’t happen if measures are processed in order
-    int idx = updateNoteIndex(p);
-    m_idxForTieStart[initial] = idx;
-    return idx;
-  };
-
   // walk groups of equal tick
   for (size_t i = 0; i < m_durEvents.size();) {
     int tick = m_durEvents[i].tick;
@@ -2639,17 +2837,51 @@ bool MeiExporter::assignIndicesForMeasure(const Measure *measure) {
     // note events.
     std::unordered_map<IndexGroupKey, int, IndexGroupKeyHash> idxByPitch;
 
+    // A cross-voice tie continuation can precede its root in the stable
+    // traversal order. Reserve the root's index in this tick group so the
+    // later root and any same-onset roots reuse that exact index.
+    auto findTieIndex = [&](const Note *n) -> int {
+      const Note *initial = n;
+      while (initial->tieBack())
+        initial = initial->tieBack()->startNote();
+
+      if (auto it = m_noteIdxAssignment.find(initial);
+          it != m_noteIdxAssignment.end())
+        return it->second;
+
+      if (auto it = m_idxForTieStart.find(initial);
+          it != m_idxForTieStart.end())
+        return it->second;
+
+      const Chord *initialChord = initial->chord();
+      IndexGroupKey key {
+        initial->ppitch(),
+        initialChord && initialChord->isGrace() ? initialChord : nullptr
+      };
+      auto [it, inserted] = idxByPitch.emplace(key, 0);
+      if (inserted)
+        it->second = updateNoteIndex(initial->ppitch());
+      m_idxForTieStart[initial] = it->second;
+      return it->second;
+    };
+
     for (size_t k = i; k < j; ++k) {
       const Note *note = m_durEvents[k].note;
       int p = note->ppitch();
       int idx;
 
       if (note->tieBack() != nullptr) {
-        idx = findTieIndex(note, p);
+        idx = findTieIndex(note);
       } else {
         IndexGroupKey key { p, m_durEvents[k].indexGroupChord };
+        auto reserved = note->tieFor() != nullptr
+                            ? m_idxForTieStart.find(note)
+                            : m_idxForTieStart.end();
         auto it = idxByPitch.find(key);
-        if (it != idxByPitch.end()) {
+        if (reserved != m_idxForTieStart.end()) {
+          idx = reserved->second;
+          idxByPitch.emplace(key, idx);
+        } else if (it != idxByPitch.end()) {
           idx = it->second; // same-beat same-pitch across staves
         } else {
           idx = updateNoteIndex(p);
@@ -2761,6 +2993,9 @@ bool MeiExporter::writeMeasure(const Measure *measure, int &measureN,
           success &&
           this->writeArpeg(dynamic_cast<const Arpeggio *>(controlEvent.first),
                            controlEvent.second);
+    } else if (controlEvent.first->isSymbol()) {
+      success = success && this->writePianoSymbol(toSymbol(controlEvent.first),
+                                                controlEvent.second);
     } else if (controlEvent.first->isBreath()) {
       success = success && this->writeBreath(
                                dynamic_cast<const Breath *>(controlEvent.first),
@@ -2775,10 +3010,20 @@ bool MeiExporter::writeMeasure(const Measure *measure, int &measureN,
     } else if (controlEvent.first->isDynamic()) {
       const Dynamic *dynamic =
           dynamic_cast<const Dynamic *>(controlEvent.first);
-      success = success &&
-                (dynamic->dynamicType() == DynamicType::OTHER
-                     ? this->writeDir(dynamic, controlEvent.second)
-                     : this->writeDynam(dynamic, controlEvent.second));
+      if (dynamic->dynamicType() == DynamicType::OTHER && configuration()->meiExportLayout()) {
+        // Preserve the existing source control identity while each actual text
+        // or music fragment carries its own canonical visual geometry.
+        const std::string ownerId = getXmlIdFor(dynamic, 'd');
+        pugi::xml_node group = m_currentNode.append_child("dir");
+        group.append_attribute("xml:id") = ownerId.c_str();
+        group.append_attribute("startid") = controlEvent.second.c_str();
+        group.append_attribute("type") = "pm-piano-symbol-group";
+        success = success && writePianoTextSymbols(dynamic, dynamic, ownerId,
+                                                  controlEvent.second, "begin", 0);
+      } else {
+        success = success && (dynamic->dynamicType() == DynamicType::OTHER
+            ? writeDir(dynamic, controlEvent.second) : writeDynam(dynamic, controlEvent.second));
+      }
     } else if (controlEvent.first->isFermata()) {
       success =
           success &&
@@ -3065,7 +3310,7 @@ bool MeiExporter::writeArtic(const Articulation *articulation) {
     }
   }
 
-  return true;
+  return appendPianoSymbolGeometry(articNode, articulation, articulation->symId(), "articulation");
 }
 
 /**
@@ -3830,7 +4075,7 @@ bool MeiExporter::writeNote(const Note *note, const Chord *chord,
   }
 
   for (const EngravingItem *element : note->el()) {
-    if (element->isFingering()) {
+    if (element->isFingering() || element->isSymbol()) {
       m_startingControlEventList.push_back(
           std::make_pair(element, "#" + xmlId));
     }
@@ -4428,7 +4673,8 @@ bool MeiExporter::writeBreath(const Breath *breath,
     meiBreath.Write(breathNode, this->getXmlIdFor(breath, 'b'));
   }
 
-  return true;
+  return appendPianoSymbolGeometry(breathNode, breath, breath->symId(),
+                                  breath->isCaesura() ? "caesura" : "breath");
 }
 
 /**
@@ -4595,7 +4841,36 @@ bool MeiExporter::writeDynam(const Dynamic *dynamic,
   }
 
   this->writeLines(dynamNode, meiLines);
-
+  // Retain the actual ordered source glyph run, including non-precomposed dynamics.
+  std::string glyphNames;
+  SymId firstGlyph = SymId::noSym;
+  for (const TextBlock &block : dynamic->ldata()->blocks) {
+    for (const TextFragment &fragment : block.fragments()) {
+      const muse::draw::Font font = fragment.font(dynamic);
+      if (font.type() != muse::draw::Font::Type::MusicSymbol
+          && font.type() != muse::draw::Font::Type::MusicSymbolText) { continue; }
+      for (size_t i = 0; i < fragment.text.size(); ++i) {
+        if (fragment.text.at(i).isSpace()) { continue; }
+        const SymId symbol = pianoTextSymbol(fragment.text.at(i).unicode());
+        if (symbol == SymId::noSym) { return false; }
+        if (firstGlyph == SymId::noSym) { firstGlyph = symbol; }
+        if (!glyphNames.empty()) { glyphNames += ';'; }
+        const AsciiStringView name = SymNames::nameForSymId(symbol);
+        glyphNames += std::string(name.ascii(), name.size());
+      }
+    }
+  }
+  if (firstGlyph == SymId::noSym) {
+    LOGE() << "MEI dynamic has no laid-out engraving glyphs";
+    return false;
+  }
+  dynamNode.append_attribute("pm:piano-symbol-glyphs") = glyphNames.c_str();
+  if (!appendPianoSymbolGeometry(dynamNode, dynamic, firstGlyph, "dynamic", true)) { return false; }
+  if (glyphNames.find(';') != std::string::npos) {
+    // A run has an ordered identity rather than one explicit replacement glyph.
+    dynamNode.remove_attribute("glyph.auth");
+    dynamNode.remove_attribute("glyph.name");
+  }
   return true;
 }
 
@@ -4672,7 +4947,7 @@ bool MeiExporter::writeFermata(const Fermata *fermata,
                           formatDecimalStr(fy, 3);
   fermataNode.append_attribute("pm:xy") = fermataXY.c_str();
 
-  return true;
+  return appendPianoSymbolGeometry(fermataNode, fermata, fermata->symId(), "fermata");
 }
 
 /**
@@ -4700,7 +4975,7 @@ bool MeiExporter::writeFermata(const Fermata *fermata,
                           formatDecimalStr(fy, 3);
   fermataNode.append_attribute("pm:xy") = fermataXY.c_str();
 
-  return true;
+  return appendPianoSymbolGeometry(fermataNode, fermata, fermata->symId(), "fermata");
 }
 
 /**
@@ -4995,7 +5270,16 @@ bool MeiExporter::writeOctave(const Ottava *ottava,
 
   // Add the node to the map of open control events.
   this->addNodeToOpenControlEvents(octaveNode, ottava, startid);
-
+  size_t textSegmentIndex = 0;
+  for (const SpannerSegment *segment : segmentsOnScorePages(ottava)) {
+    const TextLineBaseSegment *textSegment = static_cast<const TextLineBaseSegment *>(segment);
+    const std::string ownerId = octaveNode.attribute("xml:id").value();
+    if (!writePianoTextSymbols(textSegment->text(), ottava, ownerId, startid, "begin", textSegmentIndex)
+        || !writePianoTextSymbols(textSegment->endText(), ottava, ownerId, startid, "end", textSegmentIndex)) {
+      return false;
+    }
+    ++textSegmentIndex;
+  }
   return true;
 }
 
@@ -5037,7 +5321,7 @@ bool MeiExporter::writeOrnament(const Ornament *ornament,
                               formatDecimalStr(toBottomLeftInches(glyph.center().y()), 3);
   ornamentNode.append_attribute("pm:xy") = glyphXY.c_str();
 
-  return true;
+  return appendPianoSymbolGeometry(ornamentNode, ornament, ornament->symId(), "ornament");
 }
 
 /**
@@ -5050,6 +5334,9 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
   pugi::xml_node pedalNode = m_currentNode.append_child();
   libmei::Pedal meiPedal = Convert::pedalToMEI(pedal);
   meiPedal.SetStartid(startid);
+  if (configuration()->meiExportLayout()) {
+    meiPedal.SetForm(libmei::PEDALSTYLE_line);
+  }
 
   meiPedal.Write(pedalNode, this->getXmlIdFor(pedal, 'p'));
 
@@ -5155,7 +5442,6 @@ bool MeiExporter::writePedal(const Pedal *pedal, const std::string &startid) {
 
   // Add the node to the map of open control events
   this->addNodeToOpenControlEvents(pedalNode, pedal, startid);
-
   return true;
 }
 
@@ -5995,6 +6281,24 @@ bool MeiExporter::writeTempo(const TempoText *tempoText,
 bool MeiExporter::writeTie(const Tie *tie, const std::string &startid) {
   IF_ASSERT_FAILED(tie) { return false; }
 
+  const Note *endNote = tie->endNote();
+  if (!tie->isLaissezVib() && !tie->isPartialTie() && endNote &&
+      !shouldExportNote(endNote)) {
+    // Some authored scores use a hidden ordinary tie into a hidden note only
+    // to extend MIDI playback. Neither object is a visible written identity,
+    // so canonical MEI must retain the visible attack and omit the nonvisual
+    // control element. MIDI export still follows the complete source tie
+    // chain. Do not apply this rule to partial ties, laissez-vibrer, visible
+    // ties, or visible endpoint notes: those require an explicit MEI
+    // representation or a hard export failure.
+    if (!tie->visible() && !endNote->visible()) {
+      return true;
+    }
+    LOGE() << "MEI export cannot write an ordinary tie whose terminal note "
+              "is absent from canonical notation";
+    return false;
+  }
+
   pugi::xml_node tieNode = m_currentNode.append_child();
   libmei::Tie meiTie = Convert::tieToMEI(tie);
   meiTie.SetStartid(startid);
@@ -6302,6 +6606,11 @@ bool MeiExporter::writeTrill(const Trill *trill, const std::string &startid) {
       const std::string glyphXY = formatDecimalStr(glyph.center().x() / DPI, 3) + "," +
                                   formatDecimalStr(toBottomLeftInches(glyph.center().y()), 3);
       trillNode.append_attribute("pm:xy") = glyphXY.c_str();
+      trillNode.append_attribute("pm:piano-symbol-visible") =
+          trill->visible() && !segment->ldata()->isSkipDraw() ? "true" : "false";
+      if (!appendPianoSymbolGeometry(trillNode, segment, symbols.front(), "ornament", false, glyph)) {
+        return false;
+      }
     }
     const SymIdList wavySymbols(symbols.begin() + (drawsStartGlyph ? 1 : 0), symbols.end());
     if (wavySymbols.empty()) {
@@ -6531,6 +6840,9 @@ void MeiExporter::fillControlEventMap(const std::string &xmlId,
           std::make_pair(arpeggio, "#" + xmlId));
     }
     for (const EngravingItem *element : chord->el()) {
+    if (element->isSymbol()) {
+      m_startingControlEventList.push_back(std::make_pair(element, "#" + xmlId));
+    }
       if (element->isChordBracket()) {
         m_startingControlEventList.push_back(
             std::make_pair(element, "#" + xmlId));
@@ -6907,6 +7219,7 @@ std::string MeiExporter::getXmlIdFor(const EngravingItem *item, const char c) {
   }
 
   m_exportedXmlIds[item] = xmlId;
+  m_exportedItemsByXmlId[xmlId] = item;
   return xmlId;
 }
 
@@ -7725,7 +8038,7 @@ bool MeiExporter::writeGraceNote(const Note *note, const Chord *graceChord,
   }
 
   for (const EngravingItem *element : note->el()) {
-    if (element->isFingering()) {
+    if (element->isFingering() || element->isSymbol()) {
       m_startingControlEventList.push_back(
           std::make_pair(element, "#" + xmlId));
     }
