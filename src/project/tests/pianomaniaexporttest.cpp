@@ -346,6 +346,32 @@ TEST(Project_PianomaniaPublicIdentityTest, DerivedVisualDeclarationsUseOwnerName
     EXPECT_EQ(mei.find("mscore-"), std::string::npos);
 }
 
+// Test value: A rit./rall./accel. directive shows a marking the MIDI tempo map already plays, so adding it must not renumber the notes after it.
+TEST(Project_PianomaniaPublicIdentityTest, GradualTempoChangeTextUsesItsStartNoteNamespace)
+{
+    std::string mei = R"(<mei xmlns:pm="http://pianomania.gg/ns/mei"><music>
+<measure xml:id="mscore-measure"><note xml:id="mscore-first"/><note xml:id="mscore-second"/>
+<dir xml:id="mscore-rit" type="mscore-gradual-tempo-change mscore-ritardando" startid="#mscore-first" endid="#mscore-second" extender="true">rit.</dir>
+</measure>
+<measure xml:id="mscore-next"><note xml:id="mscore-third"/></measure></music></mei>)";
+    mu::project::pianomania::PianomaniaExportResult result;
+    mu::project::pianomania::CanonicalEvent event;
+    event.scoreEventId = "mscore-third";
+    event.chordId = "mscore-private-chord";
+    event.measureId = "mscore-next";
+    result.canonicalEvents.push_back(event);
+
+    ASSERT_TRUE(mu::project::pianomania::canonicalizePublicIdentityGraphForTesting(mei, result));
+    EXPECT_NE(mei.find("<note xml:id=\"pm-score-000003\"/>"), std::string::npos);
+    EXPECT_NE(mei.find("<measure xml:id=\"pm-score-000004\">"), std::string::npos);
+    EXPECT_NE(mei.find("<note xml:id=\"pm-score-000005\"/>"), std::string::npos);
+    EXPECT_EQ(result.canonicalEvents.front().scoreEventId, "pm-score-000005");
+    EXPECT_EQ(result.canonicalEvents.front().chordId, "pm-score-000006");
+    EXPECT_NE(mei.find("xml:id=\"pm-symbol-pm-score-000002-tempo-change-1\""), std::string::npos);
+    EXPECT_NE(mei.find("startid=\"#pm-score-000002\" endid=\"#pm-score-000003\""), std::string::npos);
+    EXPECT_EQ(mei.find("xml:id=\"mscore-"), std::string::npos);
+}
+
 // Test value: A derived visual with a partial or undeclared owner remains a hard identity-graph failure instead of becoming an audible/public event.
 TEST(Project_PianomaniaPublicIdentityTest, RejectsMalformedDerivedVisualOwner)
 {

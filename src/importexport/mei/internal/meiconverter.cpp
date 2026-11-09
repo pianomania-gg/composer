@@ -39,6 +39,7 @@
 #include "engraving/dom/figuredbass.h"
 #include "engraving/dom/fingering.h"
 #include "engraving/dom/glissando.h"
+#include "engraving/dom/gradualtempochange.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/harmony.h"
 #include "engraving/dom/jump.h"
@@ -1275,11 +1276,20 @@ libmei::Dir Convert::dirToMEI(const engraving::TextLineBase* textLineBase, Strin
         } else {
             dirType += "dim";
         }
+    } else if (textLineBase->isGradualTempoChange()) {
+        // Two type values: one for the gradual tempo change, one for its kind (ritardando, accelerando, ...)
+        const engraving::GradualTempoChange* tempoChange = engraving::toGradualTempoChange(textLineBase);
+        const AsciiStringView changeType = engraving::TConv::toXml(tempoChange->tempoChangeType());
+        dirType = std::string(DIR_TYPE) + "gradual-tempo-change " + std::string(DIR_TYPE)
+                  + std::string(changeType.ascii(), changeType.size());
     }
     meiDir.SetType(dirType);
 
     // @extender
-    meiDir.SetExtender(libmei::BOOLEAN_true);
+    // A gradual tempo change can be its text alone ("rit." with no dashes); it then has no extender to draw.
+    if (!textLineBase->isGradualTempoChange() || textLineBase->lineVisible()) {
+        meiDir.SetExtender(libmei::BOOLEAN_true);
+    }
 
     // @lform
     if (textLineBase->propertyFlags(engraving::Pid::LINE_STYLE) == engraving::PropertyFlags::UNSTYLED) {
