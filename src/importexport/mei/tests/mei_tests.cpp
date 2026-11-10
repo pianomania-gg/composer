@@ -55,6 +55,7 @@
 #include "engraving/dom/expression.h"
 #include "engraving/dom/factory.h"
 #include "engraving/dom/glissando.h"
+#include "engraving/dom/gradualtempochange.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/keysig.h"
 #include "engraving/dom/line.h"
@@ -2133,6 +2134,144 @@ TEST_F(Mei_Tests, mei_line_hairpin_exports_resolved_center_and_layout_y_offset) 
     }
 
     EXPECT_EQ(matchingTagCount, 1u);
+}
+
+// A visible rit./rall./accel. is a MuseScore GradualTempoChange spanner. The MIDI
+// tempo map already plays it, so the MEI only has to show its text: as a line
+// directive when its dashes are drawn, as text alone when they are not, and not
+// at all when the spanner is hidden.
+TEST_F(Mei_Tests, mei_export_gradual_tempo_change_writes_its_visible_marking) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"hairpin-01.mscx", false);
+    ASSERT_TRUE(score);
+    score->setLayoutAll();
+    score->doLayout();
+
+    Measure* first = score->firstMeasure();
+    ASSERT_TRUE(first && first->nextMeasure());
+    Measure* systemEnd = first->nextMeasure();
+    while (systemEnd->nextMeasure() && systemEnd->nextMeasure()->system() == systemEnd->system()) {
+        systemEnd = systemEnd->nextMeasure();
+    }
+    Measure* nextSystemStart = systemEnd->nextMeasure();
+    ASSERT_TRUE(nextSystemStart) << "the fixture must lay out on more than one system";
+    Measure* laterMeasure = nextSystemStart->nextMeasure();
+    ASSERT_TRUE(laterMeasure);
+
+    const auto addTempoChange = [score](GradualTempoChangeType type, const String& text,
+                                        const Fraction& tick, const Fraction& tick2) {
+        GradualTempoChange* tempoChange = Factory::createGradualTempoChange(score->dummy()->segment());
+        tempoChange->setTempoChangeType(type);
+        tempoChange->setBeginText(text);
+        tempoChange->setTick(tick);
+        tempoChange->setTick2(tick2);
+        tempoChange->setTrack(0);
+        tempoChange->setTrack2(0);
+        score->addSpanner(tempoChange);
+        return tempoChange;
+    };
+    // Dashes from the last measure of one system into the next system.
+    GradualTempoChange* ritardando = addTempoChange(GradualTempoChangeType::Ritardando, u"rit.",
+                                                    systemEnd->tick(), nextSystemStart->endTick());
+    // The word alone, without its dashes.
+    GradualTempoChange* accelerando = addTempoChange(GradualTempoChangeType::Accelerando, u"accel.",
+                                                     first->tick(), first->endTick());
+    accelerando->setLineVisible(false);
+    accelerando->setPlacement(PlacementV::BELOW);
+    accelerando->setPropertyFlags(Pid::PLACEMENT, PropertyFlags::UNSTYLED);
+    // Playback only: the score shows nothing.
+    GradualTempoChange* rallentando = addTempoChange(GradualTempoChangeType::Rallentando, u"rall.",
+                                                     laterMeasure->tick(), laterMeasure->endTick());
+    rallentando->setVisible(false);
+    score->setLayoutAll();
+    score->doLayout();
+
+    ASSERT_EQ(ritardando->spannerSegments().size(), 2u);
+    const PointF ritardandoStart = ritardando->frontSegment()->pagePos();
+    const System* ritardandoSystem = ritardando->frontSegment()->system();
+    ASSERT_TRUE(ritardandoSystem);
+    const double spatium = ritardando->staff()->spatium(ritardando->tick());
+    const double expectedRitardandoYOffset = (ritardandoSystem->staffYpage(0) - ritardandoStart.y()) / spatium;
+    const auto* accelerandoSegment = static_cast<const TextLineBaseSegment*>(accelerando->frontSegment());
+    ASSERT_TRUE(accelerandoSegment && accelerandoSegment->text());
+    const RectF accelerandoText = accelerandoSegment->text()->pageBoundingRect();
+    const System* accelerandoSystem = accelerandoSegment->system();
+    ASSERT_TRUE(accelerandoSystem);
+    const double expectedAccelerandoYOffset = (accelerandoSystem->staffYpage(0)
+                                               + accelerandoSystem->staff(0)->bbox().height()
+                                               - accelerandoSegment->pagePos().y()) / spatium;
+    const double pageHeight = score->style().styleD(Sid::pageHeight);
+
+    const String outputName = u"pianomania-gradual-tempo-change.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    delete score;
+
+    const std::string meiText = readTestTextFile(outputName);
+    const auto hasXmlId = [&meiText](const std::optional<std::string>& reference) {
+        return reference.has_value() && reference->size() > 1 && reference->front() == '#'
+               && meiText.find("xml:id=\"" + reference->substr(1) + "\"") != std::string::npos;
+    };
+    const auto pmPoint = [](const std::string& tag) {
+        const std::optional<std::string> value = xmlAttributeValue(tag, "pm:xy");
+        EXPECT_TRUE(value.has_value()) << tag;
+        const size_t comma = value ? value->find(',') : std::string::npos;
+        EXPECT_NE(comma, std::string::npos) << tag;
+        if (comma == std::string::npos) {
+            return std::pair<double, double>(0.0, 0.0);
+        }
+        return std::pair<double, double>(std::stod(value->substr(0, comma)), std::stod(value->substr(comma + 1)));
+    };
+
+    std::map<std::string, std::string> tagByText;
+    size_t cursor = 0;
+    while ((cursor = meiText.find("<dir ", cursor)) != std::string::npos) {
+        const size_t tagEnd = meiText.find('>', cursor);
+        const size_t close = meiText.find("</dir>", tagEnd);
+        ASSERT_NE(close, std::string::npos);
+        const std::string tag = meiText.substr(cursor, tagEnd - cursor + 1);
+        const std::optional<std::string> type = xmlAttributeValue(tag, "type");
+        if (type.has_value() && type->find("mscore-gradual-tempo-change") != std::string::npos) {
+            tagByText[meiText.substr(tagEnd + 1, close - tagEnd - 1)] = tag;
+        }
+        cursor = close;
+    }
+    ASSERT_EQ(tagByText.size(), 2u) << "only the two visible tempo changes are written";
+    ASSERT_EQ(tagByText.count("rit."), 1u);
+    ASSERT_EQ(tagByText.count("accel."), 1u);
+    EXPECT_EQ(meiText.find("rall."), std::string::npos);
+
+    const std::string& rit = tagByText["rit."];
+    EXPECT_NE(xmlAttributeValue(rit, "type")->find("mscore-ritardando"), std::string::npos) << rit;
+    EXPECT_EQ(xmlAttributeValue(rit, "extender"), std::optional<std::string>("true")) << rit;
+    EXPECT_TRUE(hasXmlId(xmlAttributeValue(rit, "startid"))) << rit;
+    EXPECT_TRUE(hasXmlId(xmlAttributeValue(rit, "endid"))) << rit;
+    EXPECT_GT(expectedRitardandoYOffset, 0.0) << "rit. sits above the staff";
+    EXPECT_NEAR(xmlAttributeDouble(rit, "yOffset").value_or(0.0), expectedRitardandoYOffset, 0.051)
+        << "yOffset measures the laid-out line from the staff top: " << rit;
+    const auto [ritX, ritY] = pmPoint(rit);
+    EXPECT_NEAR(ritX, ritardandoStart.x() / DPI, 0.0011) << "the text starts where its line starts";
+    EXPECT_NEAR(ritY, pageHeight - ritardandoStart.y() / DPI, 0.0011);
+    EXPECT_TRUE(xmlAttributeValue(rit, "pm:x1y1x2y2").has_value()) << rit;
+    const std::optional<std::string> ritSegments = xmlAttributeValue(rit, "pm:segments");
+    ASSERT_TRUE(ritSegments.has_value()) << rit;
+    EXPECT_EQ(std::count(ritSegments->begin(), ritSegments->end(), ';'), 1) << "one line segment per system";
+
+    const std::string& accel = tagByText["accel."];
+    EXPECT_NE(xmlAttributeValue(accel, "type")->find("mscore-accelerando"), std::string::npos) << accel;
+    EXPECT_FALSE(xmlAttributeValue(accel, "extender").has_value()) << "no dashes are drawn: " << accel;
+    EXPECT_FALSE(xmlAttributeValue(accel, "pm:segments").has_value()) << accel;
+    EXPECT_FALSE(xmlAttributeValue(accel, "pm:x1y1x2y2").has_value()) << accel;
+    EXPECT_TRUE(hasXmlId(xmlAttributeValue(accel, "startid"))) << accel;
+    EXPECT_LT(expectedAccelerandoYOffset, 0.0) << "accel. sits below the staff";
+    EXPECT_NEAR(xmlAttributeDouble(accel, "yOffset").value_or(0.0), expectedAccelerandoYOffset, 0.051)
+        << "a marking below the staff measures from the staff bottom: " << accel;
+    const auto [accelX, accelY] = pmPoint(accel);
+    EXPECT_NEAR(accelX, accelerandoText.center().x() / DPI, 0.0011) << "text alone is placed by its centre";
+    EXPECT_NEAR(accelY, pageHeight - accelerandoText.center().y() / DPI, 0.0011);
 }
 
 TEST_F(Mei_Tests, mei_directives_export_resolved_center_between_staves) {

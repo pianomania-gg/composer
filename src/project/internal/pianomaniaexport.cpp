@@ -416,27 +416,35 @@ std::string xmlAttribute(const std::string& tag, const std::string& name)
     return std::regex_search(tag, match, pattern) ? match[1].str() : std::string {};
 }
 
+// A gradual tempo change (rit., rall., accel.) plays through the MIDI tempo map.
+// Its MEI directive only shows the marking, so it owns no musical identity.
+bool isGradualTempoChangeText(const std::string& tag)
+{
+    return tag.rfind("<dir", 0) == 0
+           && xmlAttribute(tag, "type").rfind("mscore-gradual-tempo-change", 0) == 0;
+}
+
 bool isDerivedPianoVisual(const std::string& tag)
 {
     const bool genericSymbol = tag.rfind("<ornam", 0) == 0
                                && xmlAttribute(tag, "pm:piano-symbol-kind") == "symbol";
     const bool spannerText = tag.rfind("<dir", 0) == 0
                              && xmlAttribute(tag, "type") == "pm-piano-spanner-text";
-    return genericSymbol || spannerText;
+    return genericSymbol || spannerText || isGradualTempoChangeText(tag);
 }
 
 std::string derivedPianoVisualIdentity(const std::string& ownerPublic,
                                        const std::string& sourceIdentity,
                                        const std::string& sourceOwner,
                                        const std::string& role,
+                                       const std::string& kind,
                                        size_t ownerOrdinal)
 {
     std::string suffix;
     if (!sourceOwner.empty() && sourceIdentity.rfind(sourceOwner + "-", 0) == 0) {
         suffix = sourceIdentity.substr(sourceOwner.size() + 1);
     } else {
-        suffix = role.empty() ? "symbol-" + std::to_string(ownerOrdinal)
-                              : role + "-" + std::to_string(ownerOrdinal);
+        suffix = (role.empty() ? kind : role) + "-" + std::to_string(ownerOrdinal);
     }
     return "pm-symbol-" + ownerPublic + "-" + suffix;
 }
@@ -532,7 +540,8 @@ bool canonicalizePublicIdentityGraph(std::string& meiData, PianomaniaExportResul
         }
         const size_t ownerOrdinal = ++derivedOrdinals[resolvedOwner];
         const std::string replacement = derivedPianoVisualIdentity(
-            replacements.at(resolvedOwner), declaration.identity, owner, role, ownerOrdinal);
+            replacements.at(resolvedOwner), declaration.identity, owner, role,
+            isGradualTempoChangeText(declaration.tag) ? "tempo-change" : "symbol", ownerOrdinal);
         if (!replacements.emplace(declaration.identity, replacement).second
             || !generated.insert(replacement).second || existingPublic.count(replacement)) {
             LOGE() << "Coordinated Pianomania derived piano visual identity collides";

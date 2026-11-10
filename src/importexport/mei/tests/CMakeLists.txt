@@ -48,6 +48,7 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_ending_label_exports_plain_display_text:"
     "Mei_Tests.mei_hairpin_export_includes_pm_hairpin_lines_when_endpoints_present:"
     "Mei_Tests.mei_line_hairpin_exports_resolved_center_and_layout_y_offset:"
+    "Mei_Tests.mei_export_gradual_tempo_change_writes_its_visible_marking:"
     "Mei_Tests.mei_directives_export_resolved_center_between_staves:"
     "Mei_Tests.mei_export_omits_invisible_note_and_idx:"
     "Mei_Tests.mei_export_rehearsal_mark_on_hidden_rest:"
@@ -106,5 +107,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*48 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*49 tests"
 )

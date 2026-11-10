@@ -57,6 +57,7 @@
 #include "engraving/dom/figuredbass.h"
 #include "engraving/dom/fingering.h"
 #include "engraving/dom/glissando.h"
+#include "engraving/dom/gradualtempochange.h"
 #include "engraving/dom/hairpin.h"
 #include "engraving/dom/harmony.h"
 #include "engraving/dom/harppedaldiagram.h"
@@ -1509,7 +1510,13 @@ void MeiExporter::prepareSpannerEndpointAnchors() {
     UNUSED(tick);
     if (!spanner ||
         !(spanner->isHairpin() || spanner->isOttava() ||
-          spanner->isPedal() || spanner->isSlur() || spanner->isTrill())) {
+          spanner->isPedal() || spanner->isSlur() || spanner->isTrill() ||
+          spanner->isGradualTempoChange())) {
+      continue;
+    }
+    // A hidden gradual tempo change only shapes playback, which the MIDI
+    // tempo map already carries. The written score has no marking to show.
+    if (spanner->isGradualTempoChange() && !spanner->visible()) {
       continue;
     }
 
@@ -3043,6 +3050,10 @@ bool MeiExporter::writeMeasure(const Measure *measure, int &measureN,
       success = success &&
                 this->writeGliss(dynamic_cast<const Glissando *>(controlEvent.first),
                                  controlEvent.second);
+    } else if (controlEvent.first->isGradualTempoChange()) {
+      success = success &&
+                this->writeDir(dynamic_cast<const TextLineBase *>(controlEvent.first),
+                               controlEvent.second);
     } else if (controlEvent.first->isHairpin()) {
       success =
           success &&
@@ -4771,6 +4782,21 @@ bool MeiExporter::writeDir(const TextLineBase *dir,
         elementShouldBeCenteredBetweenStaves(hairpinSegment, hairpinSystem);
     dirNode.append_attribute("centerBetweenStaves") =
         centered ? "true" : "false";
+  }
+
+  if (!meiDir.HasExtender()) {
+    // Text alone (a gradual tempo change drawn without its line): readers place
+    // it by the centre of the begin text MuseScore drew on the first segment.
+    const std::vector<const SpannerSegment *> placed = segmentsOnScorePages(dir);
+    const TextLineBaseSegment *firstSegment =
+        placed.empty() ? nullptr
+                       : static_cast<const TextLineBaseSegment *>(placed.front());
+    if (firstSegment && firstSegment->text()) {
+      appendCenteredPmPosition(dirNode, firstSegment->text());
+    }
+    this->writeLines(dirNode, meiLines);
+    this->addNodeToOpenControlEvents(dirNode, dir, startid);
+    return true;
   }
 
   // For TextLineBase spanners (like hairpins with text), use the first segment
@@ -7527,21 +7553,27 @@ double MeiExporter::getDirectiveYOffset(const TextBase *dir) {
 }
 
 double MeiExporter::getDirectiveYOffset(const TextLineBase *dir) {
-  if (!dir) {
+  if (!dir || !dir->staff()) {
     return 0.0;
   }
 
-  const Segment *segment = dir->startSegment();
-  if (!segment) {
+  // The line itself holds only its style offset. Layout and autoplace place
+  // its segments, so measure the first placed segment from the staff edge, as
+  // hairpins and ottavas do. Positive values are above that edge.
+  const std::vector<const SpannerSegment *> placed = segmentsOnScorePages(dir);
+  const System *system = placed.empty() ? nullptr : placed.front()->system();
+  if (!system) {
     return 0.0;
   }
 
-  const EngravingItem *element = segment->element(dir->track());
-  if (!element || !element->isChordRest()) {
-    return 0.0;
+  const Staff *staff = dir->staff();
+  const staff_idx_t staffIdx = staff->idx();
+  double staffEdgeY = system->staffYpage(staffIdx);
+  if (dir->placeBelow()) {
+    staffEdgeY += system->staff(staffIdx)->bbox().height();
   }
-
-  return calculateDirectiveYOffset(dir, toChordRest(element));
+  staffEdgeY += dir->staffOffsetY();
+  return (staffEdgeY - placed.front()->pagePos().y()) / staff->spatium(dir->tick());
 }
 
 double MeiExporter::getRepeatMarkYOffset(const TextBase *repeatMark,
