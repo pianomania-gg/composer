@@ -122,13 +122,13 @@ constexpr double PM_FINGERING_STRUCTURE_CLEARANCE_MIN = 0.25;
 // Tucks may nearly touch articulation marks (staccato dots, tenuto bars):
 // a digit centered tightly over dot and notehead beats one dodged sideways.
 constexpr double PM_FINGERING_MARK_CLEARANCE_TUCK = 0.08;
-// Slur clearance is measured from the curve centerline; the segment's
-// midThickness is added on top. Kept intentionally tight so fingerings hug
-// slurs instead of floating away from them. The tuck variant is the squeeze
-// floor for fitting a digit into the pocket between the notes and a slur:
-// a digit may sit nearly touching the curve there.
+// Slur clearance is the documented minimum obstacle clearance (Pianomania's
+// piano-slurs-fingerings-source-of-truth.md): the shortest distance from a
+// digit's box to the slur's centerline, with the segment's midThickness added
+// on top so the drawn edge is never closer. It binds every placement, tucks
+// into the pocket between the notes and a slur included; a pocket too shallow
+// for it sends the digits past the slur.
 constexpr double PM_FINGERING_SLUR_CLEARANCE = 0.25;
-constexpr double PM_FINGERING_SLUR_CLEARANCE_TUCK = 0.06;
 // Move targets overshoot the conflict-test clearance by this much so a second
 // pass (page-stage rerun, persistent replay) sees the result as already clear.
 constexpr double PM_FINGERING_SLUR_TARGET_EXTRA = 0.05;
@@ -540,42 +540,84 @@ PointF slurGripSystemPos(const SlurSegment* segment, Grip grip)
 
 struct SlurWindowSample {
     bool any = false;      // any curve sample within the horizontal window
-    bool conflict = false; // any such sample within the vertical clearance band
+    bool conflict = false; // any curve sample closer to the rect than the clearance
     double minY = 0.0;     // highest curve point inside the window
     double maxY = 0.0;     // lowest curve point inside the window
+    // The band the rect must stay outside to keep the clearance from every
+    // curve sample: each sample within the clearance horizontally, widened
+    // vertically by the clearance it still needs at that horizontal distance.
+    double clearMinY = 0.0;
+    double clearMaxY = 0.0;
 };
 
+// Curve samples close enough together (along the control polygon, which
+// bounds the arc length) that a steep slur end cannot pass between two of
+// them beside a digit.
+int slurCurveSampleCount(const PointF& start, const PointF& bezier1, const PointF& bezier2, const PointF& end,
+                         double spatium)
+{
+    static constexpr double SAMPLE_SPACING_SP = 0.05;
+    static constexpr int MIN_SAMPLES = 96;
+    static constexpr int MAX_SAMPLES = 2048;
+    const auto length = [](const PointF& a, const PointF& b) {
+        return std::hypot(b.x() - a.x(), b.y() - a.y());
+    };
+    const double polygon = length(start, bezier1) + length(bezier1, bezier2) + length(bezier2, end);
+    if (spatium <= 0.0) {
+        return MIN_SAMPLES;
+    }
+    const double samples = std::ceil(polygon / (SAMPLE_SPACING_SP * spatium));
+    return static_cast<int>(std::clamp(samples, double(MIN_SAMPLES), double(MAX_SAMPLES)));
+}
+
+// Samples a slur segment's centerline around a rect. Samples within xMargin
+// of the rect horizontally give the curve's extent there (minY/maxY). With a
+// clearance, a sample conflicts when it is closer than the clearance to the
+// rect, measured as a true distance, so a slur end beside a digit counts.
 SlurWindowSample sampleSlurWithinFingeringWindow(const RectF& fingeringRect, const SlurSegment* slurSegment,
-                                                 double xMargin, double verticalClearance)
+                                                 double xMargin, double clearance)
 {
     SlurWindowSample sample;
     const PointF start = slurGripSystemPos(slurSegment, Grip::START);
     const PointF bezier1 = slurGripSystemPos(slurSegment, Grip::BEZIER1);
     const PointF bezier2 = slurGripSystemPos(slurSegment, Grip::BEZIER2);
     const PointF end = slurGripSystemPos(slurSegment, Grip::END);
-    const double left = fingeringRect.left() - xMargin;
-    const double right = fingeringRect.right() + xMargin;
-    if (std::max(start.x(), end.x()) < left || std::min(start.x(), end.x()) > right) {
+    const double reach = std::max(xMargin, clearance);
+    if (std::max({ start.x(), bezier1.x(), bezier2.x(), end.x() }) < fingeringRect.left() - reach
+        || std::min({ start.x(), bezier1.x(), bezier2.x(), end.x() }) > fingeringRect.right() + reach) {
         return sample;
     }
 
     CubicBezier bezier(start, bezier1, bezier2, end);
-    static constexpr int samples = 96;
+    const int samples = slurCurveSampleCount(start, bezier1, bezier2, end, slurSegment->spatium());
+    bool anyNear = false;
     for (int i = 0; i <= samples; ++i) {
         const PointF point = bezier.pointAtPercent(double(i) / double(samples));
-        if (point.x() < left || point.x() > right) {
-            continue;
+        const double dx = std::max({ fingeringRect.left() - point.x(), 0.0, point.x() - fingeringRect.right() });
+        if (dx <= xMargin) {
+            if (!sample.any) {
+                sample.any = true;
+                sample.minY = point.y();
+                sample.maxY = point.y();
+            } else {
+                sample.minY = std::min(sample.minY, point.y());
+                sample.maxY = std::max(sample.maxY, point.y());
+            }
         }
 
-        if (!sample.any) {
-            sample.any = true;
-            sample.minY = point.y();
-            sample.maxY = point.y();
-        } else {
-            sample.minY = std::min(sample.minY, point.y());
-            sample.maxY = std::max(sample.maxY, point.y());
+        if (clearance <= 0.0 || dx >= clearance) {
+            continue;
         }
-        if (point.y() > fingeringRect.top() - verticalClearance && point.y() < fingeringRect.bottom() + verticalClearance) {
+        const double needed = std::sqrt(clearance * clearance - dx * dx);
+        if (!anyNear) {
+            anyNear = true;
+            sample.clearMinY = point.y() - needed;
+            sample.clearMaxY = point.y() + needed;
+        } else {
+            sample.clearMinY = std::min(sample.clearMinY, point.y() - needed);
+            sample.clearMaxY = std::max(sample.clearMaxY, point.y() + needed);
+        }
+        if (point.y() > fingeringRect.top() - needed && point.y() < fingeringRect.bottom() + needed) {
             sample.conflict = true;
         }
     }
@@ -590,8 +632,7 @@ struct SlurAvoidance {
 };
 
 SlurAvoidance slurAvoidanceForRect(const RectF& fingeringRect, const std::vector<FingeringObstacle>& obstacles,
-                                   staff_idx_t staffIdx, double staffTop, bool above, double spatium,
-                                   double slurClearanceSp = PM_FINGERING_SLUR_CLEARANCE)
+                                   staff_idx_t staffIdx, double staffTop, bool above, double spatium)
 {
     SlurAvoidance avoidance;
     const double xMargin = PM_FINGERING_SLUR_X_MARGIN * spatium;
@@ -617,20 +658,20 @@ SlurAvoidance slurAvoidanceForRect(const RectF& fingeringRect, const std::vector
             }
         }
 
-        const double clearance = slurClearanceSp * spatium + obstacle.slurSegment->ldata()->midThickness();
+        const double clearance = PM_FINGERING_SLUR_CLEARANCE * spatium + obstacle.slurSegment->ldata()->midThickness();
         const SlurWindowSample sample = sampleSlurWithinFingeringWindow(fingeringRect, obstacle.slurSegment, xMargin, clearance);
         if (!sample.conflict) {
             continue;
         }
 
         avoidance.conflict = true;
-        const double target = clearance + PM_FINGERING_SLUR_TARGET_EXTRA * spatium;
+        const double extra = PM_FINGERING_SLUR_TARGET_EXTRA * spatium;
         if (above) {
-            avoidance.awayMove = std::max(avoidance.awayMove, fingeringRect.bottom() + target - sample.minY);
-            avoidance.towardMove = std::max(avoidance.towardMove, sample.maxY + target - fingeringRect.top());
+            avoidance.awayMove = std::max(avoidance.awayMove, fingeringRect.bottom() + extra - sample.clearMinY);
+            avoidance.towardMove = std::max(avoidance.towardMove, sample.clearMaxY + extra - fingeringRect.top());
         } else {
-            avoidance.awayMove = std::max(avoidance.awayMove, sample.maxY + target - fingeringRect.top());
-            avoidance.towardMove = std::max(avoidance.towardMove, fingeringRect.bottom() + target - sample.minY);
+            avoidance.awayMove = std::max(avoidance.awayMove, sample.clearMaxY + extra - fingeringRect.top());
+            avoidance.towardMove = std::max(avoidance.towardMove, fingeringRect.bottom() + extra - sample.clearMinY);
         }
     }
 
@@ -1489,8 +1530,9 @@ bool fingeringGroupFinalTuckClearsSkyline(const RectF& baseRect, const RectF& ca
     return true;
 }
 
-// The near-touch gate every under-slur tuck must pass: notes, staff edge,
-// marks, stems/flags, beams (at the staff-line floor), slurs and the skyline.
+// The gate every under-slur tuck must pass: notes, staff edge, marks,
+// stems/flags, beams (at the staff-line floor), slurs (at the full slur
+// clearance) and the skyline.
 bool fingeringUnderSlurTuckClears(const RectF& groupRect, const RectF& tucked, const FingeringGroupContext& ctx)
 {
     const double sp = ctx.spatium;
@@ -1504,8 +1546,7 @@ bool fingeringUnderSlurTuckClears(const RectF& groupRect, const RectF& tucked, c
            && requiredVerticalMoveFromStructuralObstacles(tucked, ctx.structuralObstacles, ctx.above,
                                                           PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp,
                                                           PM_FINGERING_BEAM_CLEARANCE_TUCK * sp) <= 0.0
-           && !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
-                                    PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+           && !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).conflict
            && fingeringGroupFinalTuckClearsSkyline(groupRect, tucked, ctx);
 }
 
@@ -1555,8 +1596,8 @@ PmSlurRelation pianomaniaSlurRelation(const RectF& placed, const FingeringGroupC
 // slur-chain neighbours tuck under that slur (Clementi Op. 36/2 I m36: the
 // "1" above the phrase slur between digits tucked beneath it), takes the
 // pocket under the slur when the digits fit there: resting on the beam at the
-// staff-line floor, just under the slur at the tuck clearance, a stem-side
-// digit sliding at most half a space off the notehead's center over its stem.
+// staff-line floor, under the slur at the slur clearance, a stem-side digit
+// sliding at most half a space off the notehead's center over its stem.
 bool rescueFingeringGroupUnderCoveringSlur(const RectF& groupRect, const GroupPlacement& chosen,
                                            const FingeringGroupContext& ctx, const Chord* chord,
                                            GroupPlacement& rescued)
@@ -1572,8 +1613,8 @@ bool rescueFingeringGroupUnderCoveringSlur(const RectF& groupRect, const GroupPl
         return false;
     }
 
-    const double target = (PM_FINGERING_SLUR_CLEARANCE_TUCK + PM_FINGERING_SLUR_TARGET_EXTRA) * sp
-                          + covering->ldata()->midThickness();
+    const double clearance = PM_FINGERING_SLUR_CLEARANCE * sp + covering->ldata()->midThickness();
+    const double extra = PM_FINGERING_SLUR_TARGET_EXTRA * sp;
     const bool stemSide = chord && chord->stem() && ctx.above == chord->up();
     const double stemward = chord && !chord->up() ? -1.0 : 1.0;
     for (const double slideSp : PM_FINGERING_UNDER_SLUR_STEMWARD_SLIDES_SP) {
@@ -1582,12 +1623,12 @@ bool rescueFingeringGroupUnderCoveringSlur(const RectF& groupRect, const GroupPl
         }
         const double dx = stemward * slideSp * sp;
         const RectF shifted = groupRect.translated(dx, 0.0);
-        const SlurWindowSample sample = sampleSlurWithinFingeringWindow(shifted, covering, xMargin, 0.0);
+        const SlurWindowSample sample = sampleSlurWithinFingeringWindow(shifted, covering, xMargin, clearance);
         if (!sample.any) {
             continue;
         }
-        const double moveAway = ctx.above ? groupRect.top() - (sample.maxY + target)
-                                : (sample.minY - target) - groupRect.bottom();
+        const double moveAway = ctx.above ? groupRect.top() - (sample.clearMaxY + extra)
+                                : (sample.clearMinY - extra) - groupRect.bottom();
         const RectF tucked = shifted.translated(0.0, ctx.above ? -moveAway : moveAway);
         if (!fingeringUnderSlurTuckClears(groupRect, tucked, ctx)) {
             continue;
@@ -1619,8 +1660,7 @@ bool fingeringPlacementClearsOppositeSide(const RectF& groupRect, const GroupPla
                                                           PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0
            && requiredVerticalMoveFromMarkObstacles(finalRect, *ctx.obstacles, ctx.staffIdx, ctx.above,
                                                     PM_FINGERING_MARK_CLEARANCE_MIN * sp) <= 0.0
-           && !slurAvoidanceForRect(finalRect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
-                                    PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+           && !slurAvoidanceForRect(finalRect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).conflict
            && fingeringGroupFinalTuckClearsSkyline(groupRect, finalRect, ctx);
 }
 
@@ -1825,8 +1865,7 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
                                                             PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0
                    && requiredVerticalMoveFromStructuralObstacles(candidate, ctx.structuralObstacles, ctx.above,
                                                                   PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0
-                   && !slurAvoidanceForRect(candidate, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
-                                            PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+                   && !slurAvoidanceForRect(candidate, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).conflict
                    && fingeringGroupFinalTuckClearsSkyline(groupRect, candidate, ctx, 0.02, ctx.above)
                    && clearTempoTextFromFingeringPocket(candidate, ctx, false);
         };
@@ -1897,14 +1936,13 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
             break;
         }
 
-        // Tuck attempt: duck under the slur at the near-touch clearance. The
+        // Tuck attempt: duck under the slur, keeping the slur clearance. The
         // guaranteed-safe backoff below the vanilla baseline is small, but a
         // deeper reach into the pocket is allowed when the skyline proves it
         // clear of unmodeled obstacles (stems, beams, accidentals, ties).
         const double localTuckAllowance = std::max(towardAllowance, ctx.maxTuckDescent);
         const double tuckAllowance = std::max(localTuckAllowance, ctx.neighborTuckAllowance);
-        const double tuckMove = slurAvoidanceForRect(rect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
-                                                     PM_FINGERING_SLUR_CLEARANCE_TUCK).towardMove;
+        const double tuckMove = slurAvoidanceForRect(rect, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).towardMove;
         GroupPlacement climbed;
         climbed.dx = dx;
         climbed.moveAway = total + avoidance.awayMove;
@@ -1923,8 +1961,7 @@ GroupPlacement resolveFingeringGroupPlacement(const RectF& groupRect, double dx,
                                                                             PM_FINGERING_MARK_CLEARANCE_TUCK * sp) <= 0.0;
             const bool clearOfStructure = requiredVerticalMoveFromStructuralObstacles(
                 tucked, ctx.structuralObstacles, ctx.above, PM_FINGERING_STRUCTURE_CLEARANCE_MIN * sp) <= 0.0;
-            const bool clearOfSlurs = !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp,
-                                                            PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict;
+            const bool clearOfSlurs = !slurAvoidanceForRect(tucked, *ctx.obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, sp).conflict;
             // Neighbor-assisted tucks may cross a one-way skyline descent
             // barrier, but the final rect still must not land on skyline
             // obstacles in this group's own x-window.
@@ -2855,8 +2892,7 @@ bool adjustFingeringGroupAroundNotation(const std::vector<Fingering*>& fingering
                                                 PM_FINGERING_MARK_CLEARANCE_TUCK * spatium) > 0.0
           || requiredVerticalMoveFromStructuralObstacles(finalRect, ctx.structuralObstacles, ctx.above,
                                                          PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0
-          || slurAvoidanceForRect(finalRect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, spatium,
-                                  PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict;
+          || slurAvoidanceForRect(finalRect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, spatium).conflict;
     const bool noteStillCollides = requiredVerticalMoveFromNotationRect(finalRect, ctx.noteDangerRect, ctx.above,
                                                                         PM_FINGERING_NOTE_CLEARANCE_MIN * spatium) > 0.0;
     const bool ordinaryCollides = moved && (notationStillCollides || noteStillCollides);
@@ -2970,8 +3006,7 @@ bool naturalFermataPlacementIsSafe(const RectF& rect, const std::vector<Fingerin
 
     if (requiredVerticalMoveFromMarkObstacles(rect, obstacles, ctx.staffIdx, ctx.above, clearance) > 0.0
         || requiredVerticalMoveFromStructuralObstacles(rect, ctx.structuralObstacles, ctx.above, clearance) > 0.0
-        || slurAvoidanceForRect(rect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, ctx.spatium,
-                               PM_FINGERING_SLUR_CLEARANCE).conflict) {
+        || slurAvoidanceForRect(rect, obstacles, ctx.staffIdx, ctx.staffTop, ctx.above, ctx.spatium).conflict) {
         return false;
     }
 
@@ -3055,8 +3090,7 @@ bool compactExcessiveAutomaticFermataStack(const std::vector<Fingering*>& finger
                                                        PM_FINGERING_MARK_CLEARANCE_MIN * spatium) <= 0.0
               && requiredVerticalMoveFromStructuralObstacles(finalRect, ctx.structuralObstacles, above,
                                                              PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) <= 0.0
-              && !slurAvoidanceForRect(finalRect, compoundObstacles, ctx.staffIdx, ctx.staffTop, above, spatium,
-                                       PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict
+              && !slurAvoidanceForRect(finalRect, compoundObstacles, ctx.staffIdx, ctx.staffTop, above, spatium).conflict
               && fingeringGroupFinalTuckClearsSkyline(groupRect, finalRect, ctx);
         if (!candidate.slurResolved || !onPage || !clearsNotation
             || !rectsClearHorizontally(finalRect, fermataRect, clearance)
@@ -3135,8 +3169,7 @@ bool rectClearsGraceFingeringAlignment(const RectF& baseRect, const RectF& rect,
                                                  PM_FINGERING_MARK_CLEARANCE_MIN * spatium) > 0.0
         || requiredVerticalMoveFromStructuralObstacles(rect, structuralObstacles, above,
                                                        PM_FINGERING_STRUCTURE_CLEARANCE_MIN * spatium) > 0.0
-        || slurAvoidanceForRect(rect, obstacles, staffIdx, staffTop, above, spatium,
-                                PM_FINGERING_SLUR_CLEARANCE_TUCK).conflict) {
+        || slurAvoidanceForRect(rect, obstacles, staffIdx, staffTop, above, spatium).conflict) {
         return false;
     }
 
@@ -3390,7 +3423,8 @@ void retryPianomaniaSlurChainTucks(std::vector<PmFingeringGroupAdjustment>& adju
 
 // A slur chain whose digits split around the slur — some tucked under it,
 // some lifted over it — takes the outliers under the slur when every one of
-// them fits the near-touch pocket there; otherwise the chain stays as it is.
+// them fits the pocket there at the slur clearance; otherwise the chain stays
+// as it is.
 void rescuePianomaniaSlurChainOutliers(std::vector<PmFingeringGroupAdjustment>& adjustments,
                                        const std::vector<size_t>& chain)
 {
