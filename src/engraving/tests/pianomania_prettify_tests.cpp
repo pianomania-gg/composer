@@ -4328,3 +4328,60 @@ TEST_F(Engraving_PianomaniaPrettifyTests, fingeringsKeepSlurClearanceBesideAndUn
     MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
     MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
 }
+
+namespace {
+// No two digits of one chord overlap.
+void expectChordDigitsApart(Score* score)
+{
+    size_t stacks = 0;
+    for (const Chord* chord : collectChords(score)) {
+        std::vector<const Fingering*> digits;
+        for (const Note* note : chord->notes()) {
+            for (const EngravingItem* item : note->el()) {
+                if (item->isFingering() && item->visible() && !toFingering(item)->plainText().isEmpty()) {
+                    digits.push_back(toFingering(item));
+                }
+            }
+        }
+        stacks += digits.size() > 1 ? 1 : 0;
+        for (size_t i = 0; i < digits.size(); ++i) {
+            for (size_t j = i + 1; j < digits.size(); ++j) {
+                EXPECT_FALSE(rectsOverlap(digits[i]->pageBoundingRect(), digits[j]->pageBoundingRect()))
+                    << "digits " << digits[i]->plainText().toStdString() << " and " << digits[j]->plainText().toStdString()
+                    << " at tick " << chord->tick().ticks();
+            }
+        }
+    }
+    EXPECT_GT(stacks, 0u);
+}
+} // namespace
+
+// Farewell m19 in the live publication's own system breaks: the page-stage
+// rerun lays the left hand's "2 4" out against a skyline that already holds
+// the slur under them, and vanilla autoplace put both digits just past the
+// slur, one on top of the other. Every chord's digits stay apart, both in the
+// export layout and after Prettify persists it.
+TEST_F(Engraving_PianomaniaPrettifyTests, chordDigitsNeverOverprintPastASlur)
+{
+    {
+        PracticeExportFlags flags;
+        MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/gretchaninov-op98-no4-farewell.mscz");
+        ASSERT_TRUE(score);
+        relayoutScore(score);
+        expectChordDigitsApart(score);
+        delete score;
+    }
+
+    const bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    const bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+    MScore::pianomaniaPrettifySlursFingerings = false;
+    MScore::pianomaniaForceNormalizeSlursFingerings = false;
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/gretchaninov-op98-no4-farewell.mscz");
+    ASSERT_TRUE(score);
+    applyPrettifyCommand(score);
+    relayoutScore(score);
+    expectChordDigitsApart(score);
+    delete score;
+    MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+    MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
+}

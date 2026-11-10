@@ -2342,6 +2342,23 @@ std::vector<FingeringObstacle> collectPianomaniaFingeringObstacles(System* syste
     return obstacles;
 }
 
+// Vanilla autoplace places each digit of a chord against the skyline on its
+// own. Once a slur sits in that skyline (the page-stage rerun), every digit
+// lands just past the slur and the chord's digits print on top of each other
+// (Farewell m19: the left hand's "2" over its "4").
+bool fingeringGroupDigitsOverprint(const std::vector<Fingering*>& fingerings)
+{
+    for (size_t i = 0; i < fingerings.size(); ++i) {
+        const RectF rect = fingeringSystemRect(fingerings[i]);
+        for (size_t j = i + 1; j < fingerings.size(); ++j) {
+            if (rectsOverlap(rect, fingeringSystemRect(fingerings[j]))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Re-lays a fingering group on the given side. Vanilla stacking of multiple
 // digits on one chord comes from the skyline, which is stale by this point in
 // the pass, so the stack is rebuilt manually preserving note order (the digit
@@ -3967,9 +3984,11 @@ void adjustPianomaniaFingeringsAroundNotationForSystem(System* system, bool addF
             return false;
         }
         bool moved = false;
-        if (multiChord) {
+        if (multiChord || fingeringGroupDigitsOverprint(group)) {
             // Cross-voice digits meeting on one side stack like the digits of
-            // a single chord (outermost note's digit outermost).
+            // a single chord (outermost note's digit outermost); so do a
+            // chord's own digits that vanilla autoplace printed on top of
+            // each other.
             setFingeringGroupPlacementAndRelayout(group, group.front()->placement());
             moved = true;
         }
