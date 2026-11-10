@@ -4198,11 +4198,60 @@ TEST_F(Engraving_PianomaniaPrettifyTests, digitOverMarcatoKeepsClearGap)
     delete score;
 }
 
+namespace {
+// Shortest distance from a rect to a slur segment's drawn body: the true
+// distance to the centerline, less the segment's midThickness (the drawn
+// body never reaches farther from the centerline than that).
+double rectSlurBodyDistance(const RectF& rect, const SlurSegment* segment)
+{
+    const PointF origin = segment->pagePos();
+    const CubicBezier bezier(origin + segment->ups(Grip::START).pos(), origin + segment->ups(Grip::BEZIER1).pos(),
+                             origin + segment->ups(Grip::BEZIER2).pos(), origin + segment->ups(Grip::END).pos());
+    double nearest = std::numeric_limits<double>::max();
+    static constexpr int SAMPLES = 4000;
+    for (int i = 0; i <= SAMPLES; ++i) {
+        const PointF point = bezier.pointAtPercent(double(i) / SAMPLES);
+        const double dx = std::max({ rect.left() - point.x(), 0.0, point.x() - rect.right() });
+        const double dy = std::max({ rect.top() - point.y(), 0.0, point.y() - rect.bottom() });
+        nearest = std::min(nearest, std::hypot(dx, dy));
+    }
+    return nearest - segment->ldata()->midThickness();
+}
+
+// Every visible fingering keeps the documented minimum slur clearance from
+// every slur segment on its system.
+void expectFingeringsClearSlurs(Score* score, double minimumSp)
+{
+    const PrettifySnapshot snapshot = capturePrettifySnapshot(score);
+    size_t checked = 0;
+    for (const FingeringSnapshotEntry& entry : snapshot.fingerings) {
+        const Fingering* fingering = entry.fingering;
+        if (!fingering || !fingering->visible() || !fingering->note() || fingering->plainText().isEmpty()) {
+            continue;
+        }
+        const System* system = fingering->note()->chord()->measure()->system();
+        ASSERT_TRUE(system);
+        const RectF rect = fingering->pageBoundingRect();
+        for (const SpannerSegment* spannerSegment : system->spannerSegments()) {
+            if (!spannerSegment->isSlurSegment() || !spannerSegment->visible()) {
+                continue;
+            }
+            const double gapSp = rectSlurBodyDistance(rect, toSlurSegment(spannerSegment)) / fingering->spatium();
+            ++checked;
+            EXPECT_GE(gapSp, minimumSp - 0.005)
+                << "fingering " << fingering->plainText().toStdString() << " at tick " << fingering->tick().ticks();
+        }
+    }
+    EXPECT_GT(checked, 0u);
+}
+} // namespace
+
 // Test value: Clementi Op. 36 No. 2 I m36. The "1" on the last sixteenth of a
-// beamed group fits under the phrase slur its neighbours tuck under: resting
-// on its beam at the staff-line floor, under the slur, at most half a space
-// toward its stem — not lifted over the slur.
-TEST_F(Engraving_PianomaniaPrettifyTests, digitTucksUnderPhraseSlurOnItsBeam)
+// beamed group stays over its own note on its beam side and keeps the slur
+// clearance from the phrase slur over the group: the pocket between the beam
+// and the slur is too shallow for it, so it goes past the slur instead of
+// resting on the curve.
+TEST_F(Engraving_PianomaniaPrettifyTests, digitKeepsSlurClearanceOverItsBeam)
 {
     PracticeExportFlags flags;
     MasterScore* score = readAutoLaidOut(u"clementi-op36-no2-i-under-slur-pocket.mscz");
@@ -4235,7 +4284,8 @@ TEST_F(Engraving_PianomaniaPrettifyTests, digitTucksUnderPhraseSlurOnItsBeam)
     }
     EXPECT_LE(digitRect.bottom(), beamTop - 0.1 * sp + 1e-3);
 
-    // Under the covering slur: every curve point over the digit is above it.
+    // Clear of the covering slur by the documented minimum, as is every other
+    // digit in the excerpt.
     const Slur* covering = nullptr;
     for (const auto& pair : score->spanner()) {
         const Slur* slur = pair.second && pair.second->isSlur() ? toSlur(pair.second) : nullptr;
@@ -4244,22 +4294,37 @@ TEST_F(Engraving_PianomaniaPrettifyTests, digitTucksUnderPhraseSlurOnItsBeam)
         }
     }
     ASSERT_TRUE(covering);
-    size_t samples = 0;
     for (const SpannerSegment* spannerSegment : covering->spannerSegments()) {
-        const SlurSegment* segment = toSlurSegment(spannerSegment);
-        const PointF origin = segment->pagePos();
-        const CubicBezier bezier(origin + segment->ups(Grip::START).pos(), origin + segment->ups(Grip::BEZIER1).pos(),
-                                 origin + segment->ups(Grip::BEZIER2).pos(), origin + segment->ups(Grip::END).pos());
-        for (int i = 0; i <= 200; ++i) {
-            const PointF point = bezier.pointAtPercent(i / 200.0);
-            if (point.x() < digitRect.left() || point.x() > digitRect.right()) {
-                continue;
-            }
-            EXPECT_LT(point.y() + 0.5 * segment->ldata()->midThickness(), digitRect.top());
-            ++samples;
-        }
+        EXPECT_GE(rectSlurBodyDistance(digitRect, toSlurSegment(spannerSegment)), (0.25 - 0.005) * sp);
     }
-    EXPECT_GT(samples, 0u);
+    expectFingeringsClearSlurs(score, 0.25);
 
     delete score;
+}
+
+// Farewell (Gretchaninov Op. 98 No. 4): digits beside slur ends (m7, m19) and
+// under the opening phrase slurs (m1, m9) keep 0.25sp from every slur, both in
+// the export layout and after Prettify persists them for an ordinary layout.
+TEST_F(Engraving_PianomaniaPrettifyTests, fingeringsKeepSlurClearanceBesideAndUnderSlurs)
+{
+    {
+        PracticeExportFlags flags;
+        MasterScore* score = readAutoLaidOut(u"gretchaninov-op98-no4-farewell.mscz");
+        ASSERT_TRUE(score);
+        expectFingeringsClearSlurs(score, 0.25);
+        delete score;
+    }
+
+    const bool previousPrettify = MScore::pianomaniaPrettifySlursFingerings;
+    const bool previousForceNormalize = MScore::pianomaniaForceNormalizeSlursFingerings;
+    MScore::pianomaniaPrettifySlursFingerings = false;
+    MScore::pianomaniaForceNormalizeSlursFingerings = false;
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/gretchaninov-op98-no4-farewell.mscz");
+    ASSERT_TRUE(score);
+    applyPrettifyCommand(score);
+    relayoutScore(score);
+    expectFingeringsClearSlurs(score, 0.25);
+    delete score;
+    MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
+    MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
 }
