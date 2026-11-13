@@ -2198,6 +2198,33 @@ TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutHidesMetronomeTempoIndicator
     delete score;
 }
 
+TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutTrimsTempoSeparatorsHiddenByFormatting)
+{
+    // Bartok, For Children Vol. 1 No. 1 ends one bold run with "Allegro, " and puts the metronome mark in the
+    // next. The fixture holds the text as written (ScoreText glyph) and as MuseScore regenerates it (<sym>).
+    MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/tempo-indicators-bold-split.mscx");
+    ASSERT_TRUE(score);
+
+    const std::vector<TempoText*> tempoTexts = collectTempoTexts(score);
+    ASSERT_EQ(tempoTexts.size(), 2);
+
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+
+    for (const TempoText* tempoText : tempoTexts) {
+        String xmlText = tempoText->xmlText();
+        SCOPED_TRACE(xmlText.toStdString());
+        EXPECT_EQ(tempoText->plainText(), u"Allegro");
+        EXPECT_TRUE(TextBase::validateText(xmlText));
+        EXPECT_TRUE(tempoText->visible());
+    }
+
+    const std::vector<TempoSnapshotEntry> firstSnapshot = captureTempoSnapshot(score);
+    mu::engraving::pm::applyPianomaniaAutoLayout(score);
+    EXPECT_TRUE(tempoSnapshotsEquivalent(firstSnapshot, captureTempoSnapshot(score)));
+
+    delete score;
+}
+
 TEST_F(Engraving_PianomaniaPrettifyTests, autoLayoutNormalizesExpressionStaffTextOnly)
 {
     MasterScore* score = ScoreRW::readScore(u"pianomania_prettify_data/expression-staff-text.mscx");
