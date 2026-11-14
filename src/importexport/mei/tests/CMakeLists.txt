@@ -68,6 +68,7 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_export_tuplets_include_complete_resolved_geometry:"
     "Mei_Tests.mei_export_hidden_tuplet_semantic_visibility_matches_drawn_geometry:"
     "Mei_Tests.mei_export_hairpins_ending_without_onset_bind_end_element:"
+    "Mei_Tests.mei_export_hairpins_anchor_their_exact_times_across_the_grand_staff:"
     "Mei_Tests.mei_export_omits_spanner_segments_without_a_score_page:"
     "Mei_Tests.mei_export_spanners_on_hidden_rests_use_visible_same_staff_notes:"
     "Mei_Tests.mei_export_pianomania_rubato_zone_overlap_fails:"
@@ -107,5 +108,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*49 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*50 tests"
 )

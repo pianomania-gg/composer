@@ -273,56 +273,125 @@ const ChordRest *exportedChordRestInStaff(const Segment *segment,
 }
 
 /**
- * A hairpin can end on a tick where its staff starts no ChordRest: inside a
- * sustained note (a MuseScore time-tick anchor) or at the end of the score.
- * MEI @endid must still name an element, so the end binds to the staff's next
- * exported onset after that tick. When the staff has no later onset, it binds
- * to the staff's last exported ChordRest before the tick.
+ * The exported staves of the part that owns staffIdx, nearest to it first:
+ * staffIdx itself, then the part's other staves by distance (the upper one
+ * first at equal distance).
  */
-const ChordRest *findExportedEndAnchorAroundTick(const Spanner *spanner) {
-  const Score *score = spanner->score();
-  const Fraction endTick = spanner->tick2();
-  const staff_idx_t staffIdx = track2staff(spanner->effectiveTrack2());
-  const track_idx_t trackCount = score->ntracks();
-
-  for (const Segment *segment = score->firstSegment(SegmentType::ChordRest);
-       segment; segment = segment->next1(SegmentType::ChordRest)) {
-    if (segment->tick() < endTick) {
-      continue;
-    }
-    if (const ChordRest *next =
-            exportedChordRestInStaff(segment, staffIdx, trackCount)) {
-      return next;
+std::vector<staff_idx_t> exportedPartStavesNearestFirst(const Score *score,
+                                                         staff_idx_t staffIdx) {
+  std::vector<staff_idx_t> staves;
+  const Staff *ownStaff = score->staff(staffIdx);
+  const Part *part = ownStaff ? ownStaff->part() : nullptr;
+  if (!part) {
+    return staves;
+  }
+  for (const Staff *partStaff : part->staves()) {
+    if (shouldExportStaff(partStaff)) {
+      staves.push_back(partStaff->idx());
     }
   }
-
-  const ChordRest *last = nullptr;
-  for (const Segment *segment = score->firstSegment(SegmentType::ChordRest);
-       segment && segment->tick() < endTick;
-       segment = segment->next1(SegmentType::ChordRest)) {
-    if (const ChordRest *candidate =
-            exportedChordRestInStaff(segment, staffIdx, trackCount)) {
-      last = candidate;
-    }
-  }
-  return last;
+  const auto distance = [staffIdx](staff_idx_t candidate) {
+    return candidate > staffIdx ? candidate - staffIdx : staffIdx - candidate;
+  };
+  std::stable_sort(staves.begin(), staves.end(),
+                   [&distance](staff_idx_t left, staff_idx_t right) {
+                     return distance(left) < distance(right);
+                   });
+  return staves;
 }
 
 const ChordRest *findExportedSpannerEndpointAtTick(Spanner *spanner,
                                                    bool start);
 
+/**
+ * Where a hairpin starts or ends in the exported MEI. A hairpin runs between
+ * two exact times, Spanner::tick and Spanner::tick2, and Game Mode places it
+ * between the times of its @startid and @endid elements.
+ *
+ * When an exported ChordRest of the hairpin's part starts exactly at the
+ * endpoint's time, it is the anchor: the hairpin's own voice first, then its
+ * staff's other voices, then the part's other staves. The hairpin keeps its
+ * own @staff, so an anchor in the other staff gives only the time.
+ *
+ * When nothing in the part starts at that time (it falls inside held notes in
+ * every staff, or on the final barline), the anchor is the part's latest
+ * exported onset before it, in the bar that contains the time or ends at it.
+ * The offset from that onset to the endpoint is written as @startto or
+ * @endto, in beats of the anchor's bar.
+ *
+ * No such anchor exists only when the part exports no ChordRest in that bar.
+ */
+std::optional<ExportedHairpinEndpoint>
+findExportedHairpinEndpoint(Spanner *hairpin, bool start) {
+  const Score *score = hairpin ? hairpin->score() : nullptr;
+  if (!score) {
+    return std::nullopt;
+  }
+  const Fraction tick = start ? hairpin->tick() : hairpin->tick2();
+  const track_idx_t track = start ? hairpin->track() : hairpin->effectiveTrack2();
+  const track_idx_t trackCount = score->ntracks();
+  if (track >= trackCount) {
+    return std::nullopt;
+  }
+
+  if (const ChordRest *own = findExportedSpannerEndpointAtTick(hairpin, start);
+      own && own->tick() == tick) {
+    return ExportedHairpinEndpoint{ own, Fraction(0, 1) };
+  }
+
+  const std::vector<staff_idx_t> staves =
+      exportedPartStavesNearestFirst(score, track2staff(track));
+  if (const Segment *segment =
+          score->tick2segment(tick, true, SegmentType::ChordRest);
+      segment && segment->tick() == tick) {
+    for (staff_idx_t staffIdx : staves) {
+      if (const ChordRest *atTick =
+              exportedChordRestInStaff(segment, staffIdx, trackCount)) {
+        return ExportedHairpinEndpoint{ atTick, Fraction(0, 1) };
+      }
+    }
+  }
+
+  // The bar that contains the time is searched first; when the time is that
+  // bar's downbeat, or the final barline, the bar that ends there.
+  std::vector<const Measure *> bars;
+  for (const Measure *measure = score->firstMeasure(); measure;
+       measure = measure->nextMeasure()) {
+    if (measure->tick() <= tick && tick < measure->endTick()) {
+      bars.insert(bars.begin(), measure);
+      break;
+    }
+    if (measure->endTick() == tick) {
+      bars.push_back(measure);
+    }
+  }
+  for (const Measure *bar : bars) {
+    for (const Segment *segment = bar->last(SegmentType::ChordRest); segment;
+         segment = segment->prev(SegmentType::ChordRest)) {
+      if (segment->tick() >= tick) {
+        continue;
+      }
+      for (staff_idx_t staffIdx : staves) {
+        if (const ChordRest *before =
+                exportedChordRestInStaff(segment, staffIdx, trackCount)) {
+          return ExportedHairpinEndpoint{ before, tick - before->tick() };
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 const ChordRest *findExportedSpannerEndpointAnchor(Spanner *spanner,
                                                     bool start) {
-  if (const ChordRest *anchor =
-          findExportedSpannerEndpointAtTick(spanner, start)) {
-    return anchor;
+  if (spanner && spanner->isHairpin()) {
+    const std::optional<ExportedHairpinEndpoint> endpoint =
+        findExportedHairpinEndpoint(spanner, start);
+    return endpoint ? endpoint->anchor : nullptr;
   }
-  // Hairpins must always name an end element. Pedals keep their documented
-  // unresolved-end export, which omits their geometry.
-  if (start || !spanner || !spanner->score() || !spanner->isHairpin()) {
-    return nullptr;
-  }
-  return findExportedEndAnchorAroundTick(spanner);
+  // Pedals keep their documented unresolved-end export, which omits their
+  // geometry.
+  return findExportedSpannerEndpointAtTick(spanner, start);
 }
 
 const ChordRest *findExportedSpannerEndpointAtTick(Spanner *spanner,
@@ -1183,7 +1252,9 @@ bool MeiExporter::write(std::string &meiData) {
     if (!this->validateDanceShowSpans()) {
       return false;
     }
-    this->prepareSpannerEndpointAnchors();
+    if (!this->prepareSpannerEndpointAnchors()) {
+      return false;
+    }
 
     this->writeHeader();
 
@@ -1502,9 +1573,11 @@ bool MeiExporter::validateDanceShowSpans() {
   return true;
 }
 
-void MeiExporter::prepareSpannerEndpointAnchors() {
+bool MeiExporter::prepareSpannerEndpointAnchors() {
   m_spannerStartAnchors.clear();
   m_spannerEndAnchors.clear();
+  m_hairpinStartOffsets.clear();
+  m_hairpinEndOffsets.clear();
 
   for (const auto &[tick, spanner] : m_score->spannerMap().map()) {
     UNUSED(tick);
@@ -1520,6 +1593,35 @@ void MeiExporter::prepareSpannerEndpointAnchors() {
       continue;
     }
 
+    if (spanner->isHairpin()) {
+      if (!shouldExportStaff(spanner->staff())) {
+        continue;
+      }
+      // Practice and Game Mode draw every hairpin between its two anchors,
+      // so a hairpin that cannot name both is an export failure, never a
+      // silently dropped mark.
+      const std::optional<ExportedHairpinEndpoint> start =
+          findExportedHairpinEndpoint(spanner, true);
+      const std::optional<ExportedHairpinEndpoint> end =
+          findExportedHairpinEndpoint(spanner, false);
+      if (!start || !end) {
+        LOGE() << "MEI export found no exported ChordRest to anchor the "
+               << (start ? "end" : "start") << " of the hairpin at ticks "
+               << spanner->tick().ticks() << "-" << spanner->tick2().ticks()
+               << " in staff " << spanner->staffIdx() + 1;
+        return false;
+      }
+      m_spannerStartAnchors.emplace(start->anchor, spanner);
+      m_spannerEndAnchors.emplace(end->anchor, spanner);
+      if (start->offset.isNotZero()) {
+        m_hairpinStartOffsets.emplace(spanner, *start);
+      }
+      if (end->offset.isNotZero()) {
+        m_hairpinEndOffsets.emplace(spanner, *end);
+      }
+      continue;
+    }
+
     if (const ChordRest *anchor =
             findExportedSpannerEndpointAnchor(spanner, true)) {
       m_spannerStartAnchors.emplace(anchor, spanner);
@@ -1529,6 +1631,7 @@ void MeiExporter::prepareSpannerEndpointAnchors() {
       m_spannerEndAnchors.emplace(anchor, spanner);
     }
   }
+  return true;
 }
 
 /**
@@ -4771,6 +4874,11 @@ bool MeiExporter::writeDir(const TextLineBase *dir,
   pugi::xml_node dirNode = m_currentNode.append_child();
   libmei::Dir meiDir = Convert::dirToMEI(dir, meiLines);
   meiDir.SetStartid(startid);
+  if (hairpin) {
+    // A cresc. or dim. line can anchor to a note of the other staff at its
+    // exact time; its own staff still owns the marking.
+    Convert::staffIdentToMEI(hairpin, meiDir);
+  }
   meiDir.Write(dirNode, this->getXmlIdFor(dir, 'd'));
 
   double yOffset =
@@ -4816,6 +4924,10 @@ bool MeiExporter::writeDir(const TextLineBase *dir,
   const std::string dirSegments = formatPlacedSegments(segmentsOnScorePages(dir));
   if (!dirSegments.empty()) {
     dirNode.append_attribute("pm:segments") = dirSegments.c_str();
+  }
+
+  if (hairpin) {
+    this->writeHairpinEndpointOffsets(dirNode, hairpin);
   }
 
   this->writeLines(dirNode, meiLines);
@@ -5217,10 +5329,37 @@ bool MeiExporter::writeHairpin(const Hairpin *hairpin,
     }
   }
 
+  this->writeHairpinEndpointOffsets(hairpinNode, hairpin);
+
   // Add the node to the map of open control events
   this->addNodeToOpenControlEvents(hairpinNode, hairpin, startid);
 
   return true;
+}
+
+/**
+ * Write @startto and @endto for a hairpin endpoint that falls after its
+ * anchor's onset: the time from that onset to the endpoint, in beats (the
+ * time signature's denominator unit) of the anchor's bar, the unit of the
+ * anchor's exported @beat.
+ */
+void MeiExporter::writeHairpinEndpointOffsets(pugi::xml_node node,
+                                              const Hairpin *hairpin) const {
+  const auto write = [this, &node, hairpin](
+                         const std::map<const Spanner *, ExportedHairpinEndpoint> &offsets,
+                         const char *attribute) {
+    const auto found = offsets.find(hairpin);
+    if (found == offsets.end()) {
+      return;
+    }
+    const ExportedHairpinEndpoint &endpoint = found->second;
+    const double ticksPerBeat =
+        TimeSigFrac(endpoint.anchor->measure()->timesig()).dUnitTicks();
+    node.append_attribute(attribute) =
+        formatBeatPosition(endpoint.offset.ticks() / ticksPerBeat).c_str();
+  };
+  write(m_hairpinStartOffsets, "startto");
+  write(m_hairpinEndOffsets, "endto");
 }
 
 /**
@@ -7071,7 +7210,7 @@ void MeiExporter::addNodeToOpenControlEvents(pugi::xml_node node,
                                              const Spanner *spanner,
                                              const std::string &startid) {
   if (spanner->isRubatoZone() || spanner->isPyroSpan() ||
-      spanner->isLaserSpan()) {
+      spanner->isLaserSpan() || spanner->isHairpin()) {
     // These bind @endid through their dedicated anchor maps, so the
     // @endid always resolves later even when the start and end elements
     // coincide.

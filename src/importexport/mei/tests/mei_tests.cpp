@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <iterator>
 #include <cfloat>
 #include <cmath>
@@ -66,6 +67,7 @@
 #include "engraving/dom/pedal.h"
 #include "engraving/dom/rest.h"
 #include "engraving/dom/segment.h"
+#include "engraving/dom/sig.h"
 #include "engraving/dom/slur.h"
 #include "engraving/dom/spanner.h"
 #include "engraving/dom/staff.h"
@@ -85,6 +87,8 @@
 #include "importexport/mei/internal/meiconverter.h"
 #include "importexport/mei/internal/meiwriter.h"
 #include "importexport/mei/pmmeiexport.h"
+
+#include "pugixml.hpp"
 
 using namespace mu::engraving;
 
@@ -1546,6 +1550,78 @@ TEST_F(Mei_Tests, mei_export_keeps_legitimate_multi_system_slur_segments) {
     delete score;
 }
 
+struct MeiExportedAnchorPosition {
+    std::string measure;
+    std::string staff;
+    double beat = 0.0;
+};
+
+void collectExportedAnchorPositions(const pugi::xml_node& node, const std::string& measure, const std::string& staff,
+                                    std::map<std::string, MeiExportedAnchorPosition>& positions)
+{
+    for (const pugi::xml_node child : node.children()) {
+        const std::string name = child.name();
+        const std::string childMeasure = name == "measure" ? child.attribute("n").value() : measure;
+        const std::string childStaff = name == "staff" ? child.attribute("n").value() : staff;
+        const pugi::xml_attribute beat = child.attribute("beat");
+        const pugi::xml_attribute id = child.attribute("xml:id");
+        if (beat && id && !childStaff.empty()) {
+            positions[id.value()] = { childMeasure, childStaff, beat.as_double() };
+        }
+        collectExportedAnchorPositions(child, childMeasure, childStaff, positions);
+    }
+}
+
+struct MeiHairpinEndpoint {
+    std::string measure;
+    std::string staff;
+    double beat = 0.0;
+    double offset = 0.0;
+    bool hasOffset = false;
+};
+
+/// Where an exported hairpin endpoint lands: its anchor's bar, staff and beat, and its @startto/@endto.
+std::optional<MeiHairpinEndpoint> exportedHairpinEndpoint(const pugi::xml_node& hairpin,
+                                                          const std::map<std::string, MeiExportedAnchorPosition>& positions,
+                                                          bool start)
+{
+    const std::string reference = hairpin.attribute(start ? "startid" : "endid").value();
+    if (reference.size() < 2 || reference.front() != '#') {
+        return std::nullopt;
+    }
+    const auto found = positions.find(reference.substr(1));
+    if (found == positions.end()) {
+        return std::nullopt;
+    }
+    const pugi::xml_attribute offset = hairpin.attribute(start ? "startto" : "endto");
+    return MeiHairpinEndpoint { found->second.measure, found->second.staff, found->second.beat,
+                                offset ? offset.as_double() : 0.0, static_cast<bool>(offset) };
+}
+
+void collectHairpinNodes(const pugi::xml_node& node, std::vector<pugi::xml_node>& hairpins)
+{
+    for (const pugi::xml_node child : node.children()) {
+        const std::string name = child.name();
+        if (name == "hairpin" || (name == "dir" && child.attribute("extender"))) {
+            hairpins.push_back(child);
+        }
+        collectHairpinNodes(child, hairpins);
+    }
+}
+
+Hairpin* addTestHairpin(Score* score, HairpinType type, track_idx_t track, const Fraction& tick, const Fraction& tick2)
+{
+    Hairpin* hairpin = Factory::createHairpin(score->dummy()->segment());
+    hairpin->setHairpinType(type);
+    hairpin->setTick(tick);
+    hairpin->setTick2(tick2);
+    hairpin->setTrack(track);
+    hairpin->setTrack2(track);
+    hairpin->setAnchor(Spanner::Anchor::SEGMENT);
+    score->addSpanner(hairpin);
+    return hairpin;
+}
+
 TEST_F(Mei_Tests, mei_export_hairpins_ending_without_onset_bind_end_element) {
     auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
         MeiWriter meiWriter;
@@ -1570,41 +1646,161 @@ TEST_F(Mei_Tests, mei_export_hairpins_ending_without_onset_bind_end_element) {
     }
     ASSERT_TRUE(sustainedChord);
     ASSERT_TRUE(lastChordRest);
+    std::vector<Spanner*> authored;
+    for (const auto& entry : score->spannerMap().map()) {
+        authored.push_back(entry.second);
+    }
+    for (Spanner* spanner : authored) {
+        score->removeSpanner(spanner);
+    }
 
-    const auto addHairpin = [score](const Fraction& tick, const Fraction& tick2) {
-        Hairpin* hairpin = Factory::createHairpin(score->dummy()->segment());
-        hairpin->setHairpinType(HairpinType::DIM_HAIRPIN);
-        hairpin->setTick(tick);
-        hairpin->setTick2(tick2);
-        hairpin->setTrack(0);
-        hairpin->setTrack2(0);
-        hairpin->setAnchor(Spanner::Anchor::SEGMENT);
-        score->addSpanner(hairpin);
-    };
     // One hairpin ends inside a sustained note; the other ends at the final barline.
-    addHairpin(sustainedChord->tick(), sustainedChord->tick() + sustainedChord->actualTicks() * Fraction(1, 2));
-    addHairpin(lastChordRest->tick(), score->endTick());
+    const Fraction halfSustain = sustainedChord->actualTicks() * Fraction(1, 2);
+    addTestHairpin(score, HairpinType::DIM_HAIRPIN, 0, sustainedChord->tick(), sustainedChord->tick() + halfSustain);
+    addTestHairpin(score, HairpinType::DIM_HAIRPIN, 0, lastChordRest->tick(), score->endTick());
     score->setLayoutAll();
     score->doLayout();
+    const double sustainedBeats = halfSustain.ticks() / static_cast<double>(TimeSigFrac(sustainedChord->measure()->timesig()).dUnitTicks());
+    const double lastBeats = lastChordRest->actualTicks().ticks()
+                             / static_cast<double>(TimeSigFrac(lastChordRest->measure()->timesig()).dUnitTicks());
 
     const String outputName = u"pianomania-hairpin-end-without-onset.test.mei";
     ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
     delete score;
 
     const std::string meiText = readTestTextFile(outputName);
-    const std::vector<std::string> hairpinTags = collectStartTags(meiText, "hairpin");
-    ASSERT_GE(hairpinTags.size(), 2u);
-    for (const std::string& tag : hairpinTags) {
-        const std::optional<std::string> endId = xmlAttributeValue(tag, "endid");
-        ASSERT_TRUE(endId.has_value()) << tag;
-        EXPECT_NE(meiText.find("xml:id=\"" + endId->substr(1) + "\""), std::string::npos) << tag;
+    pugi::xml_document document;
+    ASSERT_TRUE(document.load_string(meiText.c_str()));
+    std::map<std::string, MeiExportedAnchorPosition> positions;
+    collectExportedAnchorPositions(document, "", "", positions);
+    std::vector<pugi::xml_node> hairpins;
+    collectHairpinNodes(document, hairpins);
+    ASSERT_EQ(hairpins.size(), 2u);
+
+    // Neither end has an onset at its time, so each binds the note sounding there and carries the
+    // rest of the time as @endto: half the sustained note, and all of the final note.
+    std::vector<double> endOffsets;
+    for (const pugi::xml_node& hairpin : hairpins) {
+        const std::optional<MeiHairpinEndpoint> start = exportedHairpinEndpoint(hairpin, positions, true);
+        const std::optional<MeiHairpinEndpoint> end = exportedHairpinEndpoint(hairpin, positions, false);
+        ASSERT_TRUE(start.has_value());
+        ASSERT_TRUE(end.has_value());
+        EXPECT_FALSE(start->hasOffset);
+        EXPECT_EQ(hairpin.attribute("startid").value(), std::string(hairpin.attribute("endid").value()));
+        ASSERT_TRUE(end->hasOffset);
+        endOffsets.push_back(end->offset);
     }
+    EXPECT_NEAR(endOffsets[0], sustainedBeats, 0.0001);
+    EXPECT_NEAR(endOffsets[1], lastBeats, 0.0001);
 
     const std::vector<std::string> measureRestTags = collectStartTags(meiText, "mRest");
     ASSERT_FALSE(measureRestTags.empty());
     for (const std::string& tag : measureRestTags) {
         EXPECT_TRUE(xmlAttributeValue(tag, "pm:xy").has_value()) << tag;
     }
+}
+
+TEST_F(Mei_Tests, mei_export_hairpins_anchor_their_exact_times_across_the_grand_staff) {
+    auto exportFunc = [](Score* score, const muse::io::path_t& path) -> Err {
+        MeiWriter meiWriter;
+        return meiWriter.writeScore(score, path);
+    };
+
+    // 2/4 grand staff. Bar 2's upper staff plays eighths at beats 1 and 1.5 and a quarter at beat 2;
+    // its lower staff holds a half note under sixteenths.
+    MasterScore* score = ScoreRW::readScore(MEI_DIR + u"pedal-unresolved-end-01.mscx", false);
+    ASSERT_TRUE(score);
+    std::vector<Spanner*> authored;
+    for (const auto& entry : score->spannerMap().map()) {
+        authored.push_back(entry.second);
+    }
+    for (Spanner* spanner : authored) {
+        score->removeSpanner(spanner);
+    }
+
+    const Measure* bar2 = score->firstMeasure()->nextMeasure();
+    ASSERT_TRUE(bar2);
+    const Fraction barStart = bar2->tick();
+    const Fraction sixteenth(1, 16);
+    const Fraction thirtySecond(1, 32);
+    // Ends where only the lower staff starts a note, inside the upper staff's quarter.
+    addTestHairpin(score, HairpinType::CRESC_HAIRPIN, 0, barStart, barStart + sixteenth * 5);
+    // Starts there, and ends on bar 3's downbeat.
+    addTestHairpin(score, HairpinType::DIM_HAIRPIN, 0, barStart + sixteenth * 5, bar2->endTick());
+    // Starts between two sixteenths, where neither staff starts anything, and ends on the final barline.
+    addTestHairpin(score, HairpinType::CRESC_HAIRPIN, 0, barStart + sixteenth * 4 + thirtySecond, score->endTick());
+    // The same start as a cresc. line.
+    addTestHairpin(score, HairpinType::CRESC_LINE, 0, barStart + sixteenth * 4 + thirtySecond, bar2->endTick());
+    score->setLayoutAll();
+    score->doLayout();
+    const Measure* lastBar = score->lastMeasure();
+    ASSERT_TRUE(lastBar);
+    const std::string lastBarNumber = std::to_string(lastBar->no() + 1);
+    const double finalBarlineBeat = lastBar->ticks().ticks() / static_cast<double>(TimeSigFrac(lastBar->timesig()).dUnitTicks()) + 1.0;
+
+    const String outputName = u"pianomania-hairpin-exact-time-anchors.test.mei";
+    ASSERT_TRUE(ScoreRW::saveScore(score, outputName, exportFunc));
+    delete score;
+
+    pugi::xml_document document;
+    ASSERT_TRUE(document.load_string(readTestTextFile(outputName).c_str()));
+    std::map<std::string, MeiExportedAnchorPosition> positions;
+    collectExportedAnchorPositions(document, "", "", positions);
+    std::vector<pugi::xml_node> hairpins;
+    collectHairpinNodes(document, hairpins);
+    ASSERT_EQ(hairpins.size(), 4u);
+
+    struct Expected {
+        std::string measure;
+        double beat;
+    };
+    const auto expectEndpoint = [&](const pugi::xml_node& hairpin, bool start, const Expected& expected,
+                                    const std::optional<std::string>& anchorStaff, bool expectOffset) {
+        const std::optional<MeiHairpinEndpoint> endpoint = exportedHairpinEndpoint(hairpin, positions, start);
+        ASSERT_TRUE(endpoint.has_value()) << hairpin.name() << (start ? " start" : " end");
+        EXPECT_EQ(endpoint->measure, expected.measure) << (start ? "start" : "end");
+        EXPECT_NEAR(endpoint->beat + endpoint->offset, expected.beat, 0.0001) << (start ? "start" : "end");
+        EXPECT_EQ(endpoint->hasOffset, expectOffset) << (start ? "start" : "end");
+        if (anchorStaff.has_value()) {
+            EXPECT_EQ(endpoint->staff, *anchorStaff) << (start ? "start" : "end");
+        }
+        EXPECT_STREQ(hairpin.attribute("staff").value(), "1");
+    };
+
+    const auto findHairpin = [&hairpins](const std::function<bool(const pugi::xml_node&)>& matches) {
+        pugi::xml_node found;
+        for (const pugi::xml_node& hairpin : hairpins) {
+            if (matches(hairpin)) {
+                EXPECT_FALSE(found) << hairpin.name();
+                found = hairpin;
+            }
+        }
+        return found;
+    };
+    const auto isWedge = [](const pugi::xml_node& hairpin) { return std::string(hairpin.name()) == "hairpin"; };
+    const pugi::xml_node line = findHairpin([](const pugi::xml_node& hairpin) { return std::string(hairpin.name()) == "dir"; });
+    const pugi::xml_node toLowerOnset = findHairpin([&isWedge](const pugi::xml_node& hairpin) {
+        return isWedge(hairpin) && std::string(hairpin.attribute("form").value()) == "cres" && !hairpin.attribute("startto");
+    });
+    const pugi::xml_node fromLowerOnset = findHairpin([&isWedge](const pugi::xml_node& hairpin) {
+        return isWedge(hairpin) && std::string(hairpin.attribute("form").value()) == "dim";
+    });
+    const pugi::xml_node betweenOnsets = findHairpin([&isWedge](const pugi::xml_node& hairpin) {
+        return isWedge(hairpin) && hairpin.attribute("startto");
+    });
+    ASSERT_TRUE(line);
+    ASSERT_TRUE(toLowerOnset);
+    ASSERT_TRUE(fromLowerOnset);
+    ASSERT_TRUE(betweenOnsets);
+
+    expectEndpoint(toLowerOnset, true, { "2", 1.0 }, "1", false);
+    expectEndpoint(toLowerOnset, false, { "2", 2.25 }, "2", false);
+    expectEndpoint(fromLowerOnset, true, { "2", 2.25 }, "2", false);
+    expectEndpoint(fromLowerOnset, false, { "3", 1.0 }, "1", false);
+    expectEndpoint(betweenOnsets, true, { "2", 2.125 }, "1", true);
+    expectEndpoint(betweenOnsets, false, { lastBarNumber, finalBarlineBeat }, std::nullopt, true);
+    expectEndpoint(line, true, { "2", 2.125 }, "1", true);
+    expectEndpoint(line, false, { "3", 1.0 }, "1", false);
 }
 
 TEST_F(Mei_Tests, mei_export_hidden_tuplet_semantic_visibility_matches_drawn_geometry) {
