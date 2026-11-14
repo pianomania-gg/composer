@@ -53,6 +53,9 @@ endif(NOT BUILD_SHARED_LIBS)
 set(KDDockWidgets_QT6 ON CACHE BOOL "Build against Qt 6" FORCE)
 set(KDDockWidgets_QTQUICK ON CACHE BOOL "Build for QtQuick instead of QtWidgets" FORCE)
 set(KDDockWidgets_EXAMPLES OFF CACHE BOOL "Build the examples" FORCE)
+# kddockwidgets links Qt6::GuiPrivate. Declare it here so the static QML plugin
+# in qml/Muse/Dock, a sibling of the KDDockWidgets directory, can resolve it.
+find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
 add_subdirectory(thirdparty/KDDockWidgets EXCLUDE_FROM_ALL)
 
 target_link_libraries(muse_dockwindow PRIVATE kddockwidgets)
