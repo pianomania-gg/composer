@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "engraving/types/fraction.h"
 #include "engraving/types/types.h"
 #include "engraving/types/symid.h"
 
@@ -74,6 +75,14 @@ class VBox;
 namespace mu::iex::mei {
 class UIDRegister;
 
+/** A hairpin endpoint in the exported MEI: the ChordRest its @startid or
+ * @endid names, and the time from that ChordRest's onset to the endpoint.
+ * A nonzero offset is written as @startto or @endto. */
+struct ExportedHairpinEndpoint {
+  const engraving::ChordRest *anchor = nullptr;
+  engraving::Fraction offset;
+};
+
 enum layerElementCounter {
   ACCID_L = 0,
   BEAM_L,
@@ -117,7 +126,7 @@ private:
   bool validateRubatoZones();
   bool validatePianomaniaHeldPitchCurves();
   bool validateDanceShowSpans();
-  void prepareSpannerEndpointAnchors();
+  bool prepareSpannerEndpointAnchors();
   bool writeScore();
   bool writeScoreDef();
   bool writePgHead(const engraving::VBox *vBox);
@@ -230,6 +239,8 @@ private:
                   const std::string &startid);
   bool writeHairpin(const engraving::Hairpin *hairpin,
                     const std::string &startid);
+  void writeHairpinEndpointOffsets(pugi::xml_node node,
+                                   const engraving::Hairpin *hairpin) const;
   bool writeHarm(const engraving::Harmony *harmony, const std::string &startid);
   bool writeHarpPedal(const engraving::HarpPedalDiagram *harpPedalDiagram,
                       const std::string &startid);
@@ -402,6 +413,11 @@ private:
       m_spannerStartAnchors;
   std::multimap<const engraving::ChordRest *, engraving::Spanner *>
       m_spannerEndAnchors;
+  /** Hairpin endpoints that fall after their anchor's onset. */
+  std::map<const engraving::Spanner *, ExportedHairpinEndpoint>
+      m_hairpinStartOffsets;
+  std::map<const engraving::Spanner *, ExportedHairpinEndpoint>
+      m_hairpinEndOffsets;
   /** A map of items with the @plist value they will need to have added */
   std::map<const engraving::EngravingItem *, std::string> m_plistMap;
   /** A map of chord that are a plist of the arpeggio */
