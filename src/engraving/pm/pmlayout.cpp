@@ -673,17 +673,87 @@ const std::regex& pianomaniaTempoEquationRegex()
     return re;
 }
 
+// Groups: 1 is the closing slash, 2 the tag name, 3 the self-closing slash.
+const std::string& pianomaniaFormattingTagPattern()
+{
+    static const std::string pattern = R"(<(/?)(b|i|u|s|sub|sup|font)(?:\s[^>]*?)?(/?)>)";
+    return pattern;
+}
+
+// Stripping a metronome mark can take one tag of a formatting pair with it, as when the mark opens its own bold run.
+// Drop a closing tag left without its opening tag and a pair left with nothing inside, and close a tag the strip
+// left open.
+std::string balancePianomaniaFormattingTags(const std::string& text)
+{
+    struct OpenTag
+    {
+        std::string name;
+        size_t start = 0;
+        size_t end = 0;
+    };
+
+    static const std::regex formattingTag(pianomaniaFormattingTagPattern());
+    std::string result;
+    std::vector<OpenTag> openTags;
+    std::string::const_iterator copied = text.cbegin();
+    for (std::sregex_iterator tag(text.cbegin(), text.cend(), formattingTag), end; tag != end; ++tag) {
+        result.append(copied, (*tag)[0].first);
+        copied = (*tag)[0].second;
+        const std::string name = (*tag)[2].str();
+        if ((*tag)[1].length() == 0) {
+            if ((*tag)[3].length() == 0) {
+                openTags.push_back({ name, result.size(), result.size() + tag->length() });
+            }
+            result += tag->str();
+            continue;
+        }
+
+        const auto opener = std::find_if(openTags.rbegin(), openTags.rend(), [&name](const OpenTag& openTag) {
+            return openTag.name == name;
+        });
+        if (opener == openTags.rend()) {
+            continue;
+        }
+        if (opener == openTags.rbegin() && opener->end == result.size()) {
+            result.erase(opener->start);
+        } else {
+            result += tag->str();
+        }
+        openTags.erase(std::next(opener).base());
+    }
+    result.append(copied, text.cend());
+
+    for (auto openTag = openTags.rbegin(); openTag != openTags.rend(); ++openTag) {
+        if (openTag->end == result.size()) {
+            result.erase(openTag->start);
+        } else {
+            result += "</" + openTag->name + ">";
+        }
+    }
+    return result;
+}
+
 String cleanPianomaniaTempoIndicatorRemainder(const std::string& text)
 {
+    // Formatting tags hold no text: a separator followed only by tags still ends the visible text, and one
+    // preceded only by tags still starts it.
+    static const std::string formattingTags = "((?:" + pianomaniaFormattingTagPattern() + ")*)";
+    static const std::string separators = R"((?:\s|[,;:]|-|–|—|&ndash;|&mdash;)+)";
+    static const std::regex trailingSeparators(separators + formattingTags + "$");
+    static const std::regex leadingSeparators("^" + formattingTags + separators);
+
     std::string result = text;
     result = std::regex_replace(result, std::regex(R"(\(\s*\)|\[\s*\])"), "");
     result = std::regex_replace(result, std::regex(R"((?:\s|<sym>space</sym>|&nbsp;)+)"), " ");
     result = std::regex_replace(result, std::regex(R"(^\s+|\s+$)"), "");
     result = std::regex_replace(result, std::regex(R"(^[\(\[]\s*|\s*[\)\]]$)"), "");
-    result = std::regex_replace(result, std::regex(R"((?:\s*(?:[,;:]|-|–|—|&ndash;|&mdash;)\s*)+$)"), "");
-    result = std::regex_replace(result, std::regex(R"(^(\s*(?:[,;:]|-|–|—|&ndash;|&mdash;)\s*)+)"), "");
-    result = std::regex_replace(result, std::regex(R"(^\s+|\s+$)"), "");
-    return String::fromStdString(result);
+    std::string previous;
+    do {
+        previous = result;
+        result = std::regex_replace(result, trailingSeparators, "$1");
+        result = std::regex_replace(result, leadingSeparators, "$1");
+    } while (result != previous);
+    return String::fromStdString(balancePianomaniaFormattingTags(result));
 }
 
 bool hasPianomaniaTempoIndicatorPlainRemainder(const String& text)
