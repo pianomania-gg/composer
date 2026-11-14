@@ -4208,12 +4208,11 @@ bool MeiExporter::writeNote(const Note *note, const Chord *chord,
       hasAccPos = true;
     } else {
       meiAccid.Write(accidNode, this->getLayerXmlIdFor(ACCID_L));
-      PointF notePos = note->pagePos();
       double accidentalDistanceMm = note->style().styleMM(Sid::accidentalDistance);
       static constexpr double MM_PER_INCH = 25.4;
       double fallbackOffset = (accidentalDistanceMm / MM_PER_INCH) * DPI;
-      notePos.setX(notePos.x() - fallbackOffset);
       accPos = notePos;
+      accPos.setX(accPos.x() - fallbackOffset);
       hasAccPos = true;
     }
 
@@ -6497,7 +6496,7 @@ bool MeiExporter::writeTie(const Tie *tie, const std::string &startid) {
   if (const Note *startNote = tie->startNote()) {
     startPos = startNote->pagePos();
   }
-  if (const Note *endNote = tie->endNote()) {
+  if (endNote) {
     endPos = endNote->pagePos();
   }
 
