@@ -4412,3 +4412,269 @@ TEST_F(Engraving_PianomaniaPrettifyTests, chordDigitsNeverOverprintPastASlur)
     MScore::pianomaniaPrettifySlursFingerings = previousPrettify;
     MScore::pianomaniaForceNormalizeSlursFingerings = previousForceNormalize;
 }
+
+namespace {
+// Doctor Gradus ad Parnassum as published, laid out for export. Its two voices
+// cross, and many of its slurs and marks are laid out at page stage.
+constexpr const char16_t GRADUS_FIXTURE[] = u"debussy-doctor-gradus-voices-and-page-stage-marks.mscz";
+
+const Slur* slurStartingInMeasure(Score* score, int measureNumber, track_idx_t track)
+{
+    const Measure* measure = measureAt(score, measureNumber - 1);
+    if (!measure) {
+        return nullptr;
+    }
+    for (const auto& pair : score->spanner()) {
+        const Spanner* spanner = pair.second;
+        if (spanner && spanner->isSlur() && spanner->track() == track
+            && spanner->tick() >= measure->tick() && spanner->tick() < measure->endTick()) {
+            return toSlur(spanner);
+        }
+    }
+    return nullptr;
+}
+
+// The page y of a slur's centerline at page x, if a segment spans x.
+bool slurCenterlineYAt(const Slur* slur, double x, double& y)
+{
+    for (const SpannerSegment* spannerSegment : slur->spannerSegments()) {
+        const SlurSegment* segment = toSlurSegment(spannerSegment);
+        const PointF origin = segment->pagePos();
+        const CubicBezier bezier(origin + segment->ups(Grip::START).pos(), origin + segment->ups(Grip::BEZIER1).pos(),
+                                 origin + segment->ups(Grip::BEZIER2).pos(), origin + segment->ups(Grip::END).pos());
+        double nearest = std::numeric_limits<double>::max();
+        static constexpr int SAMPLES = 2000;
+        for (int i = 0; i <= SAMPLES; ++i) {
+            const PointF point = bezier.pointAtPercent(double(i) / SAMPLES);
+            if (std::abs(point.x() - x) < nearest) {
+                nearest = std::abs(point.x() - x);
+                y = point.y();
+            }
+        }
+        if (nearest < 0.05 * segment->spatium()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// What a chord draws: noteheads, stem, flag and marks.
+std::vector<RectF> chordInkPageRects(const Chord* chord)
+{
+    std::vector<RectF> rects;
+    for (const Note* note : chord->notes()) {
+        rects.push_back(note->pageBoundingRect());
+    }
+    if (chord->stem() && chord->stem()->visible()) {
+        rects.push_back(chord->stem()->pageBoundingRect());
+    }
+    if (chord->hook() && chord->hook()->visible()) {
+        rects.push_back(chord->hook()->pageBoundingRect());
+    }
+    for (const Articulation* articulation : chord->articulations()) {
+        if (articulation->visible()) {
+            rects.push_back(articulation->pageBoundingRect());
+        }
+    }
+    return rects;
+}
+
+double minimumSlurBodyDistanceOnSystem(const RectF& rect, const System* system, Score* score)
+{
+    double nearest = std::numeric_limits<double>::max();
+    for (const auto& pair : score->spanner()) {
+        const Spanner* spanner = pair.second;
+        if (!spanner || !spanner->isSlur() || !spanner->visible()) {
+            continue;
+        }
+        for (const SpannerSegment* spannerSegment : spanner->spannerSegments()) {
+            if (spannerSegment->system() == system && spannerSegment->visible()) {
+                nearest = std::min(nearest, rectSlurBodyDistance(rect, toSlurSegment(spannerSegment)));
+            }
+        }
+    }
+    return nearest;
+}
+}
+
+// Test value: Doctor Gradus m25-29. Each lower-voice phrase slur arches over the
+// upper voice's notes, stems, flags and marks inside it, as Durand prints it.
+// MuseScore's voice-number rule left the upper voice out of the slur's
+// obstacles, so the slur ran through its stems and flags.
+TEST_F(Engraving_PianomaniaPrettifyTests, lowerVoicePhraseSlurArchesOverCrossingUpperVoice)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(GRADUS_FIXTURE);
+    ASSERT_TRUE(score);
+    for (int measureNumber : { 25, 26, 27, 28, 29 }) {
+        const Slur* slur = slurStartingInMeasure(score, measureNumber, 1);
+        ASSERT_TRUE(slur) << "m" << measureNumber;
+        ASSERT_TRUE(slur->up());
+        size_t checked = 0;
+        for (const Chord* chord : collectChords(score)) {
+            if (chord->track() != 0 || chord->tick() <= slur->tick() || chord->tick() >= slur->tick2()) {
+                continue;
+            }
+            for (const RectF& rect : chordInkPageRects(chord)) {
+                double slurY = 0.0;
+                ASSERT_TRUE(slurCenterlineYAt(slur, rect.center().x(), slurY)) << "m" << measureNumber;
+                EXPECT_LT(slurY, rect.top()) << "m" << measureNumber << " tick " << chord->tick().ticks();
+                for (const SpannerSegment* segment : slur->spannerSegments()) {
+                    EXPECT_GE(rectSlurBodyDistance(rect, toSlurSegment(segment)), 0.0)
+                        << "m" << measureNumber << " tick " << chord->tick().ticks();
+                }
+                ++checked;
+            }
+        }
+        EXPECT_GT(checked, 0u) << "m" << measureNumber;
+    }
+    delete score;
+}
+
+// Test value: Doctor Gradus m43-44 and m33. A slur whose other voice lies well
+// beyond its own notes passes between the voices: the upper line's slur runs
+// above the bass pedal note instead of diving under it and its tie, and m33's
+// slur runs between its eighths and the other voice's rest.
+TEST_F(Engraving_PianomaniaPrettifyTests, slurPassesBetweenVoicesWhenTheOtherVoiceLiesBeyond)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(GRADUS_FIXTURE);
+    ASSERT_TRUE(score);
+
+    const Slur* upperLine = slurStartingInMeasure(score, 43, 5);
+    ASSERT_TRUE(upperLine);
+    ASSERT_FALSE(upperLine->up());
+    const Measure* m44 = measureAt(score, 43);
+    ASSERT_TRUE(m44);
+    const Segment* pedalSegment = m44->findSegment(SegmentType::ChordRest, m44->tick());
+    ASSERT_TRUE(pedalSegment);
+    const EngravingItem* pedal = pedalSegment->element(4);
+    ASSERT_TRUE(pedal && pedal->isChord());
+    for (const Note* note : toChord(pedal)->notes()) {
+        const RectF rect = note->pageBoundingRect();
+        double slurY = 0.0;
+        ASSERT_TRUE(slurCenterlineYAt(upperLine, rect.center().x(), slurY));
+        EXPECT_LT(slurY, rect.top());
+    }
+
+    const Slur* m33 = slurStartingInMeasure(score, 33, 0);
+    ASSERT_TRUE(m33);
+    ASSERT_FALSE(m33->up());
+    const Rest* rest = nullptr;
+    const Measure* measure33 = measureAt(score, 32);
+    for (const Segment* segment = measure33->first(SegmentType::ChordRest); segment;
+         segment = segment->next(SegmentType::ChordRest)) {
+        const EngravingItem* item = segment->element(1);
+        if (item && item->isRest() && item->visible() && segment->tick() > m33->tick()) {
+            rest = toRest(item);
+        }
+    }
+    ASSERT_TRUE(rest);
+    const RectF restRect = rest->pageBoundingRect();
+    double slurY = 0.0;
+    ASSERT_TRUE(slurCenterlineYAt(m33, restRect.center().x(), slurY));
+    EXPECT_LT(slurY, restRect.top());
+    delete score;
+}
+
+// Test value: Doctor Gradus m21, m27 and m16. Tempo, staff and expression text
+// and hairpins stand clear of slurs laid out at page stage (cross-staff slurs
+// and slurs over cross-staff beams), as autoplace keeps them from other slurs:
+// "Un peu retenu" and "m.g. expressif" were crossed, and m16's diminuendo.
+TEST_F(Engraving_PianomaniaPrettifyTests, textAndHairpinsClearPageStageSlurs)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(GRADUS_FIXTURE);
+    ASSERT_TRUE(score);
+    const double sp = score->style().spatium();
+    size_t texts = 0;
+    for (Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (Segment* segment = measure->first(); segment; segment = segment->next()) {
+            for (EngravingItem* item : segment->annotations()) {
+                if (!item || !item->visible() || !(item->isTempoText() || item->isStaffText() || item->isExpression())) {
+                    continue;
+                }
+                EXPECT_GE(minimumSlurBodyDistanceOnSystem(item->pageBoundingRect(), measure->system(), score), 0.05 * sp)
+                    << toTextBase(item)->plainText().toStdString() << " m" << measure->no() + 1;
+                ++texts;
+            }
+        }
+    }
+    EXPECT_GE(texts, 8u);
+    for (Hairpin* hairpin : collectHairpins(score)) {
+        for (const SpannerSegment* segment : hairpin->spannerSegments()) {
+            EXPECT_GE(minimumSlurBodyDistanceOnSystem(segment->pageBoundingRect(), segment->system(), score), 0.0)
+                << "hairpin at tick " << hairpin->tick().ticks();
+        }
+    }
+    delete score;
+}
+
+// Test value: Doctor Gradus m13-20 and m57. A dynamic stands clear of every stem
+// beside it, cross-staff stems included, where Composer only centred it on its
+// note and left p and f touching the first stem.
+TEST_F(Engraving_PianomaniaPrettifyTests, dynamicsStandClearOfStems)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(GRADUS_FIXTURE);
+    ASSERT_TRUE(score);
+    const double sp = score->style().spatium();
+    std::vector<std::pair<const System*, RectF> > stems;
+    for (const Chord* chord : collectChords(score)) {
+        if (chord->stem() && chord->stem()->visible()) {
+            stems.emplace_back(chord->measure()->system(), chord->stem()->pageBoundingRect());
+        }
+    }
+    size_t checked = 0;
+    for (const Dynamic* dynamic : collectAnnotations<Dynamic>(score, &EngravingObject::isDynamic)) {
+        if (!dynamic->visible()) {
+            continue;
+        }
+        const System* system = dynamic->segment()->measure()->system();
+        const RectF rect = dynamic->pageBoundingRect();
+        for (const auto& [stemSystem, stem] : stems) {
+            if (stemSystem != system || stem.bottom() <= rect.top() || stem.top() >= rect.bottom()) {
+                continue;
+            }
+            const double gap = std::max(stem.left() - rect.right(), rect.left() - stem.right());
+            EXPECT_GE(gap, 0.35 * sp) << dynamic->plainText().toStdString() << " at tick " << dynamic->tick().ticks();
+        }
+        ++checked;
+    }
+    EXPECT_GT(checked, 10u);
+    delete score;
+}
+
+// Test value: Doctor Gradus m65. Of two equally roomy bands between the staves,
+// the diminuendo takes the one under the cross-staff beams, where no stem
+// crosses it, as Durand prints it; a hair's difference in band size used to
+// put it among the stems above the beams.
+TEST_F(Engraving_PianomaniaPrettifyTests, staffCenteredHairpinTakesTheBandWithoutStems)
+{
+    PracticeExportFlags flags;
+    MasterScore* score = readAutoLaidOut(GRADUS_FIXTURE);
+    ASSERT_TRUE(score);
+    const Measure* m65 = measureAt(score, 64);
+    ASSERT_TRUE(m65);
+    const Hairpin* diminuendo = nullptr;
+    for (Hairpin* hairpin : collectHairpins(score)) {
+        if (hairpin->tick() > m65->tick() && hairpin->tick() < m65->tick() + Fraction(1, 4) && hairpin->track() == 0) {
+            diminuendo = hairpin;
+        }
+    }
+    ASSERT_TRUE(diminuendo);
+    const RectF rect = diminuendo->frontSegment()->pageBoundingRect();
+    size_t stems = 0;
+    for (const Chord* chord : collectChords(score)) {
+        if (chord->measure() != m65 || !chord->stem()) {
+            continue;
+        }
+        const RectF stem = chord->stem()->pageBoundingRect();
+        EXPECT_FALSE(stem.right() > rect.left() && stem.left() < rect.right() && stem.bottom() > rect.top()
+                     && stem.top() < rect.bottom())
+            << "stem at tick " << chord->tick().ticks();
+        ++stems;
+    }
+    EXPECT_GT(stems, 8u);
+    delete score;
+}

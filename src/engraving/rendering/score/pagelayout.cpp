@@ -437,6 +437,9 @@ void PageLayout::layoutCrossStaffElements(LayoutContext& ctx, Page* page)
         }
 
         layoutCrossStaffSlurs(ctx, system);
+        SystemLayout::liftPianomaniaHairpinsClearOfPageStageSlurs(system);
+        SystemLayout::movePianomaniaDynamicsClearOfStems(system);
+        SystemLayout::movePianomaniaTextClearOfPageStageSlurs(system);
 
         layoutArticAndFingeringOnCrossStaffBeams(ctx, system);
 

@@ -91,6 +91,16 @@ public:
     static void centerBigTimeSigsAcrossStaves(const System* system);
 
     static void adjustPianomaniaFingeringsAroundNotation(System* system, bool addFinalRectsToSkylines = false);
+    // Pianomania: lifts hairpin chains clear of the slurs laid out at page stage
+    // (cross-staff slurs and slurs over cross-staff beams), which the
+    // system-stage lift could not see.
+    static void liftPianomaniaHairpinsClearOfPageStageSlurs(System* system);
+    // Pianomania: moves each dynamic sideways until it stands clear of every
+    // stem beside it, cross-staff stems included.
+    static void movePianomaniaDynamicsClearOfStems(System* system);
+    // Pianomania: moves tempo, staff and expression text outward clear of
+    // the slurs laid out at page stage, as autoplace does for other slurs.
+    static void movePianomaniaTextClearOfPageStageSlurs(System* system);
     // Pianomania: whether a laid-out tuplet's number sits on the side its
     // digits own (and over one of them), so the number must take the other side.
     static bool pianomaniaTupletNumberYieldsToFingerings(const Tuplet* tuplet);
