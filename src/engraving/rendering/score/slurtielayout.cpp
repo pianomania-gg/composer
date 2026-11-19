@@ -22,6 +22,7 @@
 #include "slurtielayout.h"
 
 #include <limits>
+#include <map>
 
 #include "iengravingfont.h"
 
@@ -856,6 +857,88 @@ bool slurDecisionChordUp(const Chord* chord, const ChordRest* reference, const L
     return estimate.up;
 }
 
+// MuseScore leaves a voice out of a slur's obstacles by voice number: an up
+// slur ignores the voices numbered above it, a down slur those numbered below,
+// on the assumption that such a slur sits between the voices. Where the voices
+// cross that is wrong both ways. Gradus m25-29's lower-voice phrase slurs arch
+// over the whole group in print, yet they ran through the upper voice's stems
+// and flags; m43-44's upper line runs above the bass pedal note, yet its slur
+// dived under the pedal note and crossed its tie. So a Pianomania slur decides
+// from the notes: another voice in the slur's staff is left out only when
+// each of its noteheads and rests under the slur lies beyond the slur's own
+// notes at that point (its ends and its own noteheads, joined by straight
+// lines) by at least this many spaces, room for the slur to pass between
+// (m33's slur passes between its eighths and the other voice's rest).
+constexpr double PM_SLUR_INSIDE_VOICE_GAP_SP = 1.5;
+
+void removePianomaniaFarSideVoices(const SlurSegment* slurSeg, const ChordRest* startCR, const ChordRest* endCR, Shape& shapes)
+{
+    const bool up = slurSeg->slur()->up();
+    const staff_idx_t staffIdx = startCR->staffIdx();
+    const track_idx_t ownTrack = startCR->track();
+    auto inStaff = [staffIdx](const EngravingItem* item) {
+        return item && item->vStaffIdx() == staffIdx;
+    };
+    auto underSlur = [startCR, endCR](const EngravingItem* item) {
+        return item->tick() > startCR->tick() && item->tick() < endCR->tick();
+    };
+
+    // The slur's own outline: its ends, and the outer edge of each of its own
+    // noteheads (the top for an up slur), keeping the outermost per x.
+    std::map<double, double> ownOutline;
+    auto addOwnPoint = [&](double x, double y) {
+        const auto found = ownOutline.find(x);
+        if (found == ownOutline.end()) {
+            ownOutline[x] = y;
+        } else {
+            found->second = up ? std::min(found->second, y) : std::max(found->second, y);
+        }
+    };
+    for (Grip grip : { Grip::START, Grip::END }) {
+        const PointF end = slurSeg->ups(grip).p + slurSeg->ups(grip).off;
+        addOwnPoint(end.x(), end.y());
+    }
+    for (const ShapeElement& element : shapes.elements()) {
+        const EngravingItem* item = element.item();
+        if (inStaff(item) && item->track() == ownTrack && item->isNote() && underSlur(item)) {
+            addOwnPoint(element.center().x(), up ? element.top() : element.bottom());
+        }
+    }
+    auto ownOutlineAt = [&](double x) {
+        auto after = ownOutline.lower_bound(x);
+        if (after == ownOutline.begin()) {
+            return after->second;
+        }
+        if (after == ownOutline.end()) {
+            return std::prev(after)->second;
+        }
+        const auto before = std::prev(after);
+        const double t = (x - before->first) / (after->first - before->first);
+        return before->second + t * (after->second - before->second);
+    };
+
+    std::map<track_idx_t, double> farSideGap;
+    for (const ShapeElement& element : shapes.elements()) {
+        const EngravingItem* item = element.item();
+        if (!inStaff(item) || item->track() == ownTrack || !(item->isNote() || item->isRest()) || !underSlur(item)) {
+            continue;
+        }
+        const double ownY = ownOutlineAt(element.center().x());
+        const double gap = up ? ownY - element.bottom() : element.top() - ownY;
+        const auto found = farSideGap.find(item->track());
+        farSideGap[item->track()] = found == farSideGap.end() ? gap : std::min(found->second, gap);
+    }
+
+    const double minGap = PM_SLUR_INSIDE_VOICE_GAP_SP * slurSeg->spatium();
+    shapes.remove_if([&](const ShapeElement& element) {
+        const EngravingItem* item = element.item();
+        if (!inStaff(item) || item->track() == ownTrack) {
+            return false;
+        }
+        const auto found = farSideGap.find(item->track());
+        return found != farSideGap.end() && found->second >= minGap;
+    });
+}
 } // namespace
 
 // The general solver uses a coarse collision approximation. A narrow
@@ -2128,6 +2211,10 @@ Shape SlurTieLayout::getSegmentShapes(SlurSegment* slurSeg, ChordRest* startCR, 
         segShapes.add(getSegmentShape(slurSeg, seg, startCR, endCR, localSingleSystemCrossStaff));
     }
 
+    if (MScore::pianomaniaPrettifySlursFingerings) {
+        removePianomaniaFarSideVoices(slurSeg, startCR, endCR, segShapes);
+    }
+
     return segShapes;
 }
 
@@ -2255,8 +2342,9 @@ Shape SlurTieLayout::getSegmentShape(SlurSegment* slurSeg, Segment* seg, ChordRe
             || (item->tick() == endCR->tick() && item->track() != endCR->track())) {
             return true;
         }
-        // Edge-case: multiple voices and slur is on the inside
-        if (item->vStaffIdx() == startCR->staffIdx()
+        // Edge-case: multiple voices and slur is on the inside. A Pianomania
+        // slur decides this from the notes instead (removePianomaniaFarSideVoices).
+        if (!MScore::pianomaniaPrettifySlursFingerings && item->vStaffIdx() == startCR->staffIdx()
             && ((!slur->up() && item->track() > startCR->track()) // slur-down: ignore lower voices
                 || (slur->up() && item->track() < startCR->track()))) { // slur-up: ignore higher voices
             return true;

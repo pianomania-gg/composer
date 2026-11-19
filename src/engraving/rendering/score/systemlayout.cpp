@@ -168,7 +168,19 @@ constexpr double PM_FINGERING_BEAM_CLEARANCE_TUCK = PM_FINGERING_STAFF_CLEARANCE
 // crowd the neighbouring notes' digits.
 constexpr std::array<double, 3> PM_FINGERING_UNDER_SLUR_STEMWARD_SLIDES_SP = { 0.0, 0.25, 0.5 };
 constexpr double PM_TEXT_HAIRPIN_NOTATION_CLEARANCE = 0.25;
+// A dynamic stands at least this far (sp) to the side of every stem its glyph
+// overlaps vertically. A dynamic is only centred on its note or aligned to the
+// notehead, so a p beside a cross-staff stem kept almost no gap (Debussy,
+// Doctor Gradus m13-20 and m57); the staff-centred clearance pass moves items
+// vertically and cannot help, because such a stem crosses the whole gap.
+constexpr double PM_DYNAMIC_STEM_CLEARANCE = 0.4;
+// Stems farther than this (sp) beyond a dynamic's edges cannot constrain it.
+constexpr double PM_DYNAMIC_STEM_WINDOW = 3.0;
 constexpr double PM_TEXT_HAIRPIN_MIN_OVERLAP = 0.05;
+// Tempo, staff and expression text clears a slur laid out at page stage by
+// this much, as autoplace keeps it from a system-stage slur (Gradus m21's
+// "Un peu retenu", m27's "m.g. expressif").
+constexpr double PM_TEXT_PAGE_STAGE_SLUR_CLEARANCE = 0.25;
 
 constexpr std::array<double, 12> PM_FINGERING_HORIZONTAL_CANDIDATES_SP = {
     -0.5, 0.5, -1.0, 1.0, -1.5, 1.5, -2.0, 2.0, -2.5, 2.5, -3.0, 3.0
@@ -4438,6 +4450,217 @@ void SystemLayout::adjustPianomaniaFingeringsAroundNotation(System* system, bool
     adjustPianomaniaFingeringsAroundNotationForSystem(system, addFinalRectsToSkylines);
 }
 
+void SystemLayout::movePianomaniaDynamicsClearOfStems(System* system)
+{
+    if (!system || !MScore::pianomaniaPrettifySlursFingerings) {
+        return;
+    }
+
+    std::vector<RectF> stems;
+    std::vector<Dynamic*> dynamics;
+    for (MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        for (Segment& segment : toMeasure(mb)->segments()) {
+            for (EngravingItem* annotation : segment.annotations()) {
+                if (annotation && annotation->isDynamic() && annotation->visible() && annotation->autoplace()
+                    && annotation->ldata() && !annotation->ldata()->isSkipDraw()) {
+                    dynamics.push_back(toDynamic(annotation));
+                }
+            }
+            if (!segment.isChordRestType()) {
+                continue;
+            }
+            for (EngravingItem* item : segment.elist()) {
+                if (!item || !item->isChord()) {
+                    continue;
+                }
+                std::vector<const Chord*> chords { toChord(item) };
+                for (const Chord* grace : toChord(item)->graceNotes()) {
+                    chords.push_back(grace);
+                }
+                for (const Chord* chord : chords) {
+                    const Stem* stem = chord->stem();
+                    if (!stem || !stem->visible() || !stem->ldata()) {
+                        continue;
+                    }
+                    RectF stemRect = stem->ldata()->bbox().translated(stem->pagePos());
+                    // A cross-staff beam's stems span the gap between its
+                    // staves; vertical spreading later stretches them there
+                    // (m61's f stood clear of a stem that then grew beside it).
+                    const Beam* beam = chord->beam();
+                    if (beam && beam->cross()) {
+                        staff_idx_t upper = muse::nidx;
+                        staff_idx_t lower = 0;
+                        for (const ChordRest* member : beam->elements()) {
+                            upper = std::min(upper, member->vStaffIdx());
+                            lower = std::max(lower, member->vStaffIdx());
+                        }
+                        if (upper < lower && lower < system->staves().size()) {
+                            const double gapTop = system->pagePos().y() + system->staff(upper)->y()
+                                                  + chord->score()->staff(upper)->staffHeight(chord->tick());
+                            const double gapBottom = system->pagePos().y() + system->staff(lower)->y();
+                            stemRect.unite(RectF(stemRect.left(), gapTop, stemRect.width(), gapBottom - gapTop));
+                        }
+                    }
+                    stems.push_back(stemRect);
+                }
+            }
+        }
+    }
+
+    for (Dynamic* dynamic : dynamics) {
+        const double spatium = dynamic->spatium();
+        const double clearance = PM_DYNAMIC_STEM_CLEARANCE * spatium;
+        const double window = PM_DYNAMIC_STEM_WINDOW * spatium;
+        const RectF rect = dynamic->ldata()->bbox().translated(dynamic->pagePos());
+        std::vector<RectF> nearby;
+        for (const RectF& stem : stems) {
+            if (stem.bottom() > rect.top() && stem.top() < rect.bottom()
+                && stem.right() > rect.left() - window && stem.left() < rect.right() + window) {
+                nearby.push_back(stem);
+            }
+        }
+        // The smallest horizontal gap between the moved dynamic and a nearby stem.
+        auto gapAt = [&](double dx) {
+            double gap = DBL_MAX;
+            for (const RectF& stem : nearby) {
+                gap = std::min(gap, std::max(stem.left() - (rect.right() + dx), (rect.left() + dx) - stem.right()));
+            }
+            return gap;
+        };
+        const double tolerance = 0.001 * spatium;
+        if (nearby.empty() || gapAt(0.0) >= clearance - tolerance) {
+            continue;
+        }
+
+        // The nearest position that clears every nearby stem: just left or
+        // right of one of them. Left wins a tie, since a dynamic leads its note.
+        std::vector<double> candidates;
+        for (const RectF& stem : nearby) {
+            candidates.push_back(stem.left() - clearance - rect.right());
+            candidates.push_back(stem.right() + clearance - rect.left());
+        }
+        std::sort(candidates.begin(), candidates.end(), [](double a, double b) {
+            return std::abs(a) < std::abs(b) || (std::abs(a) == std::abs(b) && a < b);
+        });
+        bool moved = false;
+        for (double dx : candidates) {
+            if (gapAt(dx) >= clearance - tolerance) {
+                dynamic->mutldata()->moveX(dx);
+                moved = true;
+                break;
+            }
+        }
+        if (moved) {
+            continue;
+        }
+
+        // Stems too close together for the full clearance on both sides (m61's
+        // f between two beamed groups): the dynamic takes the middle of the
+        // gap it sits nearest, the widest room it can have there.
+        std::vector<RectF> sortedStems = nearby;
+        std::sort(sortedStems.begin(), sortedStems.end(), [](const RectF& a, const RectF& b) { return a.left() < b.left(); });
+        double bestDx = 0.0;
+        double bestGap = gapAt(0.0);
+        for (size_t i = 0; i + 1 < sortedStems.size(); ++i) {
+            const double middle = 0.5 * (sortedStems[i].right() + sortedStems[i + 1].left());
+            const double dx = middle - rect.center().x();
+            const double gap = gapAt(dx);
+            if (gap > bestGap + tolerance && (bestDx == 0.0 || std::abs(dx) < std::abs(bestDx) || gap > bestGap + clearance)) {
+                bestDx = dx;
+                bestGap = gap;
+            }
+        }
+        if (bestDx != 0.0) {
+            dynamic->mutldata()->moveX(bestDx);
+        }
+    }
+}
+
+void SystemLayout::movePianomaniaTextClearOfPageStageSlurs(System* system)
+{
+    if (!system || !MScore::pianomaniaPrettifySlursFingerings) {
+        return;
+    }
+
+    std::vector<const SlurSegment*> slurSegments;
+    for (const SpannerSegment* spannerSegment : system->spannerSegments()) {
+        if (spannerSegment && spannerSegment->isSlurSegment() && spannerSegment->visible()
+            && spannerSegment->ldata() && !spannerSegment->ldata()->isSkipDraw()) {
+            slurSegments.push_back(toSlurSegment(spannerSegment));
+        }
+    }
+    if (slurSegments.empty()) {
+        return;
+    }
+
+    const PointF systemPagePos = system->pagePos();
+    for (MeasureBase* mb : system->measures()) {
+        if (!mb->isMeasure()) {
+            continue;
+        }
+        for (Segment& segment : toMeasure(mb)->segments()) {
+            for (EngravingItem* annotation : segment.annotations()) {
+                if (!annotation || !(annotation->isTempoText() || annotation->isStaffText() || annotation->isSystemText()
+                                     || annotation->isExpression())
+                    || !annotation->visible() || !annotation->autoplace() || !annotation->ldata()
+                    || annotation->ldata()->isSkipDraw()) {
+                    continue;
+                }
+                const bool above = annotation->placeAbove();
+                const double clearance = PM_TEXT_PAGE_STAGE_SLUR_CLEARANCE * annotation->spatium();
+                const RectF rect = annotation->ldata()->bbox().translated(annotation->pagePos() - systemPagePos);
+                double move = 0.0;
+                for (const SlurSegment* slurSegment : slurSegments) {
+                    const SlurWindowSample sample = sampleSlurWithinFingeringWindow(rect, slurSegment, 0.0, clearance);
+                    if (!sample.conflict) {
+                        continue;
+                    }
+                    move = above ? std::max(move, rect.bottom() - sample.clearMinY)
+                           : std::max(move, sample.clearMaxY - rect.top());
+                }
+                if (move > 0.0) {
+                    annotation->mutldata()->moveY(above ? -move : move);
+                }
+            }
+        }
+    }
+}
+
+void SystemLayout::liftPianomaniaHairpinsClearOfPageStageSlurs(System* system)
+{
+    if (!system || !MScore::pianomaniaPrettifySlursFingerings) {
+        return;
+    }
+
+    // Every hairpin segment of the system with the dynamics and expressions
+    // snapped to it, so each snapping chain moves as one.
+    std::vector<EngravingItem*> pool;
+    std::set<EngravingItem*> pooled;
+    for (SpannerSegment* spannerSegment : system->spannerSegments()) {
+        if (!spannerSegment || !spannerSegment->isHairpinSegment()) {
+            continue;
+        }
+        std::vector<EngravingItem*> pending { spannerSegment };
+        while (!pending.empty()) {
+            EngravingItem* item = pending.back();
+            pending.pop_back();
+            if (!item || !pooled.insert(item).second) {
+                continue;
+            }
+            pool.push_back(item);
+            if (item->ldata()) {
+                pending.push_back(item->ldata()->itemSnappedBefore());
+                pending.push_back(item->ldata()->itemSnappedAfter());
+            }
+        }
+    }
+
+    liftPianomaniaHairpinChainsClearOfSlurs(system, pool);
+}
+
 //---------------------------------------------------------
 //   collectSystem
 //---------------------------------------------------------
@@ -7612,6 +7835,7 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
     // (Moonlight m5 "pp"). Beams keep a wider margin than other notation.
     constexpr double BEAM_CLEARANCE_SP = 0.5;
     constexpr double OVERLAP_TOLERANCE_SP = 0.05;
+    constexpr double STEM_TIEBREAK_SP = 0.25;
 
     std::set<const EngravingItem*> handled;
     for (EngravingItem* item : centeredItems) {
@@ -7679,8 +7903,11 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
         collectSkyline(isAbove ? thisStaff->skyline().north() : thisStaff->skyline().south(), 0.0);
         collectSkyline(isAbove ? nextStaff->skyline().south() : nextStaff->skyline().north(), yStaffDiff);
 
-        // Cross-staff beams are in no skyline.
+        // Cross-staff beams are in no skyline, and neither are the stems of
+        // their chords.
         std::set<const Beam*> crossBeams;
+        std::vector<RectF> stems;
+        const PointF stemFrameOrigin = system->pagePos() + PointF(0.0, thisStaff->y());
         for (const MeasureBase* mb : system->measures()) {
             if (!mb->isMeasure()) {
                 continue;
@@ -7694,6 +7921,12 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
                         continue;
                     }
                     const staff_idx_t staffIdx = element->staffIdx();
+                    if (element->isChord() && (staffIdx == thisIdx || staffIdx == nextIdx)) {
+                        const Stem* stem = toChord(element)->stem();
+                        if (stem && stem->visible() && stem->ldata()) {
+                            stems.push_back(stem->ldata()->bbox().translated(stem->pagePos() - stemFrameOrigin));
+                        }
+                    }
                     const Beam* beam = toChordRest(element)->beam();
                     if (beam && beam->cross() && beam->visible() && (staffIdx == thisIdx || staffIdx == nextIdx)) {
                         crossBeams.insert(beam);
@@ -7732,10 +7965,40 @@ void SystemLayout::clearStaffCenteredItemsOfNotation(const std::vector<Engraving
             continue;
         }
 
-        const VerticalInterval* roomiest = &free.front();
+        // The roomiest band wins. Bands within STEM_TIEBREAK_SP of it count as
+        // equally roomy, and of those the one crossing fewer stems wins: above
+        // a cross-staff beam the stems rise through the gap, below it they do
+        // not (Gradus m65's diminuendo stands under the beams, as printed).
+        auto stemsCrossed = [&](double move) {
+            int count = 0;
+            for (const RectF& stem : stems) {
+                for (const RectF& rect : chainRects) {
+                    const RectF moved = rect.translated(0.0, move);
+                    if (stem.right() > moved.left() && stem.left() < moved.right()
+                        && stem.bottom() > moved.top() && stem.top() < moved.bottom()) {
+                        ++count;
+                        break;
+                    }
+                }
+            }
+            return count;
+        };
+        double widest = 0.0;
         for (const VerticalInterval& interval : free) {
-            if (interval.to - interval.from > roomiest->to - roomiest->from) {
+            widest = std::max(widest, interval.to - interval.from);
+        }
+        const VerticalInterval* roomiest = nullptr;
+        int roomiestStems = 0;
+        for (const VerticalInterval& interval : free) {
+            const double width = interval.to - interval.from;
+            if (width < widest - STEM_TIEBREAK_SP * spatium) {
+                continue;
+            }
+            const int crossed = stemsCrossed(0.5 * (interval.from + interval.to));
+            if (!roomiest || crossed < roomiestStems
+                || (crossed == roomiestStems && width > roomiest->to - roomiest->from)) {
                 roomiest = &interval;
+                roomiestStems = crossed;
             }
         }
         const double yMove = 0.5 * (roomiest->from + roomiest->to);
