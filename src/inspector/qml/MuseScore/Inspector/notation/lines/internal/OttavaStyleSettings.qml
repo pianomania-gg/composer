@@ -65,13 +65,23 @@ FocusableItem {
             navigation.row: typeSection.navigationRowEnd + 1
         }
 
+        PropertyCheckBox {
+            id: startAfterGraceNotesCheckBox
+            text: qsTrc("inspector", "Start after grace notes")
+            propertyItem: root.model ? root.model.startAfterGraceNotes : null
+
+            navigation.name: "StartAfterGraceNotes"
+            navigation.panel: root.navigationPanel
+            navigation.row: showNumbersOnlyCheckBox.navigation.row + 1
+        }
+
         SeparatorLine { anchors.margins: -12 }
 
         LineWithHooksCommonStyleSettings {
             model: root.model
 
             navigationPanel: root.navigationPanel
-            navigationRowStart: showNumbersOnlyCheckBox.navigation.row + 1
+            navigationRowStart: startAfterGraceNotesCheckBox.navigation.row + 1
         }
     }
 }

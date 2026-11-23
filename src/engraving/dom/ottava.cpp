@@ -265,6 +265,7 @@ Ottava::Ottava(const Ottava& o)
 {
     setOttavaType(o.m_ottavaType);
     m_numbersOnly = o.m_numbersOnly;
+    m_startAfterGraceNotes = o.m_startAfterGraceNotes;
 }
 
 //---------------------------------------------------------
@@ -306,6 +307,9 @@ PropertyValue Ottava::getProperty(Pid propertyId) const
     case Pid::NUMBERS_ONLY:
         return m_numbersOnly;
 
+    case Pid::PIANOMANIA_START_AFTER_GRACE_NOTES:
+        return m_startAfterGraceNotes;
+
     case Pid::END_TEXT_PLACE:                         // HACK
         return TextPlace::LEFT;
 
@@ -333,6 +337,11 @@ bool Ottava::setProperty(Pid propertyId, const PropertyValue& val)
 
     case Pid::NUMBERS_ONLY:
         m_numbersOnly = val.toBool();
+        break;
+
+    case Pid::PIANOMANIA_START_AFTER_GRACE_NOTES:
+        setStartAfterGraceNotes(val.toBool());
+        staff()->updateOttava();
         break;
 
     case Pid::SPANNER_TICKS:
@@ -364,6 +373,8 @@ PropertyValue Ottava::propertyDefault(Pid pid) const
     switch (pid) {
     case Pid::OTTAVA_TYPE:
         return PropertyValue();
+    case Pid::PIANOMANIA_START_AFTER_GRACE_NOTES:
+        return false;
     case Pid::END_HOOK_TYPE:
         return HookType::HOOK_90;
     case Pid::LINE_VISIBLE:

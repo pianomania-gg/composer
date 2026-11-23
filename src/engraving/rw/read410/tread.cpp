@@ -3524,6 +3524,8 @@ bool TRead::readProperties(Ottava* o, XmlReader& e, ReadContext& ctx)
         } else {
             o->setOttavaType(OttavaType(idx));
         }
+    } else if (tag == "pianomaniaStartAfterGraceNotes") {
+        o->setStartAfterGraceNotes(e.readBool());
     } else if (readStyledProperty(o, tag, e, ctx)) {
         return true;
     } else if (!readProperties(toTextLineBase(o), e, ctx)) {

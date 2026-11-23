@@ -45,6 +45,7 @@
 #include "engraving/dom/chord.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/ottava.h"
 #include "engraving/dom/tremolotwochord.h"
 #include "engraving/compat/midi/compatmidirenderinternal.h"
 #include "engraving/compat/midi/compatmidirender.h"
@@ -916,6 +917,154 @@ TEST(Project_PianomaniaCoordinatedExportTest, UntiedGraceAndPrincipalKeepDistinc
     EXPECT_NE(result.val.canonicalEvents[0].idx, result.val.canonicalEvents[1].idx);
     EXPECT_TRUE(result.val.canonicalEvents[0].aliasOf.empty());
     EXPECT_TRUE(result.val.canonicalEvents[1].aliasOf.empty());
+}
+
+// Test value: Detects the Pianomania export refusing a score whose 8va starts after its chord's small notes, or
+// publishing those small notes on a key other than the one they are written on.
+TEST(Project_PianomaniaCoordinatedExportTest, GraceNotesBeforeAnOttavaMarkedToStartAfterThemKeepTheirWrittenKeys)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       u"pianomania_ottava_start_after_grace_notes.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+
+    // Bar 1's 8va starts after the small notes C5 and E5, bar 2's before them; both start on the G5, and the small
+    // A5 after the G5 is under the 8va in both.
+    std::vector<std::pair<std::string, int> > heard;
+    for (const auto& event : result.val.canonicalEvents) {
+        heard.emplace_back(event.eventType, event.heardMidiKey);
+    }
+    const std::vector<std::pair<std::string, int> > expected {
+        { "written", 67 }, { "written_grace", 72 }, { "written_grace", 76 }, { "written", 91 }, { "written_grace", 93 },
+        { "written", 67 },
+        { "written", 67 }, { "written_grace", 84 }, { "written_grace", 88 }, { "written", 91 }, { "written_grace", 93 },
+        { "written", 67 },
+    };
+    EXPECT_EQ(heard, expected);
+
+    ASSERT_EQ(result.val.files.size(), 1u);
+    std::vector<int> audibleKeys;
+    for (const auto& event : result.val.files[0].audibleEvents) {
+        audibleKeys.push_back(event.heardMidiKey);
+    }
+    std::vector<int> canonicalKeys;
+    for (const auto& event : result.val.canonicalEvents) {
+        canonicalKeys.push_back(event.heardMidiKey);
+    }
+    std::sort(audibleKeys.begin(), audibleKeys.end());
+    std::sort(canonicalKeys.begin(), canonicalKeys.end());
+    EXPECT_EQ(audibleKeys, canonicalKeys);
+}
+
+// Test value: Detects the Properties panel's "Start after grace notes" checkbox (an undoable change of
+// PIANOMANIA_START_AFTER_GRACE_NOTES) failing to change what the small notes play, failing to undo or redo,
+// being lost on save and load, or moving anything on the page.
+TEST(Project_PianomaniaCoordinatedExportTest, StartAfterGraceNotesToggleIsUndoableSavedAndDrawsTheSame)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       u"pianomania_ottava_start_after_grace_notes.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+    score->setLayoutAll();
+    score->doLayout();
+
+    const auto ottavas = [](mu::engraving::Score* s) {
+        std::vector<mu::engraving::Ottava*> result;
+        for (const auto& [tick, spanner] : s->spanner()) {
+            if (spanner->isOttava()) {
+                result.push_back(mu::engraving::toOttava(spanner));
+            }
+        }
+        return result;
+    };
+    // Heard keys of the small notes before bar 2's G5, where the 8va starts unmarked.
+    const auto barTwoGraceKeys = [](mu::engraving::Score* s) {
+        std::vector<int> keys;
+        s->scanElements([&keys](mu::engraving::EngravingItem* item) {
+            if (item->isNote() && mu::engraving::toNote(item)->chord()->isGraceBefore()
+                && mu::engraving::toNote(item)->chord()->measure()->no() == 1) {
+                keys.push_back(mu::engraving::toNote(item)->ppitch());
+            }
+        });
+        std::sort(keys.begin(), keys.end());
+        return keys;
+    };
+    const auto drawn = [](mu::engraving::Score* s) {
+        std::vector<double> geometry;
+        s->scanElements([&geometry](mu::engraving::EngravingItem* item) {
+            if (item->isNote() || item->isOttavaSegment()) {
+                const mu::engraving::RectF box = item->ldata()->bbox().translated(item->pagePos());
+                geometry.insert(geometry.end(), { box.x(), box.y(), box.width(), box.height() });
+            }
+        });
+        return geometry;
+    };
+
+    std::vector<mu::engraving::Ottava*> lines = ottavas(score.get());
+    ASSERT_EQ(lines.size(), 2u);
+    mu::engraving::Ottava* barTwo = lines[1];
+    ASSERT_FALSE(barTwo->startAfterGraceNotes());
+    EXPECT_EQ(barTwoGraceKeys(score.get()), (std::vector<int> { 84, 88 }));
+    const std::vector<double> before = drawn(score.get());
+    ASSERT_FALSE(before.empty());
+
+    score->startCmd(muse::TranslatableString::untranslatable("Start after grace notes"));
+    // As the Properties panel does: through the item, since Ottava hides the two-argument form.
+    static_cast<mu::engraving::EngravingItem*>(barTwo)->undoChangeProperty(
+        mu::engraving::Pid::PIANOMANIA_START_AFTER_GRACE_NOTES, true);
+    score->endCmd();
+    EXPECT_TRUE(barTwo->startAfterGraceNotes());
+    EXPECT_EQ(barTwoGraceKeys(score.get()), (std::vector<int> { 72, 76 }));
+    EXPECT_EQ(drawn(score.get()), before);
+
+    score->undoRedo(true, nullptr);
+    EXPECT_FALSE(barTwo->startAfterGraceNotes());
+    EXPECT_EQ(barTwoGraceKeys(score.get()), (std::vector<int> { 84, 88 }));
+    score->undoRedo(false, nullptr);
+    EXPECT_TRUE(barTwo->startAfterGraceNotes());
+    EXPECT_EQ(barTwoGraceKeys(score.get()), (std::vector<int> { 72, 76 }));
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString savedPath = directory.filePath("toggled.mscx");
+    ASSERT_TRUE(mu::engraving::ScoreRW::saveScore(score.get(), muse::String::fromUtf8(savedPath.toUtf8().constData())));
+    EXPECT_EQ(readFile(savedPath).count("<pianomaniaStartAfterGraceNotes>1</pianomaniaStartAfterGraceNotes>"), 2);
+
+    std::unique_ptr<mu::engraving::MasterScore> reopened(
+        mu::engraving::ScoreRW::readScore(muse::String::fromUtf8(savedPath.toUtf8().constData()), true));
+    ASSERT_NE(reopened, nullptr);
+    std::vector<bool> marks;
+    for (const mu::engraving::Ottava* line : ottavas(reopened.get())) {
+        marks.push_back(line->startAfterGraceNotes());
+    }
+    EXPECT_EQ(marks, (std::vector<bool> { true, true }));
+
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        reopened.get(), muse::io::path_t(savedPath.toStdString()),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+    std::vector<int> graceKeys;
+    for (const auto& event : result.val.canonicalEvents) {
+        if (event.eventType == "written_grace") {
+            graceKeys.push_back(event.heardMidiKey);
+        }
+    }
+    EXPECT_EQ(graceKeys, (std::vector<int> { 72, 76, 93, 72, 76, 93 }));
 }
 
 TEST(Project_PianomaniaCoordinatedExportTest, SameOnsetUnisonTieRootsShareOneAttack)

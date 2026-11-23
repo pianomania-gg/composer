@@ -302,6 +302,7 @@ private slots:
     void gracePairPlaysBeforeTheBeat();
     void shortWrittenGracePlaysBeforeTheBeat();
     void shortGraceAtScoreStartPlaysOnTheBeat();
+    void graceNotesBeforeAnOttavaMarkedToStartAfterThemSoundAsWritten();
     void rolledChordDirectionsRemainOrdinaryWrittenAttacks();
     void bracketsAndPlaybackDisabledRollsAttackSimultaneously();
     void arpeggiatedDisabledNotesHaveNoAttacks();
@@ -1148,6 +1149,54 @@ void MidiExportTimingTests::shortWrittenGracePlaysBeforeTheBeat()
     QCOMPARE(e5Main.front().start, 1440);
     QCOMPARE(e5Main.front().end, 1679);
     QCOMPARE(d5.front().start, 1680);
+}
+
+// Test value: Detects small notes before a chord being raised by an 8va that the score starts on the
+// chord's main note, after them (Chopin, Ballade No. 3, bar 118), and an 8va that starts before its
+// small notes no longer raising them.
+void MidiExportTimingTests::graceNotesBeforeAnOttavaMarkedToStartAfterThemSoundAsWritten()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_ottava_start_after_grace_notes.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    const auto pitchesStartingIn = [&notes](int startTick, int endTick) {
+        std::vector<int> pitches;
+        for (const ExportedMidiNote& note : notes) {
+            if (note.start >= startTick && note.start < endTick) {
+                pitches.push_back(note.pitch);
+            }
+        }
+        std::sort(pitches.begin(), pitches.end());
+        return pitches;
+    };
+
+    // Bar 1: the 8va is marked to start after the small notes C5 and E5, so they sound as
+    // written before beat 2; the G5 it starts on sounds as G6, the small A5 after the G5 is
+    // under the 8va (A6), and beat 3's G4 is past its end.
+    QCOMPARE(pitchesStartingIn(0, 480), (std::vector<int> { 67, 72, 76 }));
+    QCOMPARE(pitchesStartingIn(480, 960), (std::vector<int> { 91, 93 }));
+    QCOMPARE(pitchesStartingIn(960, 1920), (std::vector<int> { 67 }));
+
+    // Bar 2: the same notes under an unmarked 8va: the small notes before the G5 sound an octave up too.
+    QCOMPARE(pitchesStartingIn(1920, 2400), (std::vector<int> { 67, 84, 88 }));
+    QCOMPARE(pitchesStartingIn(2400, 2880), (std::vector<int> { 91, 93 }));
+    QCOMPARE(pitchesStartingIn(2880, 3840), (std::vector<int> { 67 }));
+
+    // The mark changes only what the small notes sound: both bars keep the same timing.
+    const std::vector<ExportedMidiNote> markedC5 = notesForPitchInRange(notes, 72, 0, 480);
+    const std::vector<ExportedMidiNote> unmarkedC5 = notesForPitchInRange(notes, 84, 1920, 2400);
+    const std::vector<ExportedMidiNote> markedE5 = notesForPitchInRange(notes, 76, 0, 480);
+    const std::vector<ExportedMidiNote> unmarkedE5 = notesForPitchInRange(notes, 88, 1920, 2400);
+    QCOMPARE(static_cast<int>(markedC5.size()), 1);
+    QCOMPARE(static_cast<int>(unmarkedC5.size()), 1);
+    QCOMPARE(static_cast<int>(markedE5.size()), 1);
+    QCOMPARE(static_cast<int>(unmarkedE5.size()), 1);
+    QCOMPARE(markedC5.front().start + 1920, unmarkedC5.front().start);
+    QCOMPARE(markedC5.front().end + 1920, unmarkedC5.front().end);
+    QCOMPARE(markedE5.front().start + 1920, unmarkedE5.front().start);
+    QCOMPARE(markedE5.front().end + 1920, unmarkedE5.front().end);
 }
 
 // Test value: Detects a short grace on the first chord of a score being squeezed into zero
