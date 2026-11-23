@@ -918,6 +918,51 @@ TEST(Project_PianomaniaCoordinatedExportTest, UntiedGraceAndPrincipalKeepDistinc
     EXPECT_TRUE(result.val.canonicalEvents[1].aliasOf.empty());
 }
 
+// Test value: Detects the Pianomania export refusing a score whose 8va starts after its chord's small notes, or
+// publishing those small notes on a key other than the one they are written on.
+TEST(Project_PianomaniaCoordinatedExportTest, GraceNotesBeforeAnOttavaMarkedToStartAfterThemKeepTheirWrittenKeys)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/importexport/midi/tests/midiexport_data/"
+                                       u"pianomania_ottava_start_after_grace_notes.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(
+        mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto result = mu::project::pianomania::exportPianomaniaBundle(
+        score.get(), muse::io::path_t(fixturePath),
+        muse::io::path_t(directory.filePath("song")),
+        muse::io::path_t(directory.filePath("song.mei")), false);
+    ASSERT_TRUE(result.ret) << result.ret.toString();
+
+    // Bar 1's 8va starts after the small notes C5 and E5, bar 2's before them; both start on the G5.
+    std::vector<std::pair<std::string, int> > heard;
+    for (const auto& event : result.val.canonicalEvents) {
+        heard.emplace_back(event.eventType, event.heardMidiKey);
+    }
+    const std::vector<std::pair<std::string, int> > expected {
+        { "written", 67 }, { "written_grace", 72 }, { "written_grace", 76 }, { "written", 91 }, { "written", 67 },
+        { "written", 67 }, { "written_grace", 84 }, { "written_grace", 88 }, { "written", 91 }, { "written", 67 },
+    };
+    EXPECT_EQ(heard, expected);
+
+    ASSERT_EQ(result.val.files.size(), 1u);
+    std::vector<int> audibleKeys;
+    for (const auto& event : result.val.files[0].audibleEvents) {
+        audibleKeys.push_back(event.heardMidiKey);
+    }
+    std::vector<int> canonicalKeys;
+    for (const auto& event : result.val.canonicalEvents) {
+        canonicalKeys.push_back(event.heardMidiKey);
+    }
+    std::sort(audibleKeys.begin(), audibleKeys.end());
+    std::sort(canonicalKeys.begin(), canonicalKeys.end());
+    EXPECT_EQ(audibleKeys, canonicalKeys);
+}
+
 TEST(Project_PianomaniaCoordinatedExportTest, SameOnsetUnisonTieRootsShareOneAttack)
 {
     ScopedMScoreTestMode productionScoreSerialization(false);

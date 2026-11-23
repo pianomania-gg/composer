@@ -516,6 +516,7 @@ static constexpr PropertyMetaData propertyList[] = {
     { Pid::PIANOMANIA_HELD_NOTE_PITCH_CURVE,    P_TYPE::PIANOMANIA_HELD_NOTE_PITCH_CURVE, PropertyGroup::APPEARANCE, false, "pianomaniaHeldNotePitchCurve", QT_TRANSLATE_NOOP("engraving/propertyName", "PianoMania held note pitch curve") },
     { Pid::PIANOMANIA_HAND,                     P_TYPE::INT,                       PropertyGroup::APPEARANCE, false, "pianomaniaHand",                  QT_TRANSLATE_NOOP("engraving/propertyName", "PianoMania hand") },
     { Pid::PIANOMANIA_SHAKE_NOTE,               P_TYPE::BOOL,                      PropertyGroup::APPEARANCE, false, "pianomaniaShakeNote",             QT_TRANSLATE_NOOP("engraving/propertyName", "PianoMania shake note") },
+    { Pid::PIANOMANIA_START_AFTER_GRACE_NOTES,  P_TYPE::BOOL,                      PropertyGroup::APPEARANCE, true,  "pianomaniaStartAfterGraceNotes",  QT_TRANSLATE_NOOP("engraving/propertyName", "PianoMania start after grace notes") },
 
     { Pid::END,                                 P_TYPE::INT,                       PropertyGroup::NONE,       false, "++end++",                         nullptr }
 };

@@ -126,6 +126,11 @@ public:
     bool numbersOnly() const { return m_numbersOnly; }
     void setNumbersOnly(bool val);
 
+    // The grace notes before the chord this ottava starts on are not under it: they sound at the shift in force before
+    // the ottava, as when the source prints the line from the chord's main note, after its grace notes.
+    bool startAfterGraceNotes() const { return m_startAfterGraceNotes; }
+    void setStartAfterGraceNotes(bool val) { m_startAfterGraceNotes = val; }
+
     void setPlacement(PlacementV);
 
     LineSegment* createLineSegment(System* parent) override;
@@ -154,6 +159,7 @@ private:
 
     OttavaType m_ottavaType = OttavaType::OTTAVA_8VA;
     bool m_numbersOnly = false;
+    bool m_startAfterGraceNotes = false;
 };
 } // namespace mu::engraving
 

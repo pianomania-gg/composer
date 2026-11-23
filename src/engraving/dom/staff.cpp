@@ -1470,13 +1470,32 @@ void Staff::updateOttava()
 {
     staff_idx_t staffIdx = idx();
     m_pitchOffsetMap.clear();
+    m_graceNotesBeforePitchOffsetMap.clear();
+    std::vector<const Ottava*> ottavas;
     for (auto i : score()->spanner()) {
         const Spanner* s = i.second;
         if (s->isOttava() && s->staffIdx() == staffIdx && s->playSpanner()) {
             const Ottava* o = toOttava(s);
+            ottavas.push_back(o);
             m_pitchOffsetMap.insert_or_assign(o->tick().ticks(), o->pitchShift());
             m_pitchOffsetMap.insert_or_assign(o->tick2().ticks(), 0);
         }
+    }
+
+    // Grace notes before the first chord of an ottava that starts after them sound as if that ottava were absent:
+    // at the shift of any other ottava that covers the tick, otherwise unshifted.
+    for (const Ottava* o : ottavas) {
+        if (!o->startAfterGraceNotes()) {
+            continue;
+        }
+        const int tick = o->tick().ticks();
+        int shift = 0;
+        for (const Ottava* other : ottavas) {
+            if (other != o && other->tick().ticks() <= tick && tick < other->tick2().ticks()) {
+                shift = other->pitchShift();
+            }
+        }
+        m_graceNotesBeforePitchOffsetMap.insert_or_assign(tick, shift);
     }
 }
 
@@ -1488,6 +1507,18 @@ int Staff::pitchOffset(const Fraction& tick) const
 
     const auto it = muse::findLessOrEqual(m_pitchOffsetMap, tick.ticks());
     return it == m_pitchOffsetMap.cend() ? 0 : it->second;
+}
+
+int Staff::pitchOffset(const Chord* chord) const
+{
+    const Fraction tick = chord->segment()->tick();
+    if (chord->isGraceBefore()) {
+        const auto it = m_graceNotesBeforePitchOffsetMap.find(tick.ticks());
+        if (it != m_graceNotesBeforePitchOffsetMap.cend()) {
+            return it->second;
+        }
+    }
+    return pitchOffset(tick);
 }
 
 //---------------------------------------------------------

@@ -39,6 +39,7 @@
 
 namespace mu::engraving {
 class BracketItem;
+class Chord;
 class Clef;
 class Factory;
 class InstrumentTemplate;
@@ -203,6 +204,9 @@ public:
     //===========
 
     int pitchOffset(const Fraction& tick) const;
+    // The ottava shift the notes of this chord sound at. It differs from the shift at the chord's tick only for grace
+    // notes before a chord where an ottava marked to start after them begins (Ottava::startAfterGraceNotes).
+    int pitchOffset(const Chord* chord) const;
     void updateOttava();
 
     std::vector<Staff*> staffList() const;
@@ -307,6 +311,8 @@ private:
     std::map<int, SwingParameters> m_swingMap;
     std::map<int, CapoParams> m_capoMap;
     std::map<int, int> m_pitchOffsetMap;
+    // Tick of each ottava marked to start after grace notes -> the shift its leading grace notes sound at.
+    std::map<int, int> m_graceNotesBeforePitchOffsetMap;
     bool m_playbackVoice[VOICES] { true, true, true, true };
     std::array<bool, VOICES> m_visibilityVoices { true, true, true, true };
 

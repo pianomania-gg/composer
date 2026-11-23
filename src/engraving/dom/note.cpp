@@ -2601,7 +2601,7 @@ int Note::ottaveCapoFret() const
         }
     }
 
-    return staff->pitchOffset(segmentTick) + capoFret;
+    return staff->pitchOffset(ch) + capoFret;
 }
 
 //---------------------------------------------------------
@@ -2654,9 +2654,10 @@ int Note::epitch() const
 int Note::linkedOttavaPitchOffset() const
 {
     int linkedOttavaPitchOffset = 0;
-    if (links() && staff()->pitchOffset(tick()) == 0) {
+    if (links() && staff()->pitchOffset(chord()) == 0) {
         for (EngravingObject* link : *links()) {
-            int offset = toNote(link)->staff()->pitchOffset(tick());
+            const Note* linkedNote = toNote(link);
+            int offset = linkedNote->staff()->pitchOffset(linkedNote->chord());
             if (offset != 0) {
                 linkedOttavaPitchOffset = offset;
                 break;

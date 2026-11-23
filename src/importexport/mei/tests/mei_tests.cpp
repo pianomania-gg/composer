@@ -62,6 +62,7 @@
 #include "engraving/dom/line.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/note.h"
+#include "engraving/dom/ottava.h"
 #include "engraving/dom/page.h"
 #include "engraving/dom/part.h"
 #include "engraving/dom/pedal.h"
@@ -4182,6 +4183,69 @@ TEST_F(Mei_Tests, mei_export_moved_beam_stem_dir_matches_drawn_stem_under_cross_
         }
     }
     EXPECT_EQ(movedNotes, 8u);
+}
+
+// Test value: Detects the mark that an 8va starts after its chord's small notes being lost on save and load,
+// and the MEI giving those small notes a heard octave other than the one the MIDI plays.
+TEST_F(Mei_Tests, mei_export_grace_notes_before_ottava_marked_to_start_after_them_sound_as_written)
+{
+    const String fixture = String::fromUtf8(iex_mei_tests_DATA_ROOT)
+                           + u"/../../midi/tests/midiexport_data/pianomania_ottava_start_after_grace_notes.mscx";
+    MasterScore* score = ScoreRW::readScore(fixture, true);
+    ASSERT_TRUE(score);
+
+    const String roundTripName = u"pianomania-ottava-start-after-grace-notes.roundtrip.mscx";
+    ASSERT_TRUE(ScoreRW::saveScore(score, roundTripName));
+    delete score;
+
+    const std::string roundTripMscx = readTestTextFile(roundTripName);
+    const size_t mark = roundTripMscx.find("<pianomaniaStartAfterGraceNotes>1</pianomaniaStartAfterGraceNotes>");
+    ASSERT_NE(mark, std::string::npos);
+    EXPECT_EQ(roundTripMscx.find("<pianomaniaStartAfterGraceNotes>", mark + 1), std::string::npos);
+
+    std::unique_ptr<MasterScore> roundTripped(ScoreRW::readScore(roundTripName, true));
+    ASSERT_TRUE(roundTripped);
+    std::vector<bool> marks;
+    for (const auto& [tick, spanner] : roundTripped->spanner()) {
+        if (spanner->isOttava()) {
+            marks.push_back(toOttava(spanner)->startAfterGraceNotes());
+        }
+    }
+    EXPECT_EQ(marks, (std::vector<bool> { true, false }));
+
+    std::string meiText;
+    ASSERT_TRUE(pmWriteMeiToString(roundTripped.get(), true, meiText));
+
+    // Each bar: G4, the small notes C5 and E5, the G5 the 8va starts on, G4. Bar 1's 8va starts after the small
+    // notes, so they sound as written; bar 2's starts before them, so they sound an octave up.
+    struct WrittenNote {
+        std::string pname;
+        std::string oct;
+        std::string heardOct;
+    };
+    std::vector<WrittenNote> written;
+    std::vector<std::string> ids;
+    for (const std::string& tag : collectStartTags(meiText, "note ")) {
+        written.push_back({ xmlAttributeValue(tag, "pname").value_or(""), xmlAttributeValue(tag, "oct").value_or(""),
+                            xmlAttributeValue(tag, "oct.ges").value_or("") });
+        ids.push_back(xmlAttributeValue(tag, "xml:id").value_or(""));
+    }
+    const std::vector<WrittenNote> expected {
+        { "g", "4", "" }, { "c", "5", "" }, { "e", "5", "" }, { "g", "5", "6" }, { "g", "4", "" },
+        { "g", "4", "" }, { "c", "5", "6" }, { "e", "5", "6" }, { "g", "5", "6" }, { "g", "4", "" },
+    };
+    ASSERT_EQ(written.size(), expected.size());
+    for (size_t index = 0; index < expected.size(); ++index) {
+        EXPECT_EQ(written[index].pname, expected[index].pname) << "note " << index;
+        EXPECT_EQ(written[index].oct, expected[index].oct) << "note " << index;
+        EXPECT_EQ(written[index].heardOct, expected[index].heardOct) << "note " << index;
+    }
+
+    // Both 8vas are drawn from the G5, as before.
+    const std::vector<std::string> octaves = collectStartTags(meiText, "octave ");
+    ASSERT_EQ(octaves.size(), 2u);
+    EXPECT_EQ(xmlAttributeValue(octaves[0], "startid"), "#" + ids[3]);
+    EXPECT_EQ(xmlAttributeValue(octaves[1], "startid"), "#" + ids[8]);
 }
 
 }
