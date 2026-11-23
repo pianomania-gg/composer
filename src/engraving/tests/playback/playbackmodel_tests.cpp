@@ -1406,3 +1406,50 @@ TEST_F(Engraving_PlaybackModelTests, Playback_Setup_Data_MultiInstrument)
         }
     }
 }
+
+// Test value: Detects the app's own playback (the playback model) sounding small notes before an 8va marked to start
+// after them an octave up, or losing the 8va on the main note.
+TEST_F(Engraving_PlaybackModelTests, GraceNotesBeforeAnOttavaMarkedToStartAfterThemPlayAsWritten)
+{
+    // [GIVEN] Bar 1: G4, then C5 and E5 as small notes before a G5 the marked 8va starts on, then G4.
+    //         Bar 2: the same under an unmarked 8va.
+    Score* score = ScoreRW::readScore(
+        PLAYBACK_MODEL_TEST_FILES_DIR + "ottava_start_after_grace_notes/ottava_start_after_grace_notes.mscx");
+    ASSERT_TRUE(score);
+    ASSERT_EQ(score->parts().size(), 1);
+    const Part* part = score->parts().at(0);
+
+    m_defaultProfile->setPattern(ArticulationType::Standard, buildTestArticulationPattern());
+    m_defaultProfile->setPattern(ArticulationType::PreAppoggiatura, buildTestArticulationPattern());
+    EXPECT_CALL(*m_repositoryMock, defaultProfile(_)).WillRepeatedly(Return(m_defaultProfile));
+
+    // [WHEN] The playback model is loaded
+    PlaybackModel model(modularity::globalCtx());
+    model.profilesRepository.set(m_repositoryMock);
+    model.load(score);
+    const PlaybackEventsMap& result = model.resolveTrackPlaybackData(part->id(), part->instrumentId()).originEvents;
+
+    std::vector<pitch_level_t> barOne;
+    std::vector<pitch_level_t> barTwo;
+    for (const auto& [timestamp, events] : result) {
+        for (const PlaybackEvent& event : events) {
+            if (!std::holds_alternative<mpe::NoteEvent>(event)) {
+                continue;
+            }
+            const pitch_level_t pitch = std::get<mpe::NoteEvent>(event).pitchCtx().nominalPitchLevel;
+            (timestamp < WHOLE_NOTE_DURATION ? barOne : barTwo).push_back(pitch);
+        }
+    }
+
+    // [THEN] Bar 1's small notes play as written; the G5 plays an octave up
+    EXPECT_EQ(barOne, (std::vector<pitch_level_t> {
+        pitchLevel(PitchClass::G, 4), pitchLevel(PitchClass::C, 5), pitchLevel(PitchClass::E, 5),
+        pitchLevel(PitchClass::G, 6), pitchLevel(PitchClass::G, 4) }));
+
+    // [THEN] Bar 2's small notes play an octave up with the G5, as without the mark
+    EXPECT_EQ(barTwo, (std::vector<pitch_level_t> {
+        pitchLevel(PitchClass::G, 4), pitchLevel(PitchClass::C, 6), pitchLevel(PitchClass::E, 6),
+        pitchLevel(PitchClass::G, 6), pitchLevel(PitchClass::G, 4) }));
+
+    delete score;
+}

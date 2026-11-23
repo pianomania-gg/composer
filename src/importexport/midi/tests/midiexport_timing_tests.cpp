@@ -1173,14 +1173,15 @@ void MidiExportTimingTests::graceNotesBeforeAnOttavaMarkedToStartAfterThemSoundA
     };
 
     // Bar 1: the 8va is marked to start after the small notes C5 and E5, so they sound as
-    // written before beat 2; the G5 it starts on sounds as G6, and beat 3's G4 is past its end.
+    // written before beat 2; the G5 it starts on sounds as G6, the small A5 after the G5 is
+    // under the 8va (A6), and beat 3's G4 is past its end.
     QCOMPARE(pitchesStartingIn(0, 480), (std::vector<int> { 67, 72, 76 }));
-    QCOMPARE(pitchesStartingIn(480, 960), (std::vector<int> { 91 }));
+    QCOMPARE(pitchesStartingIn(480, 960), (std::vector<int> { 91, 93 }));
     QCOMPARE(pitchesStartingIn(960, 1920), (std::vector<int> { 67 }));
 
-    // Bar 2: the same notes under an unmarked 8va: the small notes sound an octave up with the G5.
+    // Bar 2: the same notes under an unmarked 8va: the small notes before the G5 sound an octave up too.
     QCOMPARE(pitchesStartingIn(1920, 2400), (std::vector<int> { 67, 84, 88 }));
-    QCOMPARE(pitchesStartingIn(2400, 2880), (std::vector<int> { 91 }));
+    QCOMPARE(pitchesStartingIn(2400, 2880), (std::vector<int> { 91, 93 }));
     QCOMPARE(pitchesStartingIn(2880, 3840), (std::vector<int> { 67 }));
 
     // The mark changes only what the small notes sound: both bars keep the same timing.

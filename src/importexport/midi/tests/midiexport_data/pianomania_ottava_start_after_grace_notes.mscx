@@ -25,7 +25,8 @@
         </Instrument>
       </Part>
     <Staff id="1">
-      <!-- Bar 1: the 8va starts on beat 2's G5, after its two small notes C5 and E5, which sound as written. -->
+      <!-- Bar 1: the 8va starts on beat 2's G5, after its two small notes C5 and E5, which sound as written; the small A5
+           after the G5 is under the 8va. A chord's small notes, before and after, are written ahead of it. -->
       <Measure>
         <voice>
           <TimeSig>
@@ -67,6 +68,14 @@
               </Note>
             </Chord>
           <Chord>
+            <durationType>16th</durationType>
+            <grace16after/>
+            <Note>
+              <pitch>81</pitch>
+              <tpc>17</tpc>
+              </Note>
+            </Chord>
+          <Chord>
             <durationType>quarter</durationType>
             <Note>
               <pitch>79</pitch>
@@ -92,7 +101,7 @@
             </Rest>
           </voice>
         </Measure>
-      <!-- Bar 2: the 8va starts before beat 2's small notes, so they sound an octave up with the G5. -->
+      <!-- Bar 2: the 8va starts before beat 2's small notes, so they sound an octave up with the G5 and the small A5. -->
       <Measure>
         <voice>
           <Chord>
@@ -126,6 +135,14 @@
             <Note>
               <pitch>76</pitch>
               <tpc>18</tpc>
+              </Note>
+            </Chord>
+          <Chord>
+            <durationType>16th</durationType>
+            <grace16after/>
+            <Note>
+              <pitch>81</pitch>
+              <tpc>17</tpc>
               </Note>
             </Chord>
           <Chord>

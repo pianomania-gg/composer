@@ -131,7 +131,8 @@ include(SetupGTest)
 string(CONCAT PIANOMANIA_ENGRAVING_TEST_FILTER
     "Engraving_PianomaniaPrettifyTests.*:"
     "MidiRenderer_Tests.explicitTrillPlaybackPreservesRepeatedAnchorAndOrnamentOwnership:"
-    "MidiRenderer_Tests.autoTrillPlaybackStillUsesGameplayNormalization"
+    "MidiRenderer_Tests.autoTrillPlaybackStillUsesGameplayNormalization:"
+    "Engraving_PlaybackModelTests.GraceNotesBeforeAnOttavaMarkedToStartAfterThemPlayAsWritten"
 )
 
 add_test(
@@ -140,10 +141,10 @@ add_test(
         --gtest_filter=${PIANOMANIA_ENGRAVING_TEST_FILTER}
 )
 
-# GTest exits 0 when a filter matches nothing. Pin the 50 Prettify contracts and
-# the two explicit/automatic ornament controls so missing sources or fixtures
-# cannot silently weaken this gate.
+# GTest exits 0 when a filter matches nothing. Pin the 50 Prettify contracts,
+# the two explicit/automatic ornament controls and the marked-8va playback check
+# so missing sources or fixtures cannot silently weaken this gate.
 # runutests.sh sets GTEST_COLOR=1, so allow colour escapes before the count.
 set_tests_properties(engraving_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*52 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*53 tests"
 )

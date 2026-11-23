@@ -4216,8 +4216,9 @@ TEST_F(Mei_Tests, mei_export_grace_notes_before_ottava_marked_to_start_after_the
     std::string meiText;
     ASSERT_TRUE(pmWriteMeiToString(roundTripped.get(), true, meiText));
 
-    // Each bar: G4, the small notes C5 and E5, the G5 the 8va starts on, G4. Bar 1's 8va starts after the small
-    // notes, so they sound as written; bar 2's starts before them, so they sound an octave up.
+    // Each bar: G4, the small notes C5 and E5, the G5 the 8va starts on, a small A5 after it, G4. Bar 1's 8va starts
+    // after the small notes before the G5, so they sound as written; bar 2's starts before them, so they sound an octave
+    // up. The A5 after the G5 is under the 8va in both bars.
     struct WrittenNote {
         std::string pname;
         std::string oct;
@@ -4231,8 +4232,8 @@ TEST_F(Mei_Tests, mei_export_grace_notes_before_ottava_marked_to_start_after_the
         ids.push_back(xmlAttributeValue(tag, "xml:id").value_or(""));
     }
     const std::vector<WrittenNote> expected {
-        { "g", "4", "" }, { "c", "5", "" }, { "e", "5", "" }, { "g", "5", "6" }, { "g", "4", "" },
-        { "g", "4", "" }, { "c", "5", "6" }, { "e", "5", "6" }, { "g", "5", "6" }, { "g", "4", "" },
+        { "g", "4", "" }, { "c", "5", "" }, { "e", "5", "" }, { "g", "5", "6" }, { "a", "5", "6" }, { "g", "4", "" },
+        { "g", "4", "" }, { "c", "5", "6" }, { "e", "5", "6" }, { "g", "5", "6" }, { "a", "5", "6" }, { "g", "4", "" },
     };
     ASSERT_EQ(written.size(), expected.size());
     for (size_t index = 0; index < expected.size(); ++index) {
@@ -4245,7 +4246,7 @@ TEST_F(Mei_Tests, mei_export_grace_notes_before_ottava_marked_to_start_after_the
     const std::vector<std::string> octaves = collectStartTags(meiText, "octave ");
     ASSERT_EQ(octaves.size(), 2u);
     EXPECT_EQ(xmlAttributeValue(octaves[0], "startid"), "#" + ids[3]);
-    EXPECT_EQ(xmlAttributeValue(octaves[1], "startid"), "#" + ids[8]);
+    EXPECT_EQ(xmlAttributeValue(octaves[1], "startid"), "#" + ids[9]);
 }
 
 }
