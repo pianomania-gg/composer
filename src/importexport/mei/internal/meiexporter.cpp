@@ -5478,6 +5478,13 @@ bool MeiExporter::writeOrnament(const Ornament *ornament,
   double yOffset = getOrnamentYOffset(ornament);
   ornamentNode.append_attribute("yOffset") = formatDecimalStr(yOffset, 1).c_str();
 
+  // Pianomania: a short trill marked Baroque sounds its upper note first, on the
+  // beat, and the written note after it. The MIDI holds that upper note as a
+  // generated note before the written one; this names the ornament it belongs to.
+  if (CompatMidiRendererInternal::ornamentStartsOnUpperNote(ornament)) {
+    ornamentNode.append_attribute("pm:ornament-start") = "upper";
+  }
+
   // Pianomania: the centre of the drawn ornament glyph, so Practice can place
   // it exactly instead of re-deriving it from yOffset.
   const RectF glyph = ornament->symBbox(ornament->symId()).translated(ornament->pagePos());

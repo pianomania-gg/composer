@@ -95,7 +95,8 @@ string(CONCAT PIANOMANIA_MEI_TEST_FILTER
     "Mei_Tests.mei_pianomania_rolled_grace_chord_exports_its_own_notes:"
     "Mei_Tests.mei_export_glissando_skips_only_segments_musescore_does_not_draw:"
     "Mei_Tests.mei_export_moved_beam_stem_dir_matches_drawn_stem_under_cross_system_slur:"
-    "Mei_Tests.mei_export_grace_notes_before_ottava_marked_to_start_after_them_sound_as_written"
+    "Mei_Tests.mei_export_grace_notes_before_ottava_marked_to_start_after_them_sound_as_written:"
+    "Mei_Tests.mei_export_baroque_short_trill_names_its_upper_note_start"
 )
 
 add_test(
@@ -109,5 +110,5 @@ add_test(
 # runutests.sh sets GTEST_COLOR=1, so a colour escape sits between the tag and the
 # count. Skip whatever separates them instead of assuming a single space.
 set_tests_properties(iex_mei_pianomania_tests PROPERTIES
-    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*51 tests"
+    PASS_REGULAR_EXPRESSION "\\[  PASSED  \\][^0-9]*52 tests"
 )

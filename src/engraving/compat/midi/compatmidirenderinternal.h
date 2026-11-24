@@ -42,6 +42,7 @@ class MasterScore;
 class Staff;
 class Instrument;
 class Chord;
+class Ornament;
 // This struct specifies how to render an articulation.
 //   atype - the articulation type to implement, such as SymId::ornamentTurn
 //   ostyles - the actual ornament has a property called ornamentStyle whose value is
@@ -184,6 +185,11 @@ public:
     static const int ARTICULATION_CONV_FACTOR { 100000 };
     static bool graceNotesMerged(Chord* chord);
     static int canonicalWrittenNoteEventIndex(const NoteEventList& events);
+
+    //! A short trill marked Baroque is written from its upper note: upper, written, upper,
+    //! written. The MIDI renderer and the MEI exporter both ask here, so the MEI names the
+    //! upper start for exactly the ornaments whose MIDI has it.
+    static bool ornamentStartsOnUpperNote(const Ornament* ornament);
     static const Note* resolveTremoloOwnerNote(const Note* emitter, const NoteEvent& event);
     static std::optional<int> canonicalTremoloWrittenAttackTick(const Note* owner);
     // Whether `chord` carries a one- or two-chord tremolo whose playback is on. With playback off
