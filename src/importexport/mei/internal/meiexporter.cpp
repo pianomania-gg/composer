@@ -5749,6 +5749,11 @@ bool MeiExporter::writeRepeatMark(const Jump *jump, const Measure *measure) {
   appendCenteredPmPosition(repeatMarkNode, jump);
   repeatMarkNode.append_attribute("yOffset") =
       formatDecimalStr(getRepeatMarkYOffset(jump, measure), 1);
+  // Pianomania takes this jump with Repeats off as well: the repeat-off MIDI
+  // exported beside this file plays on from where the jump leads (see
+  // exportPianomaniaBundle). A file without the attribute comes from an export
+  // whose repeat-off MIDI stopped at the jump, and is read that way.
+  repeatMarkNode.append_attribute("pm:repeats-off") = "follow";
 
   // Currently not used - builds a post-processing list to be processing in
   // MeiExporter::addJumpToRepeatMarks

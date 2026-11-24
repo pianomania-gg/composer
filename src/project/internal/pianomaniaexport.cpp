@@ -310,6 +310,44 @@ void removeNonFinalEndings(mu::engraving::MasterScore* score, int finalEndingNum
     }
 }
 
+// Leaves jumps and their markers as the only instructions that send playback
+// somewhere else: no measure starts or ends a repeat, and no volta chooses a
+// pass. Unwinding the result plays each section once and still takes a D.C. or
+// D.S., so a piece printed as opening, middle and "D.C. al Fine" ends on its
+// opening. Call after removeNonFinalEndings: a volta left then is a final ending.
+void removeRepeatSigns(mu::engraving::MasterScore* score)
+{
+    if (!score) {
+        return;
+    }
+    for (mu::engraving::Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        measure->setRepeatStart(false);
+        measure->setRepeatEnd(false);
+    }
+    std::vector<mu::engraving::Spanner*> voltas;
+    for (const auto& entry : score->spannerMap().map()) {
+        if (entry.second && entry.second->isVolta()) {
+            voltas.push_back(entry.second);
+        }
+    }
+    for (mu::engraving::Spanner* volta : voltas) {
+        score->removeSpanner(volta);
+    }
+    score->setPlaylistDirty();
+}
+
+bool hasJump(const mu::engraving::Score* score)
+{
+    for (const mu::engraving::Measure* measure = score->firstMeasure(); measure; measure = measure->nextMeasure()) {
+        for (const mu::engraving::EngravingItem* item : measure->el()) {
+            if (item->isJump() && (!item->systemFlag() || item->isTopSystemObject())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 std::string midiKindName(MidiExportedFile::Kind kind)
 {
     switch (kind) {
@@ -674,15 +712,21 @@ std::vector<MidiExportedFile::TraversalSegment> repeatTraversalSegments(mu::engr
     return result;
 }
 
-// The base MIDI plays its score straight through. For a score with several
+// The base MIDI plays its score without repeats. For a score with several
 // endings that score is a copy without the non-final endings, so its own ticks
 // are not canonical score ticks. Each run of played measures that follows one
 // run of consecutive canonical measures becomes one segment: its source range
 // is that canonical run and its unfolded start is where the run begins in the
 // base MIDI. The copy keeps the canonical measure identities that the
 // canonical MEI publishes, so measures are matched by identity.
+//
+// A score with a jump is played from a copy that keeps the jump and nothing
+// else (see buildNoRepeatScore), unwound: a D.C. plays the opening again, so a
+// canonical measure may be played more than once and each return is a segment
+// of its own. Without a jump every canonical measure is played at most once.
 std::vector<MidiExportedFile::TraversalSegment> baseTraversalSegments(mu::engraving::Score* canonicalScore,
-                                                                      mu::engraving::Score* playedScore)
+                                                                      mu::engraving::Score* playedScore,
+                                                                      bool followsJumps)
 {
     std::vector<MidiExportedFile::TraversalSegment> result;
     if (!canonicalScore || !playedScore) {
@@ -698,33 +742,59 @@ std::vector<MidiExportedFile::TraversalSegment> baseTraversalSegments(mu::engrav
         }
     }
 
+    // Every measure the base MIDI plays, in order, with the tick it starts at in that MIDI.
+    std::vector<std::pair<const mu::engraving::Measure*, int> > played;
+    if (followsJumps) {
+        for (const mu::engraving::RepeatSegment* segment : playedScore->repeatList(true, false)) {
+            if (!segment || segment->isEmpty()) {
+                continue;
+            }
+            for (const mu::engraving::Measure* measure : segment->measureList()) {
+                played.emplace_back(measure, segment->utick + measure->tick().ticks() - segment->tick);
+            }
+        }
+    } else {
+        for (const mu::engraving::Measure* measure = playedScore->firstMeasure(); measure;
+             measure = measure->nextMeasure()) {
+            played.emplace_back(measure, measure->tick().ticks());
+        }
+    }
+
     std::set<const mu::engraving::Measure*> playedCanonicalMeasures;
+    std::map<std::pair<int, int>, int> passesByRange;
     const mu::engraving::Measure* runFirst = nullptr;
     const mu::engraving::Measure* runLast = nullptr;
     int runUnfoldedStart = 0;
+    int nextUnfoldedTick = 0;
     const auto closeRun = [&]() {
         const int start = runFirst->tick().ticks();
         const int end = runLast->endTick().ticks();
-        result.push_back({ "segment:" + std::to_string(start) + "-" + std::to_string(end) + ":pass:1",
+        const int pass = ++passesByRange[{ start, end }];
+        result.push_back({ "segment:" + std::to_string(start) + "-" + std::to_string(end) + ":pass:"
+                           + std::to_string(pass),
                            start, end, runUnfoldedStart, static_cast<int>(result.size()) + 1, {} });
     };
-    for (const mu::engraving::Measure* measure = playedScore->firstMeasure(); measure; measure = measure->nextMeasure()) {
+    for (const auto& [measure, unfoldedTick] : played) {
         const auto canonical = canonicalMeasures.find(stableXmlId(measure));
+        const bool firstTime = canonical != canonicalMeasures.end()
+                               && playedCanonicalMeasures.insert(canonical->second).second;
         if (canonical == canonicalMeasures.end() || canonical->second->ticks() != measure->ticks()
-            || !playedCanonicalMeasures.insert(canonical->second).second) {
+            || (!firstTime && !followsJumps)) {
             LOGE() << "Pianomania base MIDI measure does not play exactly one canonical measure: "
                    << stableXmlId(measure);
             return {};
         }
-        if (runLast && runLast->nextMeasure() == canonical->second) {
+        if (runLast && runLast->nextMeasure() == canonical->second && unfoldedTick == nextUnfoldedTick) {
             runLast = canonical->second;
+            nextUnfoldedTick = unfoldedTick + measure->ticks().ticks();
             continue;
         }
         if (runFirst) {
             closeRun();
         }
         runFirst = runLast = canonical->second;
-        runUnfoldedStart = measure->tick().ticks();
+        runUnfoldedStart = unfoldedTick;
+        nextUnfoldedTick = unfoldedTick + measure->ticks().ticks();
     }
     if (!runFirst) {
         LOGE() << "Pianomania base traversal contains no measures";
@@ -1467,14 +1537,20 @@ RepeatExportInfo mu::project::pianomania::analyzeRepeatExportInfo(mu::engraving:
         info.hasMultipleEndings = endings.size() > 1;
         info.finalEndingNumber = *endings.rbegin();
     }
+    info.hasJumps = hasJump(score);
 
     return info;
 }
 
-std::unique_ptr<mu::engraving::MasterScore> mu::project::pianomania::buildNoRepeatScoreForFinalEnding(mu::engraving::Score* score,
-                                                                                                      int finalEndingNumber)
+// The score the repeat-off MIDI is played from, when that is not the score
+// itself: a copy without the non-final endings and, for a score with a jump,
+// without any repeat sign, so that unwinding it follows the jump and nothing
+// else. Write its MIDI unwound when repeatInfo.hasJumps, straight through
+// otherwise.
+std::unique_ptr<mu::engraving::MasterScore> mu::project::pianomania::buildNoRepeatScore(mu::engraving::Score* score,
+                                                                                        const RepeatExportInfo& repeatInfo)
 {
-    if (!score || finalEndingNumber <= 0) {
+    if (!score || !repeatInfo.needsNoRepeatScore()) {
         return nullptr;
     }
 
@@ -1488,7 +1564,12 @@ std::unique_ptr<mu::engraving::MasterScore> mu::project::pianomania::buildNoRepe
         return nullptr;
     }
 
-    removeNonFinalEndings(clone.get(), finalEndingNumber);
+    if (repeatInfo.hasMultipleEndings && repeatInfo.finalEndingNumber > 0) {
+        removeNonFinalEndings(clone.get(), repeatInfo.finalEndingNumber);
+    }
+    if (repeatInfo.hasJumps) {
+        removeRepeatSigns(clone.get());
+    }
     clone->setUpTempoMap();
     clone->setLayoutAll();
     clone->doLayout();
@@ -1565,11 +1646,11 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
     }
     std::unique_ptr<mu::engraving::MasterScore> noRepeatScore;
     std::vector<mu::iex::mei::PmMeiNoteRecord> noRepeatRecords;
-    if (rv.val.repeatInfo.hasMultipleEndings && rv.val.repeatInfo.finalEndingNumber > 0) {
-        noRepeatScore = buildNoRepeatScoreForFinalEnding(score, rv.val.repeatInfo.finalEndingNumber);
+    if (rv.val.repeatInfo.needsNoRepeatScore()) {
+        noRepeatScore = buildNoRepeatScore(score, rv.val.repeatInfo);
         if (!noRepeatScore) {
             rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,
-                                    std::string("Failed to build final-ending no-repeat score"));
+                                    std::string("Failed to build the no-repeat score"));
             return rv;
         }
         std::string ignoredMei;
@@ -1601,7 +1682,10 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         {
             ScopedCanonicalNotePlayback canonicalNotePlayback(exportScore);
             mu::iex::midi::ExportMidi exporter(exportScore);
-            written = exporter.write(path.toQString(), expandRepeats, exportRpns, synthState, &provenance);
+            // The base MIDI of a score with a jump is unwound too: its score has no
+            // repeat sign left, so unwinding takes the jump and nothing else.
+            const bool unwind = expandRepeats || rv.val.repeatInfo.hasJumps;
+            written = exporter.write(path.toQString(), unwind, exportRpns, synthState, &provenance);
         }
         if (master) {
             master->setExpandRepeats(previousExpandRepeats);
@@ -1617,7 +1701,7 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         file.expandRepeats = expandRepeats;
         file.traversalId = midiKindName(kind);
         file.traversalSegments = kind == MidiExportedFile::Kind::Base
-                                 ? baseTraversalSegments(score, exportScore)
+                                 ? baseTraversalSegments(score, exportScore, rv.val.repeatInfo.hasJumps)
                                  : repeatTraversalSegments(exportScore);
         file.variantCanonicalEvents = variantCanonicalEvents(canonicalVariantRecords);
         if (file.traversalSegments.empty() || file.variantCanonicalEvents.empty()
@@ -1628,8 +1712,10 @@ muse::RetVal<PianomaniaExportResult> mu::project::pianomania::exportPianomaniaBu
         return true;
     };
 
-    // `midi` is the repeat-off gameplay traversal. Both MIDI variants use the
-    // one canonical MEI; there is no third/legacy no-repeats MIDI role in v3.
+    // `midi` is the repeat-off gameplay traversal: no repeat is taken, the
+    // final ending is the one played, and a jump (D.C., D.S.) is followed. Both
+    // MIDI variants use the one canonical MEI; there is no third/legacy
+    // no-repeats MIDI role in v3.
     if (!writeVariant(noRepeatExportScore, basePath + ".mid", false, MidiExportedFile::Kind::Base,
                       noRepeatVariantRecords)) {
         rv.ret = muse::make_ret(muse::Ret::Code::UnknownError,

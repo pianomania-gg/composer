@@ -2003,24 +2003,32 @@ INSTANTIATE_TEST_SUITE_P(
     }
     );
 
-// Test value: Detects a repeat-off traversal measured on the final-ending copy
-// instead of the canonical score; consumers then reject every song with first
-// and second endings in Practice and in Game Mode with repeats off.
-TEST(Project_PianomaniaCoordinatedExportTest, SeveralEndingsBaseTraversalUsesCanonicalScoreTicks)
+namespace {
+struct ExpectedTraversalSegment {
+    const char* id;
+    int start;
+    int end;
+    int unfoldedStart;
+};
+
+// Exports the score and checks its repeat-off traversal segment by segment, then that
+// in each MIDI every written attack sounds where its segment places the canonical note.
+// Returns the canonical MEI in `mei`.
+void expectBaseTraversal(mu::engraving::MasterScore* score, const muse::String& fixturePath,
+                         const std::vector<ExpectedTraversalSegment>& expectedBase, int baseAttacks, int repeatsAttacks,
+                         QByteArray& mei)
 {
-    ScopedMScoreTestMode productionScoreSerialization(false);
-    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
-                                     + u"/src/engraving/tests/playback/playbackmodel_data/repeat_with_2_voltas/repeat_with_2_voltas.mscx";
-    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixturePath, true));
-    ASSERT_NE(score, nullptr);
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const muse::RetVal<mu::project::pianomania::PianomaniaExportResult> result
         = mu::project::pianomania::exportPianomaniaBundle(
-            score.get(), muse::io::path_t(fixturePath), muse::io::path_t(directory.filePath("song")),
+            score, muse::io::path_t(fixturePath), muse::io::path_t(directory.filePath("song")),
             muse::io::path_t(directory.filePath("song.mei")), false);
     ASSERT_TRUE(result.ret) << result.ret.toString();
     const QJsonObject root = QJsonDocument::fromJson(QByteArray::fromStdString(result.val.manifestJson)).object();
+    QFile meiFile(directory.filePath("song.mei"));
+    ASSERT_TRUE(meiFile.open(QIODevice::ReadOnly));
+    mei = meiFile.readAll();
 
     std::map<QString, int> canonicalTicks;
     for (const QJsonValue& value : root.value("canonical_events").toArray()) {
@@ -2033,17 +2041,6 @@ TEST(Project_PianomaniaCoordinatedExportTest, SeveralEndingsBaseTraversalUsesCan
         segmentsByTraversal.emplace(traversal.value("traversal_id").toString(), traversal.value("segments").toArray());
     }
 
-    // Measure 2 is the first ending, so the base plays measure 1 and then measures 3-6.
-    struct ExpectedSegment {
-        const char* id;
-        int start;
-        int end;
-        int unfoldedStart;
-    };
-    const std::vector<ExpectedSegment> expectedBase {
-        { "segment:0-1920:pass:1", 0, 1920, 0 },
-        { "segment:3840-11520:pass:1", 3840, 11520, 1920 },
-    };
     const QJsonArray baseSegments = segmentsByTraversal["base"];
     ASSERT_EQ(baseSegments.size(), static_cast<int>(expectedBase.size()));
     for (size_t index = 0; index < expectedBase.size(); ++index) {
@@ -2092,8 +2089,59 @@ TEST(Project_PianomaniaCoordinatedExportTest, SeveralEndingsBaseTraversalUsesCan
                 ++checked;
             }
         }
-        EXPECT_EQ(checked, kind == "base" ? 20 : 28) << kind.toStdString();
+        EXPECT_EQ(checked, kind == "base" ? baseAttacks : repeatsAttacks) << kind.toStdString();
     }
+}
+}
+
+// Test value: Detects a repeat-off traversal measured on the final-ending copy
+// instead of the canonical score; consumers then reject every song with first
+// and second endings in Practice and in Game Mode with repeats off.
+TEST(Project_PianomaniaCoordinatedExportTest, SeveralEndingsBaseTraversalUsesCanonicalScoreTicks)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/engraving/tests/playback/playbackmodel_data/repeat_with_2_voltas/repeat_with_2_voltas.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    // Measure 2 is the first ending, so the base plays measure 1 and then measures 3-6.
+    QByteArray mei;
+    expectBaseTraversal(score.get(), fixturePath, {
+        { "segment:0-1920:pass:1", 0, 1920, 0 },
+        { "segment:3840-11520:pass:1", 3840, 11520, 1920 },
+    }, 20, 28, mei);
+    EXPECT_FALSE(mei.contains("pm:repeats-off"));
+}
+
+// Test value: Detects a repeat-off MIDI that stops at a D.C. or takes a repeat on
+// the way to it, and a score file that does not say its jump is taken. A piece
+// printed as an opening that is repeated, a middle and "D.C. al Fine" then ends
+// after its middle for every player with Repeats off, or the game lays out a
+// route its MIDI does not play.
+TEST(Project_PianomaniaCoordinatedExportTest, RepeatOffTraversalFollowsADaCapoAndTakesNoRepeat)
+{
+    ScopedMScoreTestMode productionScoreSerialization(false);
+    const muse::String fixturePath = muse::String::fromUtf8(project_test_DATA_ROOT)
+                                     + u"/src/engraving/tests/playback/playbackmodel_data/da_capo_al_fine/da_capo_al_fine.mscx";
+    std::unique_ptr<mu::engraving::MasterScore> score(mu::engraving::ScoreRW::readScore(fixturePath, true));
+    ASSERT_NE(score, nullptr);
+
+    // Six measures: Fine closes measure 2 and D.C. al Fine closes measure 6. The
+    // opening, measures 1-2, is given a repeat here.
+    mu::engraving::Measure* fineMeasure = score->firstMeasure()->nextMeasure();
+    ASSERT_NE(fineMeasure, nullptr);
+    fineMeasure->setRepeatEnd(true);
+    score->setPlaylistDirty();
+
+    // Repeats off: measures 1-6, then 1-2 again. Repeats on: 1-2, 1-2, 3-6, 1-2.
+    QByteArray mei;
+    expectBaseTraversal(score.get(), fixturePath, {
+        { "segment:0-11520:pass:1", 0, 11520, 0 },
+        { "segment:0-3840:pass:1", 0, 3840, 11520 },
+    }, 32, 40, mei);
+    EXPECT_EQ(mei.count("pm:repeats-off=\"follow\""), 1);
+    EXPECT_EQ(mei.count("<repeatMark"), 2);
 }
 
 namespace {

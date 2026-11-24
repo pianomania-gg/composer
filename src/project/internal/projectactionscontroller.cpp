@@ -1238,8 +1238,8 @@ void ProjectActionsController::exportPianomaniaAssets(const INotationPtr& notati
     const bool exportRpns = midiImportExportConfiguration()->isMidiExportRpns();
 
     std::unique_ptr<mu::engraving::MasterScore> noRepeatScore;
-    if (repeatInfo.hasMultipleEndings && repeatInfo.finalEndingNumber > 0 && (exportMidi || exportMei)) {
-        noRepeatScore = pianomania::buildNoRepeatScoreForFinalEnding(score, repeatInfo.finalEndingNumber);
+    if (repeatInfo.needsNoRepeatScore() && (exportMidi || exportMei)) {
+        noRepeatScore = pianomania::buildNoRepeatScore(score, repeatInfo);
         if (!noRepeatScore) {
             LOGE() << "Failed to build no-repeat score for Pianomania export: " << notation->name();
         }
@@ -1248,7 +1248,8 @@ void ProjectActionsController::exportPianomaniaAssets(const INotationPtr& notati
     if (exportMidi) {
         mu::engraving::Score* baseScore
             = noRepeatScore ? static_cast<mu::engraving::Score*>(noRepeatScore.get()) : score;
-        pianomania::writeMidiFile(baseScore, basePath + ".mid", false, exportRpns);
+        // A score with a jump is unwound: its no-repeat copy keeps the jump and no repeat sign.
+        pianomania::writeMidiFile(baseScore, basePath + ".mid", repeatInfo.hasJumps && noRepeatScore, exportRpns);
 
         if (repeatInfo.hasRepeats) {
             pianomania::writeMidiFile(score, basePath + "-repeats.mid", true, exportRpns);

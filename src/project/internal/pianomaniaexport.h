@@ -38,6 +38,11 @@ struct RepeatExportInfo {
     bool hasRepeats = false;
     bool hasMultipleEndings = false;
     int finalEndingNumber = 0;
+    // The score has a jump (D.C., D.S., with or without a coda or Fine). The repeat-off MIDI follows it.
+    bool hasJumps = false;
+
+    // The repeat-off MIDI is played from a copy of the score: see buildNoRepeatScore.
+    bool needsNoRepeatScore() const { return hasJumps || (hasMultipleEndings && finalEndingNumber > 0); }
 };
 
 struct MidiExportedFile {
@@ -132,7 +137,7 @@ struct PianomaniaExportResult {
 
 RepeatExportInfo analyzeRepeatExportInfo(mu::engraving::Score* score);
 void prepareComposerScore(mu::engraving::MasterScore* score);
-std::unique_ptr<mu::engraving::MasterScore> buildNoRepeatScoreForFinalEnding(mu::engraving::Score* score, int finalEndingNumber);
+std::unique_ptr<mu::engraving::MasterScore> buildNoRepeatScore(mu::engraving::Score* score, const RepeatExportInfo& repeatInfo);
 bool writeMidiFile(mu::engraving::Score* score, const muse::io::path_t& path, bool expandRepeats, bool exportRpns);
 muse::RetVal<PianomaniaExportResult> exportPianomaniaBundle(mu::engraving::Score* score,
                                                             const muse::io::path_t& sourcePath,
