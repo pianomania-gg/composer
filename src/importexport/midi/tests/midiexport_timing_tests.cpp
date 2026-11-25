@@ -294,6 +294,7 @@ private slots:
     void gameplayTrillsStartOnWrittenAnchorAndReturn();
     void gameplayTurnsStartOnWrittenAnchorAndReturn();
     void gameplayTremblementStartsOnWrittenAnchorAndReturn();
+    void baroqueShortTrillStartsOnItsUpperNote();
     void acciaccaturaCrushesAtConstantLeadRegardlessOfWrittenValue();
     void appoggiaturaTakesHalfOfTheWrittenNote();
     void trillEndsOnWrittenNoteWithoutGeneratedTurn();
@@ -1017,6 +1018,86 @@ void MidiExportTimingTests::gameplayTremblementStartsOnWrittenAnchorAndReturn()
     QCOMPARE(attacks.front().start, 0);
     QCOMPARE(attacks.front().pitch, 52);
     QCOMPARE(attacks.back().pitch, 52);
+}
+
+void MidiExportTimingTests::baroqueShortTrillStartsOnItsUpperNote()
+{
+    MidiFile midiFile;
+    std::vector<ExportedMidiNote> notes;
+    QVERIFY(exportFixture("pianomania_baroque_short_trill_upper_start.mscx", midiFile, notes));
+    QVERIFY(hasBalancedNotePairs(midiFile));
+
+    constexpr int measureTicks = 1920;
+
+    // Upper, written, upper, written: the upper note takes the beat, the written note is the
+    // second attack and the only one that keeps a normal note-off, and the group ends on the
+    // written pitch where the next written note begins.
+    const auto verifyUpperStart = [&notes](int startTick, int noteTicks, int writtenPitch, int upperPitch) {
+        const std::vector<ExportedMidiNote> attacks = notesInRange(notes, startTick, startTick + noteTicks);
+        const std::vector<int> expectedPitches = { upperPitch, writtenPitch, upperPitch, writtenPitch };
+        QCOMPARE(static_cast<int>(attacks.size()), static_cast<int>(expectedPitches.size()));
+        for (size_t i = 0; i < attacks.size(); ++i) {
+            QCOMPARE(attacks[i].pitch, expectedPitches[i]);
+            QCOMPARE(attacks[i].offVelocity, i == 1 ? 64 : 127);
+            QVERIFY(attacks[i].duration() > 0);
+            if (i > 0) {
+                // Each attack follows the one before; a per-mille share of a very short note
+                // can round a tick away.
+                QVERIFY(attacks[i].start > attacks[i - 1].end);
+                QVERIFY(attacks[i].start <= attacks[i - 1].end + 2);
+            }
+        }
+        QCOMPARE(attacks.front().start, startTick);
+        QVERIFY(attacks.back().end < startTick + noteTicks);
+        QVERIFY(attacks.back().end >= startTick + noteTicks - 2);
+
+        const std::vector<ExportedMidiNote> following = notesInRange(notes, startTick + noteTicks, startTick + noteTicks + 1);
+        QCOMPARE(static_cast<int>(following.size()), 1);
+        QCOMPARE(following.front().pitch, 72);
+        QCOMPARE(following.front().offVelocity, 64);
+    };
+
+    // A quarter and an eighth at 120 bpm: thirty-second notes, and the last one holds the rest.
+    verifyUpperStart(0, 480, 71, 72);
+    const std::vector<ExportedMidiNote> quarter = notesInRange(notes, 0, 480);
+    QCOMPARE(quarter[1].start, 60);
+    QCOMPARE(quarter[2].start, 120);
+    QCOMPARE(quarter[3].start, 180);
+
+    verifyUpperStart(measureTicks, 240, 74, 76);
+    const std::vector<ExportedMidiNote> eighth = notesInRange(notes, measureTicks, measureTicks + 240);
+    QCOMPARE(eighth[1].start, measureTicks + 60);
+    QCOMPARE(eighth[2].start, measureTicks + 120);
+    QCOMPARE(eighth[3].start, measureTicks + 180);
+
+    // A sixteenth has no room for thirty-seconds, so its four notes share it.
+    verifyUpperStart(2 * measureTicks, 120, 71, 72);
+
+    // A sixty-fourth is shorter than the ornament table allows; it still gets its four notes.
+    verifyUpperStart(3 * measureTicks, 30, 71, 72);
+
+    // A short trill with no style starts on the written note, as before.
+    const std::vector<ExportedMidiNote> plain = notesInRange(notes, 4 * measureTicks, 4 * measureTicks + 240);
+    QCOMPARE(static_cast<int>(plain.size()), 3);
+    QCOMPARE(plain[0].pitch, 71);
+    QCOMPARE(plain[0].start, 4 * measureTicks);
+    QCOMPARE(plain[0].offVelocity, 64);
+    QCOMPARE(plain[1].pitch, 72);
+    QCOMPARE(plain[1].offVelocity, 127);
+    QCOMPARE(plain[2].pitch, 71);
+    QCOMPARE(plain[2].offVelocity, 127);
+
+    // A tr marked Baroque is left as it was: published scores carry that mark and start on
+    // the written note.
+    const std::vector<ExportedMidiNote> trill = notesInRange(notes, 5 * measureTicks, 5 * measureTicks + 240);
+    QVERIFY(trill.size() >= 3);
+    QCOMPARE(trill.front().pitch, 71);
+    QCOMPARE(trill.front().start, 5 * measureTicks);
+    QCOMPARE(trill.front().offVelocity, 64);
+    QCOMPARE(trill.back().pitch, 71);
+    for (size_t i = 1; i < trill.size(); ++i) {
+        QCOMPARE(trill[i].offVelocity, 127);
+    }
 }
 
 void MidiExportTimingTests::acciaccaturaCrushesAtConstantLeadRegardlessOfWrittenValue()

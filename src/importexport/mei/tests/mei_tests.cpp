@@ -4249,4 +4249,28 @@ TEST_F(Mei_Tests, mei_export_grace_notes_before_ottava_marked_to_start_after_the
     EXPECT_EQ(xmlAttributeValue(octaves[1], "startid"), "#" + ids[9]);
 }
 
+TEST_F(Mei_Tests, mei_export_baroque_short_trill_names_its_upper_note_start)
+{
+    const String fixture = String::fromUtf8(iex_mei_tests_DATA_ROOT)
+                           + u"/../../midi/tests/midiexport_data/pianomania_baroque_short_trill_upper_start.mscx";
+    std::unique_ptr<MasterScore> score(ScoreRW::readScore(fixture, true));
+    ASSERT_TRUE(score);
+
+    std::string meiText;
+    ASSERT_TRUE(pmWriteMeiToString(score.get(), true, meiText));
+
+    // Bars 1 to 4 hold a short trill marked Baroque, bar 5 a short trill with no style, bar 6 a tr marked Baroque.
+    // Only the first four are written from the upper note, so only they say so.
+    std::vector<std::string> starts;
+    for (const std::string& tag : collectStartTags(meiText, "mordent ")) {
+        EXPECT_EQ(xmlAttributeValue(tag, "form"), "upper");
+        starts.push_back(xmlAttributeValue(tag, "pm:ornament-start").value_or(""));
+    }
+    EXPECT_EQ(starts, (std::vector<std::string> { "upper", "upper", "upper", "upper", "" }));
+
+    const std::vector<std::string> trills = collectStartTags(meiText, "trill ");
+    ASSERT_EQ(trills.size(), 1u);
+    EXPECT_FALSE(xmlAttributeValue(trills.front(), "pm:ornament-start").has_value());
+}
+
 }

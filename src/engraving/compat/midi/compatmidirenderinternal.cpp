@@ -398,6 +398,69 @@ static void normalizeGameplayTrillEvents(NoteEventList& events, const Note* note
     }
 }
 
+// A short trill marked Baroque begins on its upper note, on the beat, the way pianists play
+// Bach's: upper, written, upper, written. The written note is the second attack and stays the
+// scored target; the three attacks around it are generated. The last one is the written pitch,
+// so the group still ends on its written note.
+static bool isUpperStartShortTrillSequence(const NoteEventList& events, const std::vector<size_t>& playableEvents)
+{
+    if (playableEvents.size() != 4) {
+        return false;
+    }
+
+    for (size_t i = 0; i < playableEvents.size(); ++i) {
+        const bool written = events[playableEvents[i]].pitch() == 0;
+        if (written != (i % 2 == 1)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void normalizeUpperStartShortTrillEvents(NoteEventList& events, const Note* note, const Ornament* ornament)
+{
+    const int upperPitchOffset = trillUpperPitchOffset(note, ornament);
+    if (upperPitchOffset == 0) {
+        return;
+    }
+
+    const std::vector<size_t> playableEvents = playableEventIndexes(events);
+    if (isUpperStartShortTrillSequence(events, playableEvents)) {
+        return;
+    }
+
+    // The ornament table found no room for four notes at its own pace and left the note plain,
+    // or left some other shape. Four equal attacks over the note's own time say the same thing.
+    int startOntime = 0;
+    int totalDuration = NoteEvent::NOTE_LENGTH;
+    NoteEvent pattern(0, 0, NoteEvent::NOTE_LENGTH);
+    if (!playableEvents.empty()) {
+        const NoteEvent& first = events[playableEvents.front()];
+        const NoteEvent& last = events[playableEvents.back()];
+        startOntime = first.ontime();
+        totalDuration = last.ontime() + last.len() - first.ontime();
+        pattern = first;
+    }
+    if (totalDuration < 4) {
+        return;
+    }
+
+    for (auto it = playableEvents.rbegin(); it != playableEvents.rend(); ++it) {
+        events.erase(events.begin() + *it);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        NoteEvent attack = pattern;
+        const int attackStart = startOntime + (totalDuration * i) / 4;
+        const int attackEnd = startOntime + (totalDuration * (i + 1)) / 4;
+        attack.setPitch(i % 2 == 0 ? upperPitchOffset : 0);
+        attack.setOntime(attackStart);
+        attack.setLen(attackEnd - attackStart);
+        events.push_back(attack);
+    }
+}
+
 static void prependGameplayAnchorToLeadingAuxiliary(NoteEventList& events)
 {
     const std::vector<size_t> playableEvents = playableEventIndexes(events);
@@ -446,8 +509,14 @@ static void normalizeGameplayOrnamentEvents(NoteEventList& events, const Note* n
 {
     switch (symId) {
     case SymId::ornamentTrill:
-    case SymId::ornamentShortTrill:
         normalizeGameplayTrillEvents(events, note, ornament);
+        return;
+    case SymId::ornamentShortTrill:
+        if (CompatMidiRendererInternal::ornamentStartsOnUpperNote(ornament)) {
+            normalizeUpperStartShortTrillEvents(events, note, ornament);
+        } else {
+            normalizeGameplayTrillEvents(events, note, ornament);
+        }
         return;
     case SymId::ornamentTurn:
     case SymId::ornamentTurnInverted:
@@ -2059,6 +2128,38 @@ int CompatMidiRendererInternal::canonicalWrittenNoteEventIndex(const NoteEventLi
         }
     }
     return result;
+}
+
+bool CompatMidiRendererInternal::ornamentStartsOnUpperNote(const Ornament* ornament)
+{
+    if (!ornament || ornament->symId() != SymId::ornamentShortTrill
+        || ornament->ornamentStyle() != OrnamentStyle::BAROQUE) {
+        return false;
+    }
+
+    const EngravingObject* parent = ornament->explicitParent();
+    if (!parent || !parent->isChord()) {
+        return false;
+    }
+
+    const Chord* chord = toChord(parent);
+    if (chord->isGrace() || chord->playEventType() != PlayEventType::Auto) {
+        return false;
+    }
+
+    // The renderer plays a trill line on the chord before any ornament sign, and otherwise
+    // the chord's first gameplay ornament.
+    if (findFirstTrill(const_cast<Chord*>(chord))) {
+        return false;
+    }
+
+    for (const Articulation* articulation : chord->articulations()) {
+        if (articulation->isOrnament() && isGameplayOrnament(articulation->symId())) {
+            return articulation == ornament;
+        }
+    }
+
+    return false;
 }
 
 CompatMidiRendererInternal::CompatMidiRendererInternal(Score* s)
